@@ -107,16 +107,15 @@
 
 ### Tertiary
 - Mesonet merge
-- By-boom flag filtering step integrated with profile fits
+- By-boom flag filtering step
+- Profile fits
 
 ### Post (have helper structures/functions, but not part of pipeline itself)
 - Stability classification
-- Flag filtering
-    - A default filter system should be provided for easy use
 - Summarization (as is currently in ttu-windprofiles)?
 - Visualization??
 - Annual/summary profile fits; general curve fits??
-- ... Actually, maybe the summarization, visualization, and profile/curve fits (and further such tools which could be used between different post-pipelne analyses) could be scoped in a new repo? (But do provide at least stability classification, flag filtering, and profile fits here!)
+- ... Actually, maybe the summarization, visualization, and summary profile/curve fits (and further such tools which could be used between different post-pipelne analyses) could be scoped in a new repo? (But do provide at least stability classification here)
 
 ## Where the code will come from
 ### What can be reused with minor modification from original repos

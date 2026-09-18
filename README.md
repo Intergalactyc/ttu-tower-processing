@@ -14,8 +14,8 @@
 - Use response smoothing for slow variables
 - Ignore propeller anemometers altogether?
 - Move bad record removal to initial loading step (don't bother processing them in the first place)
-- Tertiary no longer applies quality flags - these, like stability classification, are left for post-pipeline steps
-    - Move anisotropy calculations and profile fits from tertiary to secondary? (Then tertiary is just mesonet merge??)
+- Tertiary applies quality flags at boom level (needed for profile fits); stability classification is left for post-pipeline steps
+    - Anisotropy calculations move from tertiary to secondary
 ### Ideals
 - Cleaner codebase
     - Better organization
@@ -95,20 +95,25 @@
 - Secondary QC flags
     - Shadowing flag(s)
     - Signal bouncing flag
-- Derived quantities
+- Single-boom derived quantities
     - VPT (using slow sensor results)
-        - PT and VT?
+        - PT and VT as well!!
         - Other moisture quantities? (Td, q, w, e, e_s, ...)
-    - Sun elevation
     - Integral length scales
-    - Veer
-    - Stability quantities: L, z/L (sparam), 
+    - Stability quantities: L, z/L (sparam)
+- Boom-independent quantities
+    - Sun elevation
 - Anisotropy calculations
 
 ### Tertiary
 - Mesonet merge
 - By-boom flag filtering step
 - Profile fits
+- Any mesonet-derived quantities
+- Other multi-boom derived quantities
+    - Shear and veer measures
+    - Lapse rate measures
+    - Ri_b
 
 ### Post (have helper structures/functions, but not part of pipeline itself)
 - Stability classification
@@ -190,3 +195,6 @@ windprofiles:
     - Configurability (for user) before running tertiary (with a config section or a whole new config?)
     - Worth also providing a "general" filtering system (for use post-pipeline, not in pipeline) that does exclude entire records (e.g. if >N booms have quality issues, or quality issues of a certain kind are present?)
 - Probably plenty of other things I haven't thought of
+
+## AI use disclosure
+Portions of this code were developed with the assistance of Claude (Anthropic; Opus 5 for design and planning, Sonnet 5 for implementation), a large language model-based AI tool. All code is independently reviewed and verified by the author.

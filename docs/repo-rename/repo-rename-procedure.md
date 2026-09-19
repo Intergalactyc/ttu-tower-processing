@@ -1,7 +1,8 @@
 # Repo rename: the rewrite takes over `ttu-tower-processing`
 
-**Status:** planned, not executed. Run it after the redesign plan is finished and before the
-implementation session starts, together with the `ttu-windprofiles` and `duststorms` updates.
+**Status:** planned, not executed. The plan is finished and the design session's memory was
+prepared on 2026-09-19 (step 0), so this can run now, together with the `ttu-windprofiles` and
+`duststorms` updates, before the implementation session starts.
 
 ## End state
 
@@ -37,7 +38,7 @@ Comparisons between them go through output files.
   its `memory\` subfolder). The script swaps these directories along with the folders, so each
   repo keeps its own memory and transcripts; without the swap, each would load the other's.
 - **The desktop app pins each session to its folder.** Its record of the design session ("Tower
-  processing pipeline redesign", CLI session `89dc9973-f759-41df-bacd-c46399a35074`) stores the
+  processing pipeline redesign", CLI session `df9835ed-914e-49ae-a715-1d3078218e7a`) stores the
   working folder `Code\new-tower-processing`, which won't exist afterwards, so the app probably
   can't reopen that session. The design role continues as in step 9.
 - **The design session and the implementation session will share one memory**, since both run
@@ -62,7 +63,7 @@ Commit or stash any open work in the old repo, `ttu-windprofiles` and `duststorm
 
 Ask the design session to **prepare for the rename**: it brings its memory up to date (status,
 open items, anything decided since its last update) and confirms that the prototypes it relies
-on are in `docs\prototypes\`, not only in its temporary scratch folder.
+on are in `docs\prototypes\`, not only in its temporary scratch folder. Done on 2026-09-19.
 
 ## Step 1 — close everything
 
@@ -181,7 +182,8 @@ design session of step 9:
 - [ ] a Claude session in each repo loads the right memory (check the first lines of its `MEMORY.md`)
 - [ ] the rewrite's memory directory still holds the design session's transcripts
       (`~\.claude\projects\C--Users-ellwalke-Code-ttu-tower-processing\*.jsonl`, including
-      `89dc9973-f759-41df-bacd-c46399a35074.jsonl`)
+      `df9835ed-914e-49ae-a715-1d3078218e7a.jsonl`, the current session, and
+      `89dc9973-f759-41df-bacd-c46399a35074.jsonl`, the earlier part of it)
 
 ## Step 9 — continue the design session
 
@@ -197,7 +199,7 @@ and revise the specification. Continue it in the first way that works:
    ```powershell
    cd C:\Users\ellwalke\Code\ttu-tower-processing
    $claude = (Get-ChildItem "$env:APPDATA\Claude\claude-code\*\claude.exe" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
-   & $claude --resume 89dc9973-f759-41df-bacd-c46399a35074
+   & $claude --resume df9835ed-914e-49ae-a715-1d3078218e7a
    ```
    If it reports that no conversation was found, use option 3.
 3. **New desktop session** in `Code\ttu-tower-processing` (Opus 5). It loads the same memory

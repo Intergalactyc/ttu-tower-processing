@@ -25,7 +25,8 @@ the rest of this file, then the others as each phase needs them.
 - **Work phase by phase, in order.** At the end of each phase, stop and report to Elliott (§1.5),
   then wait for his go-ahead before starting the next. He reviews all code.
 - **Don't commit or push unless Elliott asks.** He keeps focused, single-purpose commits and
-  will say when and how. `docs/` stays uncommitted.
+  will say when and how. `docs/` is tracked, so an edit to one of these documents is committed
+  like any other change, when he asks for it.
 - **Other repositories are read-only references:** `C:\Users\ellwalke\Code\old-tower-processing`
   (the old pipeline) and `C:\Users\ellwalke\Code\windprofiles`. Never modify, install or run
   their pipelines. The single exception is generating the regression fixture in Phase 2, which

@@ -1,8 +1,10 @@
 # Repo rename: the rewrite takes over `ttu-tower-processing`
 
-**Status:** planned, not executed. The plan is finished and the design session's memory was
-prepared on 2026-09-19 (step 0), so this can run now, together with the `ttu-windprofiles` and
-`duststorms` updates, before the implementation session starts.
+**Status: executed 2026-09-19.** Every step is done and step 8 was verified, except the
+`duststorms` pipeline run. Two deliberate deviations: `ttu-windprofiles`'s prose references
+(step 4's last two rows) were left pointing at the old name, since that repo will be redone
+against the rewrite's output; and `docs/` is tracked in the rewrite, not local-only, so step 6
+pushed it. Kept as the record of what was done and how to roll it back.
 
 ## End state
 
@@ -154,7 +156,7 @@ git remote add origin https://github.com/Intergalactyc/ttu-tower-processing.git
 git push -u origin main
 ```
 
-`docs/` is untracked and stays local.
+`docs/` is tracked, so it goes up with this push.
 
 ## Step 7 — Claude memory pass
 

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ttu-tower-processing"
+version = "2.0.0"
+description = "Processing pipeline for data from the TTU 200-meter meteorological tower"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "astral",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+mesonet = [
+    "wtxmeso @ git+https://github.com/Intergalactyc/wtxmesonet@main",
+]
+dev = [
+    "pytest",
+    "scipy",
+]
+
+[project.scripts]
+ttu-files = "ttu_tower.cli.files:main"
+ttu-primary = "ttu_tower.cli.primary:main"
+ttu-secondary = "ttu_tower.cli.secondary:main"
+ttu-tertiary = "ttu_tower.cli.tertiary:main"
+ttu-runall = "ttu_tower.cli.runall:main"
+ttu-report = "ttu_tower.cli.report:main"
+ttu-validate = "ttu_tower.cli.validate:main"
+ttu-runs = "ttu_tower.cli.runs:main"
+ttu-convert-parquet = "ttu_tower.cli.convert_parquet:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: exercises real data or multiple pipeline stages together; skipped unless --integration is passed",
+]

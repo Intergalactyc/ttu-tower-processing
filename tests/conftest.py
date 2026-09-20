@@ -12,11 +12,17 @@ def pytest_addoption(parser):
         "--integration", action="store_true",
         help="run tests that exercise real data or multiple pipeline stages together",
     )
+    parser.addoption(
+        "--slow", action="store_true",
+        help="run statistically/computationally expensive acceptance tests (many realizations or a full synthetic pipeline run)",
+    )
 
 
 def pytest_runtest_setup(item):
     if "integration" in item.keywords and not item.config.getvalue("integration"):
         pytest.skip("need --integration option to run")
+    if "slow" in item.keywords and not item.config.getvalue("slow"):
+        pytest.skip("need --slow option to run")
 
 
 @pytest.fixture(autouse=True, scope="session")

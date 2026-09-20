@@ -42,4 +42,5 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
     "integration: exercises real data or multiple pipeline stages together; skipped unless --integration is passed",
+    "slow: statistically or computationally expensive acceptance validation (many realizations, or a full synthetic pipeline run); skipped unless --slow is passed",
 ]

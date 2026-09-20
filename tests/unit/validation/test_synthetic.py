@@ -6,8 +6,9 @@ from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.io.load import load_boom
 from ttu_tower.primary.stage_a import stage_a
 from ttu_tower.validation.synthetic import (
-    MESOSCALE_TYPICAL, correlated_ou, inject_gaps, inject_spikes, inject_stuck, level_shift,
-    ou, quantize, turbulence_with_waves, write_raw_dataset, write_raw_files,
+    MESOSCALE_STRESS, MESOSCALE_TYPICAL, STABLE_STRESS, STABLE_TYPICAL, correlated_ou, inject_gaps,
+    inject_spikes, inject_stuck, level_shift, ou, quantize, turbulence_with_waves, write_raw_dataset,
+    write_raw_files,
 )
 
 
@@ -62,6 +63,19 @@ def test_turbulence_with_waves_total_variance_additive():
     # turbulence and waves are independent draws, so their cross term is only
     # approximately zero in any finite realization.
     assert tw.w.var() == pytest.approx(turb_var_w + wave_var_w, rel=0.01)
+
+
+@pytest.mark.parametrize("preset", [MESOSCALE_TYPICAL, MESOSCALE_STRESS, STABLE_TYPICAL, STABLE_STRESS])
+def test_every_preset_gives_finite_output_with_matching_wave_variance(preset):
+    rng = np.random.default_rng(3)
+    n = 12 * 90_000
+    tw = turbulence_with_waves(n, rng, **preset)
+
+    assert np.isfinite(tw.w).all() and np.isfinite(tw.u).all() and np.isfinite(tw.theta).all()
+    wave_var_u = (tw.u - tw.u_turb).var()
+    wave_var_w = (tw.w - tw.w_turb).var()
+    assert wave_var_u == pytest.approx(preset["wave_std_u"] ** 2, rel=0.05)
+    assert wave_var_w == pytest.approx(preset["wave_std_w"] ** 2, rel=0.05)
 
 
 def test_turbulence_with_waves_opposing_coupling_flux_sign():

@@ -20,6 +20,9 @@ venv*/
 .wptemp
 /results/
 
+configs/*.toml
+!configs/templates/*.toml
+
 .pytest_cache
 
 .claude

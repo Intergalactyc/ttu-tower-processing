@@ -1,0 +1,117 @@
+# One year of TTU 200 m tower data (Nov 2013 - Oct 2014).
+
+[paths]
+raw_dirs = ["C:/Users/ellwalke/Data/TTU_200m_Nov2013-Oct2014"]
+results_dir = ""          # "" = ~/.ttu-tower/results; otherwise an absolute path
+mesonet_dir = "C:/Users/ellwalke/Data/Mesonet_2012-2014"
+
+[output]
+timezone = "Etc/GMT+6"
+
+[period]
+start = "2013-11-01 00:00"
+end = "2014-11-01 00:00"
+
+[files]
+bad_records = [
+    [2348, 2496], [3727, 3728], [3957, 3967], [4340, 4398], [6677, 6945],
+    [7437, 7575], [8154, 8356], [8721, 8759], [9118, 9243], [9370, 9382],
+    [9448, 9791], [9872, 9876], [9910, 9912], [11257, 11300], [12570, 12645],
+    [12971, 12981], [13139, 13387], [17338, 17358], [18199, 18223],
+    [6946, 6946], [15022, 15022], [15028, 15028], [15045, 15045],
+    [15061, 15061], [15648, 15648],
+]
+max_name_offset_min = 2
+booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+[qc]
+min_coverage = 0.75
+max_fill_gap_samples = 50
+unusable_tests = ["unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce"]
+
+[qc.bounds]
+sonic = [-45.0, 45.0]
+ts = [233.15, 333.15]
+t = [223.15, 323.15]
+rh = [0.0, 1.0]
+p = [50.0, 110.0]
+
+[qc.despike]
+window_s = 300.0
+stride_s = 30.0
+z_threshold = 3.5
+max_spike_samples = 3
+min_mad = { ue = 0.001, vn = 0.001, w = 0.001, ts = 0.01, t = 0.002, rh = 0.00002, p = 0.0004 }
+
+[qc.windows]
+resolution_window_s = 100.0
+resolution_stride_s = 50.0
+resolution_bins = 100
+ts_resolution_bins = 30
+max_empty_bin_fraction = 0.8
+dropout_min_run = 10
+ts_dropout_min_run = 50
+ts_repeat_tolerance = 0.05
+max_dropout_fraction = 0.05
+dropout_min_windows = 2
+skew_range = [-2.0, 2.0]
+kurt_range = [1.0, 8.0]
+
+[qc.slow]
+smoothing_width_s = { t = 20, rh = 20, p = 2 }
+
+[qc.second_layer]
+shadow_sector = [105.0, 170.0]
+bounce_max_ws_mean = 30.0
+bounce_max_ws_std = 6.75
+
+[mrd]
+floor_level = 15
+
+[ladder]
+its_max_lag_fraction = 0.25
+gust_periods_s = [1, 2, 3, 5, 10, 30, 60]
+
+[primary]
+unexcised = true
+unexcised_max_fill_gap_s = 600
+batch_max_files = 96
+nproc = 0
+
+[secondary]
+min_tau_its_ratio = 10.0
+
+[secondary.detection]
+peak_significance_se = 2.0
+min_scale_s = 0.5
+min_tau_s = 9.375
+max_tau_s = 1200.0
+
+[secondary.selection]
+rule = "priority"
+priority = ["heat", "momentum"]
+fallback_tau_s = 600.0
+
+[tertiary]
+min_coverage = 0.75
+max_bounds_fraction = 0.01
+max_spike_fraction = 0.01
+veer_reference_boom = 4
+
+[tertiary.fits]
+exclude_tau = ["unresolved", "fallback"]
+min_booms = 2
+alpha_booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+gamma_booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+wdgamma_booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+loglaw_booms = [1, 2, 3, 4, 5, 6, 7]
+
+[post.stability]
+pair = [2, 4]
+classes = [
+    ["strongly unstable", "(-inf,-0.05)"],
+    ["unstable", "[-0.05,-0.01)"],
+    ["neutral", "[-0.01,0.01)"],
+    ["stable", "[0.01,0.1)"],
+    ["strongly stable", "[0.1,inf)"],
+]

@@ -118,7 +118,7 @@ POST  stability classification helpers; yield-by-stability report
 ```
 pyproject.toml
 configs/
-  templates/oneyear_TEMPLATE.toml
+  templates/oneyear.toml
   oneyear.toml                copy of the template for running (git-ignored)
 src/ttu_tower/
   __init__.py                 __version__; re-exports load_results, find_run, list_runs
@@ -466,7 +466,7 @@ Each phase lists its goal, modules, specification and acceptance tests, then end
   - `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and an `integration` marker.
 - `.gitignore`: add `configs/*.toml` (the configs for running; `configs/templates/` is
   tracked). The existing `*.ini` lines can stay.
-- `configs/templates/oneyear_TEMPLATE.toml`, copied from config-reference.md. When it loads and
+- `configs/templates/oneyear.toml`, copied from config-reference.md. When it loads and
   passes the acceptance tests below, copy it to `configs/oneyear.toml`, the config for running.
   If a later phase changes the template, make the same change in `oneyear.toml`, keeping any
   settings Elliott has changed there.

@@ -248,7 +248,7 @@ from `physics.earth.local_gravity`. The epoch is in `timegrid.py` (plan.md §3.1
 
 ---
 
-## Template: `configs/templates/oneyear_TEMPLATE.toml`
+## Template: `configs/templates/oneyear.toml`
 
 Created in Phase 0, then copied to `configs/oneyear.toml` for running. Configs in `configs/`
 itself are git-ignored; `configs/templates/` is tracked.

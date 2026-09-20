@@ -71,7 +71,8 @@ by copying the `mrd` rows. From secondary on, every variant is complete and expl
 ### 1.6 Statuses and vocabularies
 
 - `slot_boom.status`: `no_file` (no accepted file covers the slot), `no_data` (file present but
-  no usable ue/vn/w/ts sample in the slot, whether missing or entirely flagged), `computed`.
+  no final-usable sample in either the `momentum` or the `ts` family, whether the data are
+  missing or entirely flagged — nothing in this schema is then computable), `computed`.
 - τ detection status: `no_data`, `weak`, `found`, `capped`, `unresolved`.
 - τ source: `heat`, `momentum`, `fallback` (600 s: neither cospectrum gave a τ or a lower
   bound), `fixed` (naive), `none` (no data in either family).
@@ -137,9 +138,9 @@ fragments (`ttu_tower.io.store.read_table`).
 | `name` | string | File name (`FT2_E07_C03_R…_D…_T….parquet`, or `.csv`/`.csv.gz`/`.zip` for unconverted files). |
 | `record` | int32, null | `R` number; null if unparseable. |
 | `name_time` | timestamp tz | Time encoded in the name. |
-| `offset_min` | int16 | Minutes after the preceding :00/:30 boundary. |
+| `offset_min` | int16, null | Minutes after the preceding :00/:30 boundary; null if unparseable. |
 | `file_start` | timestamp tz | Rounded-down boundary (set for every parseable file). |
-| `half_hour` | int64 | Half-hour index of `file_start`. |
+| `half_hour` | int64, null | Half-hour index of `file_start`; null if unparseable. |
 | `n_rows` | int32, null | From Parquet metadata; null for unconverted files (checked when loaded, with `--allow-non-parquet`). |
 | `status` | category | `accepted`, `unparseable`, `bad_record`, `offset`, `collision`, `bad_length` (checked in that order). |
 
@@ -166,7 +167,7 @@ Columns: `slot`, `boom`, `variable`, `layer`, `fraction`.
 - `variable` ∈ {`ue`, `vn`, `w`, `ts`, `vpts`, `t`, `rh`, `p`, `momentum`, `heat`}.
 - `layer`:
   - `present`: non-NaN in the source file.
-  - `filled`: filled by the ≤ 1-s interpolation.
+  - `filled`: finite after the ≤ 1-s interpolation (the counterpart of `unexcised` below).
   - `usable_l1`: first-layer usable.
   - `usable`: final usable.
   - `unexcised`: available to `mrd_unexcised` (finite after within-run filling).

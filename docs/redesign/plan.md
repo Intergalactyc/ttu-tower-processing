@@ -138,7 +138,8 @@ src/ttu_tower/
     rawfiles.py               filename parsing, timing rule, file table
     load.py                   read one boom's columns from a converted file
     convert.py                raw csv/gz/zip → parquet (ported)
-    store.py                  fragments, atomic writes, manifests, run_meta, read_table
+    store.py                  fragments, atomic writes, manifests, read_table
+    stage.py                  per-stage lifecycle: hash guard, run_meta, run_summary
     runs.py                   ttu-tower home, run registry, run-directory resolution
   math/
     polar.py                  bearing ↔ vector, angular distances, Yamartino σ_θ
@@ -841,7 +842,8 @@ rows of (rung_s, family, blocks_used, blocks_total, coverage))`.
 
 Clamp tiny negative variances from rounding to 0.
 
-**`primary/rawrung.py`**: `rung_its_te(series, masks, g0, k, cfg_ladder, c) -> rows`. Inputs
+**`primary/rawrung.py`**: `rung_its_te(series, masks, g0, k, cfg_ladder, c) -> (values, coverage)`,
+the same two-list shape as `rung_statistics` (its block counts are coverage rows). Inputs
 are the final or unexcised series and masks for samples `[30000k − 15000, 30000k + 45000)`.
 
 For each rung j, τ-blocks tile the slot (j ≤ 6) or form the 20-min window (j = 7). Samples are
@@ -981,9 +983,11 @@ writes `primary/files.parquet`.
 **Goal:** primary end to end: batches, streaming, Stage B composition, products, parallel
 units, checkpoints, reports. Seam invariance and parallel = serial are proven by tests.
 
-**`primary/partition.py`**: `plan_batches(file_table, period, batch_max_files) -> (batches:
-list[Batch], outage_half_hours: list[int])`.
-- The period's half-hours are those overlapping `[period.start, period.end)`.
+**`primary/partition.py`**: `plan_batches(file_table, period_slots, batch_max_files) -> (batches:
+list[Batch], outage_half_hours: list[int])`, where `period_slots` is the resolved `(slot_a,
+slot_b)` pair. The runner resolves `[period]` against `[output].timezone` with
+`timegrid.time_to_slot`, so this function is a pure function of indices.
+- The period's half-hours are those overlapping the period's slots.
 - **Outages:** runs of ≥ 2 consecutive non-accepted half-hours. They belong to no batch, and
   their slots are emitted as `no_file` by the runner.
 - The stretches between outages (which may contain isolated missing half-hours) are split into
@@ -1000,10 +1004,13 @@ list[Batch], outage_half_hours: list[int])`.
   contiguous accepted run.
 - Order:
   1. despike each variable (§ Phase 2), with triplet coupling of ue/vn/w spike removals;
-  2. `fill_short`;
+  2. `fill_short`, on every despiked variable including t, rh and p;
   3. `higher_moments` (core slots);
   4. `resolution_dropouts` (ue, vn, w, ts);
-  5. `smooth` (t, rh, p);
+  5. `smooth` (t, rh, p), whose `ok` argument is each one's first-layer usable mask — finite
+     after step 2 and outside the intervals of the `unusable_tests` that apply to it (only
+     `unchecked`, by default). That mask needs nothing from steps 3–4, which are sonic-only,
+     so compute it here rather than waiting for step 7;
   6. `vpts`;
   7. first-layer masks;
   8. `second_layer` (core slots);
@@ -1021,6 +1028,12 @@ list[Batch], outage_half_hours: list[int])`.
 
 **`primary/products.py`**: `file_products(h, B: Mapping[int, StageBOut], boom, cfg) -> dict[table,
 DataFrame]` for the three slots k of file h.
+- **Only slots inside the period are emitted.** A period boundary need not fall on a half-hour,
+  so the unit filters every slot-keyed table it collects to `[slot_a, slot_b)` — that is every
+  table except `flags`. Flag rows stay clipped to the core and unfiltered: an edge slot's
+  20-min support and its neighbours' detection windows reach outside the period, and tertiary
+  builds its `FlagStore` from the fragments overlapping the batch ± 5 min, so dropping them
+  would silently under-count the `bounds` and `spike` fractions of the first and last slots.
 - **No file:** only a `slot_boom` row with status `no_file`.
 - **`no_data`:** no final-usable ue/vn/w/ts sample in the slot. The `slot_boom`, coverage and
   `means` rows (the slow-sensor means stay valid when the sonic data are flagged; the sonic means
@@ -1035,7 +1048,7 @@ DataFrame]` for the three slots k of file h.
   `mask_differs` is true in any of slots k−4..k+4. Set `unexcised_computed` accordingly.
 - Flags: B[h]'s rows, written once per file.
 
-**`primary/stream.py`**: `run_unit(batch, boom, file_table, cfg, out_dir) -> UnitSummary`.
+**`primary/stream.py`**: `run_unit(batch, boom, file_table, period_slots, cfg, out_dir) -> UnitSummary`.
 
 ```
 for h in h_a−3 .. h_b+3:
@@ -1054,13 +1067,17 @@ write all collected tables as fragments <unit>.parquet (atomic), then the manife
 1. Register the run directory (§3.10), then the hash guard (§3.8). Secondary and tertiary
    start the same way.
 2. Build or refresh `files.parquet`.
-3. `plan_batches`.
-4. Write `slots.parquet`, plus a `slot_boom` fragment `outages` holding `no_file` rows for
+3. Resolve the period to `(slot_a, slot_b)`. An empty `[period].start` or `end`
+   (config-reference.md) means the first accepted file's first slot, or the last accepted
+   file's last slot + 1, taken from the file table; a set value is read in
+   `[output].timezone`. Both `ttu-files` and `ttu-primary` resolve it the same way.
+4. `plan_batches`.
+5. Write `slots.parquet`, plus a `slot_boom` fragment `outages` holding `no_file` rows for
    every outage slot × boom.
-5. List units (batch × boom); skip `success` ones in the manifest (and `failed` ones unless
+6. List units (batch × boom); skip `success` ones in the manifest (and `failed` ones unless
    `--redo-failures`).
-6. Dispatch to a `spawn` `ProcessPoolExecutor(nproc)` with the logging queue.
-7. Write `run_summary.json` and print the console summary (§3.9).
+7. Dispatch to a `spawn` `ProcessPoolExecutor(nproc)` with the logging queue.
+8. Write `run_summary.json` and print the console summary (§3.9).
 
 `--test`: only the first batch. The manifest entry per unit is `{unit, status, error, started,
 finished, summary}`, where `summary` is the unit summary record of §3.9.

@@ -68,6 +68,16 @@ MESOSCALE_TYPICAL = dict(
     wave_std_u=0.56, wave_std_w=0.052, wave_std_theta=0.28, coupling="random",
 )
 
+MESOSCALE_STRESS = dict(MESOSCALE_TYPICAL, wave_std_u=0.84, wave_std_w=0.067, coupling="opposing")
+
+STABLE_TYPICAL = dict(
+    T=0.5, sigma_w=0.14, sigma_u=0.25, sigma_theta=0.1, rho_wu=-0.33, rho_wtheta=-0.3,
+    wave_periods_s=(60.0, 90.0, 150.0, 240.0),
+    wave_std_u=0.23, wave_std_w=0.027, wave_std_theta=0.07, coupling="random",
+)
+
+STABLE_STRESS = dict(STABLE_TYPICAL, wave_std_u=0.37, wave_std_w=0.041, coupling="opposing")
+
 
 def turbulence_with_waves(n: int, rng: np.random.Generator, *, T: float, sigma_w: float, sigma_u: float,
                            sigma_theta: float, rho_wu: float, rho_wtheta: float, wave_periods_s,

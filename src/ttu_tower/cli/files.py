@@ -1,22 +1,23 @@
 """ttu-files: build and print the raw file table."""
 import argparse
 
-import pandas as pd
-
 from ttu_tower import __version__
 from ttu_tower.config.load import load_config
 from ttu_tower.io import store
-from ttu_tower.io.rawfiles import RawFilesNotAllowed, build_file_table, check_raw_allowed
+from ttu_tower.io.rawfiles import RawFilesNotAllowed, build_file_table, check_raw_allowed, resolve_period_slots
 from ttu_tower.io.runs import register_run
-from ttu_tower.timegrid import time_to_half_hour
 
 
-def _period_half_hours(cfg) -> tuple[int, int] | None:
-    if not cfg.period.start or not cfg.period.end:
-        return None
-    start = pd.Timestamp(cfg.period.start, tz=cfg.output.timezone)
-    end = pd.Timestamp(cfg.period.end, tz=cfg.output.timezone)
-    return int(time_to_half_hour(start)), int(time_to_half_hour(end))
+def _period_half_hours(cfg, table) -> tuple[int, int] | None:
+    """The period's half-hour range, from the same `resolve_period_slots` that
+    `ttu-primary` uses. A period boundary need not fall on a half-hour, so the
+    range covers every half-hour any of the period's slots touch.
+    """
+    try:
+        slot_a, slot_b = resolve_period_slots(cfg, table)
+    except ValueError:
+        return None  # no accepted files to default an empty period from
+    return slot_a // 3, -(-slot_b // 3)
 
 
 def parse_args(argv=None):
@@ -46,7 +47,7 @@ def main(argv=None):
     for status, count in table["status"].value_counts().items():
         print(f"  {status}: {count}")
 
-    bounds = _period_half_hours(cfg)
+    bounds = _period_half_hours(cfg, table)
     if bounds is not None:
         h_start, h_end = bounds
         n_half_hours = h_end - h_start

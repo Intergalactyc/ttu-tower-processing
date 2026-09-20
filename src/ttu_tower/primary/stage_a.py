@@ -7,20 +7,20 @@ import numpy as np
 
 from ttu_tower.constants import TILT_ANGLES, TILT_AXES
 
-_MPH_TO_MS = 1 / 2.23694
-_INHG_TO_KPA = 3.38639
+MPH_TO_MS = 1 / 2.23694
+INHG_TO_KPA = 3.38639
 
 
 def to_si(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Raw source units (mph, F, %, inHg) -> SI (m/s, K, fraction, kPa)."""
     return {
-        "u": raw["u"] * _MPH_TO_MS,
-        "v": raw["v"] * _MPH_TO_MS,
-        "w": raw["w"] * _MPH_TO_MS,
+        "u": raw["u"] * MPH_TO_MS,
+        "v": raw["v"] * MPH_TO_MS,
+        "w": raw["w"] * MPH_TO_MS,
         "ts": (raw["ts"] - 32.0) * (5.0 / 9.0) + 273.15,
         "t": (raw["t"] - 32.0) * (5.0 / 9.0) + 273.15,
         "rh": raw["rh"] / 100.0,
-        "p": raw["p"] * _INHG_TO_KPA,
+        "p": raw["p"] * INHG_TO_KPA,
     }
 
 

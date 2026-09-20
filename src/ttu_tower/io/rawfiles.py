@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 
 from ttu_tower import schema
 from ttu_tower.constants import ROWS_PER_FILE, SOURCE_TIMEZONE
-from ttu_tower.timegrid import time_to_half_hour
+from ttu_tower.timegrid import time_to_half_hour, time_to_slot
 
 _NAME_RE = re.compile(r"^FT2_E07_C03_R(\d+)_D(\d{8})_T(\d{4})\.(parquet|csv|csv\.gz|zip)$")
 _RAW_EXTENSIONS = (".parquet", ".csv", ".csv.gz", ".zip")
@@ -109,6 +109,31 @@ def accepted_half_hours(table: pd.DataFrame) -> dict[int, Path]:
     """Map half-hour index -> path, for every accepted file."""
     accepted = table[table["status"] == "accepted"]
     return {int(h): Path(p) for h, p in zip(accepted["half_hour"], accepted["path"])}
+
+
+def resolve_period_slots(cfg, file_table: pd.DataFrame) -> tuple[int, int]:
+    """The processing period as `(slot_a, slot_b)`. An empty `[period].start`
+    or `end` resolves to the first or last accepted file's own bounds; a set
+    value is read in `[output].timezone`. `ttu-files` and `ttu-primary` both
+    call this, so they agree on what an empty period means.
+    """
+    if cfg.period.start:
+        slot_a = int(time_to_slot(pd.Timestamp(cfg.period.start, tz=cfg.output.timezone)))
+    else:
+        accepted_hh = file_table.loc[file_table["status"] == "accepted", "half_hour"]
+        if accepted_hh.empty:
+            raise ValueError("period.start is empty and there are no accepted files to default from")
+        slot_a = 3 * int(accepted_hh.min())
+
+    if cfg.period.end:
+        slot_b = int(time_to_slot(pd.Timestamp(cfg.period.end, tz=cfg.output.timezone)))
+    else:
+        accepted_hh = file_table.loc[file_table["status"] == "accepted", "half_hour"]
+        if accepted_hh.empty:
+            raise ValueError("period.end is empty and there are no accepted files to default from")
+        slot_b = 3 * (int(accepted_hh.max()) + 1)
+
+    return slot_a, slot_b
 
 
 def check_raw_allowed(table: pd.DataFrame, allow_non_parquet: bool) -> None:

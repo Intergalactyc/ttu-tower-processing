@@ -41,8 +41,8 @@ _TABLE_DEFS = [
     # --- primary ---------------------------------------------------------
     _spec("files", "primary", "single_file", [
         ("path", "string"), ("name", "string"), ("record", "Int32"),
-        ("name_time", "timestamp"), ("offset_min", "int16"),
-        ("file_start", "timestamp"), ("half_hour", "int64"),
+        ("name_time", "timestamp"), ("offset_min", "Int16"),
+        ("file_start", "timestamp"), ("half_hour", "Int64"),
         ("n_rows", "Int32"), ("status", "category"),
     ]),
     _spec("slots", "primary", "single_file", [

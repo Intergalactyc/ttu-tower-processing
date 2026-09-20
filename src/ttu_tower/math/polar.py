@@ -95,3 +95,44 @@ def series_signed_angular_distance(theta: np.ndarray, phi: np.ndarray, degrees: 
     d0 = (theta - phi) % mod
     d1 = mod - d0
     return flip_sign * np.where(d1 < d0, -d1, d0)
+
+
+def streamwise_angle(mean_ue: FloatOrArray, mean_vn: FloatOrArray) -> FloatOrArray:
+    """phi = atan2(mean_vn, mean_ue) (radians): the angle of a mean wind
+    vector, for rotate_streamwise.
+    """
+    return np.arctan2(mean_vn, mean_ue)
+
+
+def rotate_streamwise(ue: FloatOrArray, vn: FloatOrArray, phi: FloatOrArray):
+    """Rotate (ue, vn) = (east, north) into the streamwise frame at angle
+    phi: u along the mean wind, v 90 degrees to its left.
+    """
+    cos_phi, sin_phi = np.cos(phi), np.sin(phi)
+    u = ue * cos_phi + vn * sin_phi
+    v = -ue * sin_phi + vn * cos_phi
+    return u, v
+
+
+def rotate_covariance_streamwise(var_ue, var_vn, var_ue_vn, cov_ue_w, cov_vn_w, phi):
+    """Rotate an Earth-frame (ue, vn, w) covariance matrix into the streamwise
+    frame at angle phi (C' = Q C Q^T; w is unaffected). Returns (u_var, v_var,
+    uv_cov, uw_cov, vw_cov); w_var is unchanged and not returned.
+    """
+    cos_phi, sin_phi = np.cos(phi), np.sin(phi)
+    u_var = cos_phi**2 * var_ue + 2 * cos_phi * sin_phi * var_ue_vn + sin_phi**2 * var_vn
+    v_var = sin_phi**2 * var_ue - 2 * cos_phi * sin_phi * var_ue_vn + cos_phi**2 * var_vn
+    uv_cov = (cos_phi**2 - sin_phi**2) * var_ue_vn + cos_phi * sin_phi * (var_vn - var_ue)
+    uw_cov = cos_phi * cov_ue_w + sin_phi * cov_vn_w
+    vw_cov = -sin_phi * cov_ue_w + cos_phi * cov_vn_w
+    return u_var, v_var, uv_cov, uw_cov, vw_cov
+
+
+def yamartino_std(s_bar: FloatOrArray, c_bar: FloatOrArray, degrees: bool = True) -> FloatOrArray:
+    """Yamartino's single-pass wind-direction standard deviation, from the
+    mean sin/cos of the sample directions (s_bar, c_bar; symmetric in the
+    two - only s_bar**2 + c_bar**2 ever matters).
+    """
+    epsilon = np.sqrt(np.maximum(0.0, 1.0 - s_bar**2 - c_bar**2))
+    sigma = np.arcsin(epsilon) * (1.0 + (2.0 / np.sqrt(3.0) - 1.0) * epsilon**3)
+    return np.degrees(sigma) if degrees else sigma

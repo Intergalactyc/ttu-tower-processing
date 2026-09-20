@@ -5,6 +5,7 @@ import pytest
 from ttu_tower.config import config_from_dict
 from ttu_tower.io.rawfiles import (
     RawFilesNotAllowed, accepted_half_hours, build_file_table, check_raw_allowed, parse_name,
+    resolve_period_slots,
 )
 
 
@@ -182,3 +183,50 @@ def test_check_raw_allowed_ignores_accepted_parquet_files(tmp_path):
     cfg = _files_cfg()
     table = build_file_table([str(tmp_path)], cfg)
     check_raw_allowed(table, allow_non_parquet=False)  # no raise
+
+
+# --- resolve_period_slots --------------------------------------------------------
+
+def _full_cfg(start="", end="", raw_dirs=("/data",)):
+    return config_from_dict({
+        "tag": "t", "paths": {"raw_dirs": list(raw_dirs)}, "files": {"bad_records": []},
+        "period": {"start": start, "end": end},
+    })
+
+
+def _table_with_accepted(half_hours):
+    return pd.DataFrame({
+        "half_hour": list(half_hours),
+        "status": ["accepted"] * len(half_hours),
+    })
+
+
+def test_resolve_period_slots_explicit_bounds():
+    cfg = _full_cfg(start="2013-11-01 00:00", end="2013-11-01 01:00")
+    slot_a, slot_b = resolve_period_slots(cfg, _table_with_accepted([]))
+    from ttu_tower.timegrid import time_to_slot
+    expected_a = int(time_to_slot(pd.Timestamp("2013-11-01 00:00", tz="Etc/GMT+6")))
+    assert (slot_a, slot_b) == (expected_a, expected_a + 6)  # 1 hour = 6 slots
+
+
+def test_resolve_period_slots_defaults_from_accepted_files():
+    cfg = _full_cfg(start="", end="")
+    table = _table_with_accepted([100, 101, 105])
+    slot_a, slot_b = resolve_period_slots(cfg, table)
+    assert slot_a == 3 * 100
+    assert slot_b == 3 * (105 + 1)
+
+
+def test_resolve_period_slots_mixes_explicit_start_with_default_end():
+    cfg = _full_cfg(start="2013-11-01 00:00", end="")
+    table = _table_with_accepted([100, 101, 105])
+    slot_a, slot_b = resolve_period_slots(cfg, table)
+    from ttu_tower.timegrid import time_to_slot
+    assert slot_a == int(time_to_slot(pd.Timestamp("2013-11-01 00:00", tz="Etc/GMT+6")))
+    assert slot_b == 3 * 106
+
+
+def test_resolve_period_slots_empty_default_raises_with_no_accepted_files():
+    cfg = _full_cfg(start="", end="")
+    with pytest.raises(ValueError):
+        resolve_period_slots(cfg, _table_with_accepted([]))

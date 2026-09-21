@@ -38,7 +38,9 @@ def slow_table(means: pd.DataFrame, coverage: pd.DataFrame, cfg) -> pd.DataFrame
     coverage_ok = p_cov >= cfg.qc.min_coverage
 
     p_ref = wide.index.get_level_values("boom").map(P_REF).to_numpy(dtype=float)
-    p_factor = np.where(coverage_ok, (p_ref / p) ** R_CP, 1.0)
+    p_factor = np.ones(len(p))
+    p_ok = p.to_numpy(dtype=float)[coverage_ok.to_numpy()]
+    p_factor[coverage_ok.to_numpy()] = (p_ref[coverage_ok.to_numpy()] / p_ok) ** R_CP
     p_measured = np.where(coverage_ok, 1.0, 0.0)
     vpts = vpts_ref * p_factor
 

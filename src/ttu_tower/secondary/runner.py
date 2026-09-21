@@ -2,6 +2,7 @@
 reading that batch's primary fragments (every boom), computing every
 secondary table, and writing one fragment per table.
 """
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import pandas as pd
 from ttu_tower import __version__, schema
 from ttu_tower.config.hashing import primary_hash, secondary_hash
 from ttu_tower.io import store
-from ttu_tower.io.rawfiles import resolve_period_slots
+from ttu_tower.io.rawfiles import period_slots_from_table
 from ttu_tower.io.runs import register_run
 from ttu_tower.io.stage import check_hash_guard, write_run_meta, write_run_summary
 from ttu_tower.primary.partition import Batch, plan_batches
@@ -23,12 +24,26 @@ from ttu_tower.secondary.slow import slow_table
 _PRIMARY_TABLES = ("ladder", "ladder_coverage", "mrd", "coverage", "means", "slot_boom")
 _SECONDARY_TABLES = ("tau", "tau_selected", "boom_stats", "boom_labels", "slow", "slot_stats")
 _MARKER_TABLE = "boom_stats"  # a batch is "done" once this table's fragment exists
+_PRIMARY_MARKER_TABLE = "means"  # any primary unit's fragment existing implies the unit succeeded
+
+_logger = logging.getLogger(__name__)
 
 
 def _read_primary_batch(primary_dir: Path, batch: Batch, booms) -> dict[str, pd.DataFrame]:
+    """A failed primary unit leaves no fragment, and the run is allowed to
+    continue past it, so a missing (batch, boom) is skipped here rather than
+    raised.
+    """
+    usable_booms = []
+    for boom in booms:
+        if (primary_dir / "data" / _PRIMARY_MARKER_TABLE / f"{batch.id}_b{boom:02d}.parquet").is_file():
+            usable_booms.append(boom)
+        else:
+            _logger.warning(f"primary unit {batch.id}_b{boom:02d} has no output; skipping this boom for the batch")
+
     tables = {}
     for table in _PRIMARY_TABLES:
-        frames = [pd.read_parquet(primary_dir / "data" / table / f"{batch.id}_b{boom:02d}.parquet") for boom in booms]
+        frames = [pd.read_parquet(primary_dir / "data" / table / f"{batch.id}_b{boom:02d}.parquet") for boom in usable_booms]
         tables[table] = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     return tables
 
@@ -83,7 +98,7 @@ def run_secondary(cfg, args) -> dict:
 
     file_table = pd.read_parquet(primary_dir / "files.parquet")
     slots_all = pd.read_parquet(primary_dir / "slots.parquet")
-    period_slots = resolve_period_slots(cfg, file_table)
+    period_slots = period_slots_from_table(slots_all)
     batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files)
     if args.test:
         batches = batches[:1]

@@ -45,7 +45,7 @@ _QUALITY_TESTS = frozenset(name for name, spec in _TEST_REGISTRY.items() if spec
 _LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
 
 _MIN_MAD_DEFAULT = {"ue": 0.001, "vn": 0.001, "w": 0.001, "ts": 0.01, "t": 0.002, "rh": 0.00002, "p": 0.0004}
-_Z_THRESHOLD_DEFAULT = {"ue": 3.5, "vn": 3.5, "w": 3.5, "ts": 3.5, "t": 3.5, "rh": 3.5, "p": 3.5}
+_Z_THRESHOLD_DEFAULT = {"ue": 3.5, "vn": 3.5, "w": 3.5, "ts": 3.5, "t": 3.5, "rh": 3.5, "p": 6.0}
 _SMOOTHING_WIDTH_DEFAULT = {"t": 20.0, "rh": 20.0, "p": 2.0}
 _UNUSABLE_TESTS_DEFAULT = ["unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce"]
 _GUST_PERIODS_DEFAULT = [1, 2, 3, 5, 10, 30, 60]

@@ -135,7 +135,8 @@ def test_despike_calibration_structure(run):
     run_dir, cfg = run
     rng = np.random.default_rng(1)
     result = checks.despike_calibration(cfg, run_dir, rng, n_per_class=3, thresholds=(4.0, 6.0), inject_sigmas=(6.0, 12.0))
-    assert set(result) >= {"removal_rates", "old_method", "excursion_lengths", "injection"}
+    assert set(result) >= {"removal_rates", "old_method", "excursion_lengths", "injection", "numpy_warnings"}
+    assert list(result["numpy_warnings"].columns) == ["message", "count"]
     rates = result["removal_rates"]
     assert not rates.empty
     assert (rates["spike_fraction"].between(0, 1)).all()
@@ -179,6 +180,27 @@ def test_floor_peak_structure(run, classes):
     result = checks.floor_peak(_read(run_dir, "primary", "mrd"), _read(run_dir, "secondary", "tau"), classes, cfg)
     assert set(result) == {"peak_scale_distribution", "floor_rate", "clip_rate"}
     assert (result["floor_rate"]["floor_fraction"].between(0, 1)).all()
+
+
+def test_clip_rate_catches_a_reversal_one_rung_above_min_tau_s():
+    # tau_s = max(scale(r-1), min_tau_s) (secondary/detect.py), so a reversal
+    # one rung above min_tau_s (18.75 s) still floors tau_s to min_tau_s
+    # (9.375 s) - reversal_scale_s <= min_tau_s alone would miss this row
+    # entirely and undercount the true floor-hit rate.
+    tau = pd.DataFrame([
+        {"slot": 1, "boom": 1, "variant": "mrd", "cospectrum": "momentum", "status": "found",
+         "tau_s": 9.375, "reversal_scale_s": 18.75, "peak_scale_s": 2.34},
+        {"slot": 2, "boom": 1, "variant": "mrd", "cospectrum": "momentum", "status": "found",
+         "tau_s": 37.5, "reversal_scale_s": 75.0, "peak_scale_s": 4.69},
+    ])
+    mrd = pd.DataFrame(columns=["slot", "boom", "variant", "spectrum", "scale_s"])
+    classes = pd.Series(["neutral", "neutral"], index=[1, 2])
+    cfg = SimpleNamespace(secondary=SimpleNamespace(detection=SimpleNamespace(min_tau_s=9.375)))
+
+    result = checks.floor_peak(mrd, tau, classes, cfg, booms=(1,))
+    clip_rate = result["clip_rate"]
+    row = clip_rate[(clip_rate["boom"] == 1) & (clip_rate["cospectrum"] == "momentum")].iloc[0]
+    assert row["clip_fraction"] == 0.5
 
 
 def test_yield_report_structure(run, classes):

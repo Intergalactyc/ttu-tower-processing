@@ -16,10 +16,11 @@ from ttu_tower.io import store
 from ttu_tower.io.rawfiles import period_slots_from_table
 from ttu_tower.io.runs import register_run
 from ttu_tower.io.stage import check_hash_guard, write_run_meta, write_run_summary
+from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.tertiary import filtering, mesonet, multiboom, profiles, wide
 
-_PRIMARY_TABLES = ("coverage", "means", "ladder_coverage")
+_PRIMARY_TABLES = ("coverage", "means")
 _PRIMARY_MARKER_TABLE = "means"  # any primary unit's fragment existing implies the unit succeeded
 _SECONDARY_TABLES = ("tau_selected", "boom_stats", "slow", "slot_stats", "boom_labels")
 _SECONDARY_MARKER_TABLE = "boom_stats"
@@ -103,7 +104,7 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
 
     candidate = filtering.build_candidate(primary["means"], secondary["slow"], secondary["boom_stats"])
     fail_keys, filter_log = filtering.evaluate(
-        candidate, primary["coverage"], primary["ladder_coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary,
+        candidate, primary["coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary,
     )
     boom_final = filtering.apply(candidate, fail_keys)
     boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
@@ -137,7 +138,7 @@ def run_tertiary(cfg, args) -> dict:
     secondary_dir = run_dir / "secondary"
     stage_dir = run_dir / "tertiary"
     config_hash = tertiary_hash(cfg, __version__)
-    check_hash_guard(stage_dir, config_hash, force=args.force)
+    check_hash_guard(stage_dir, config_hash, force=args.force, fresh=getattr(args, "fresh", False))
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     write_run_meta(stage_dir, stage="tertiary", tag=cfg.tag, config_hash=config_hash,
@@ -155,28 +156,29 @@ def run_tertiary(cfg, args) -> dict:
 
     started = datetime.now().astimezone().isoformat(timespec="seconds")
     status_counts = {"processed": 0, "skipped": 0}
+    numpy_warnings: dict = {}
 
-    for i, batch in enumerate(batches):
-        marker = stage_dir / "data" / _TERTIARY_MARKER_TABLE / f"{batch.id}.parquet"
-        if marker.is_file():
-            status_counts["skipped"] += 1
-            continue
+    with capture_warnings(numpy_warnings):
+        for i, batch in enumerate(batches):
+            marker = stage_dir / "data" / _TERTIARY_MARKER_TABLE / f"{batch.id}.parquet"
+            if marker.is_file():
+                status_counts["skipped"] += 1
+                continue
 
-        tables = _process_batch(i, batches, primary_dir, secondary_dir, slots_all, meso_df, cfg)
-        if tables is None:
-            status_counts["skipped"] += 1
-            continue
-        for table in _TERTIARY_TABLES:
-            store.write_fragment(stage_dir / "data" / table, batch.id, schema.cast(table, tables[table]))
-        status_counts["processed"] += 1
+            tables = _process_batch(i, batches, primary_dir, secondary_dir, slots_all, meso_df, cfg)
+            if tables is None:
+                status_counts["skipped"] += 1
+                continue
+            for table in _TERTIARY_TABLES:
+                store.write_fragment(stage_dir / "data" / table, batch.id, schema.cast(table, tables[table]))
+            status_counts["processed"] += 1
 
-    wide_source_tables = ("boom_final", "tau_final", "pairs", "profile", "slot_final")
-    full_tables = {t: store.read_table(stage_dir / "data" / t) for t in wide_source_tables}
-    wide.write_wide_export(stage_dir, full_tables, cfg.output.timezone)
+        wide.write_wide_export(stage_dir, cfg.output.timezone)
 
     finished = datetime.now().astimezone().isoformat(timespec="seconds")
     write_run_summary(stage_dir, stage="tertiary", config_hash=config_hash, package_version=__version__,
-                       started=started, finished=finished, status_counts=status_counts, totals={}, timings={})
+                       started=started, finished=finished, status_counts=status_counts,
+                       totals={"numpy_warnings": numpy_warnings}, timings={})
 
     print(f"tertiary: {status_counts['processed']} batches processed, {status_counts['skipped']} skipped")
 

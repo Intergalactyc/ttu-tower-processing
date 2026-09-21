@@ -11,6 +11,9 @@ def parse_args(argv=None):
     parser.add_argument("--test", action="store_true", help="Process only the first batch, in a separate test run directory.")
     parser.add_argument("--force", action="store_true",
                          help="Clear this stage's outputs on a config-hash mismatch, or re-register a tag pointed elsewhere.")
+    parser.add_argument("--fresh", action="store_true",
+                         help="Clear this stage's outputs unconditionally before running, regardless of the config hash "
+                              "(for a code-only change, which a hash match would otherwise skip batch-by-batch).")
     return parser.parse_args(argv)
 
 

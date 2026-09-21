@@ -175,7 +175,7 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 
 | Key | Type | Default | Prov. | Notes |
 |---|---|---|---|---|
-| `peak_significance_se` | float | `2.0` | DES, **provisional** | The turbulence peak must be at least this many standard errors from zero; with no significant peak the status is `weak`. |
+| `peak_significance_se` | float | `2.0` | DES, **provisional** | The turbulence peak must be at least this many standard errors from zero; with no significant peak the status is `weak`. Also gates a reversal candidate, but only where accepting it would floor τ to `min_tau_s` (recalibrated after the first run - see design-reference.md §H). |
 | `min_scale_s` | float | `0.5` | LIT (VM06) | Modes with a smaller scale are ignored (with K = 15, only mode 1, 0.29 s). |
 | `min_tau_s` | float | `9.375` | DES | Smallest τ; shorter gap scales are clipped to it. A ladder rung. |
 | `max_tau_s` | float | `1200.0` | DES | Largest τ (`capped`). A ladder rung. |

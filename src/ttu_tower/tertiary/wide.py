@@ -5,8 +5,11 @@ a time. A whole year pivoted at once would need about 1 GB of memory.
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.dataset as pa_dataset
 
 from ttu_tower.io import store
+
+_SOURCE_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final")
 
 
 def _variant_suffix(variant: str) -> str:
@@ -68,9 +71,15 @@ def pivot_tables(tables: dict[str, pd.DataFrame], index: pd.DatetimeIndex) -> pd
     return wide.reset_index()
 
 
-def write_wide_export(stage_dir: Path, tables: dict[str, pd.DataFrame], timezone: str) -> None:
+def write_wide_export(stage_dir: Path, timezone: str) -> None:
+    """One `wide/<YYYY-MM>.parquet` per calendar month, each built from only
+    that month's rows of the 5 source tables - read fresh per month via a
+    `slot_start` range filter pushed down to the parquet scan, never the
+    full year at once (see the module docstring).
+    """
+    table_dirs = {t: Path(stage_dir) / "data" / t for t in _SOURCE_TABLES}
     all_starts = pd.concat(
-        [tables[t]["slot_start"] for t in ("boom_final", "tau_final", "pairs", "profile", "slot_final")],
+        [store.read_table(table_dirs[t], columns=["slot_start"])["slot_start"] for t in _SOURCE_TABLES],
         ignore_index=True,
     ).drop_duplicates()
     if all_starts.empty:
@@ -87,5 +96,8 @@ def write_wide_export(stage_dir: Path, tables: dict[str, pd.DataFrame], timezone
 
     for month_key in sorted(month_keys.unique()):
         index = pd.DatetimeIndex(sorted(all_starts[month_keys == month_key].unique()))
-        month_df = pivot_tables(tables, index)
+        lo, hi = index.min(), index.max()
+        month_filter = (pa_dataset.field("slot_start") >= lo) & (pa_dataset.field("slot_start") <= hi)
+        month_tables = {t: store.read_table(table_dirs[t], filter=month_filter) for t in _SOURCE_TABLES}
+        month_df = pivot_tables(month_tables, index)
         store.write_fragment(wide_dir, month_key, month_df)

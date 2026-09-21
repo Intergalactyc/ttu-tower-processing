@@ -31,11 +31,20 @@ def read_run_meta(stage_dir) -> dict | None:
         return json.load(f)
 
 
-def check_hash_guard(stage_dir, config_hash: str, force: bool) -> None:
+def check_hash_guard(stage_dir, config_hash: str, force: bool, fresh: bool = False) -> None:
     """Stop with `StageHashMismatch` if the stage directory has a recorded
     config hash that differs from `config_hash`, unless `force` (in which
     case the stage directory's contents are cleared instead).
+
+    `fresh` clears the stage directory unconditionally, before any hash
+    comparison - for a code-only change, which a config hash can never
+    detect (it covers config content and the package version, not source),
+    so a normal rerun (even with `--force`) would otherwise skip every batch
+    whose marker fragment already exists and reuse stale output.
     """
+    if fresh:
+        clear_stage(stage_dir)
+        return
     existing = read_run_meta(stage_dir)
     if existing is None or existing.get("config_hash") == config_hash:
         return

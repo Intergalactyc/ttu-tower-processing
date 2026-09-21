@@ -72,6 +72,14 @@ def test_run_tertiary_end_to_end(tmp_path, monkeypatch, raw_dir):
     boom_final = tables["boom_final"]
     assert not boom_final.empty
     assert set(boom_final["variant"].unique()) == {"none", "mrd", "mrd_unexcised", "naive"}
+    # A coverage-join bug could relabel a whole variant's values NaN while
+    # still leaving the variant itself represented above - assert real
+    # values survive, not just the label (naive borrows mrd's 600-s rung
+    # coverage row, and _MISSING exercises the mrd_unexcised copy path -
+    # both lack a primary `ladder_coverage` row of their own).
+    for variant in ("naive", "mrd_unexcised"):
+        rows = boom_final[boom_final["variant"] == variant]
+        assert rows["value"].notna().any(), f"every {variant} value is NaN"
     assert boom_final["slot_start"].notna().all()
     # boom_final is exactly means+slow+boom_stats concatenated (filtering
     # only NaNs values, never drops rows or renames variables), so every

@@ -1,5 +1,6 @@
 """tau detection on one cospectrum of one (slot, boom, variant): Vickers &
-Mahrt (2006), plus a significance test on the peak.
+Mahrt (2006), plus a significance test on the peak, and the same test on a
+reversal only where accepting it would clip tau to the floor.
 """
 from dataclasses import dataclass
 
@@ -85,12 +86,27 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
 
     sigma = int(np.sign(d_smooth[p]))
 
+    # A reversal is accepted on sight almost everywhere - deliberately, so
+    # contamination sharing the turbulent flux's sign gets cut off as soon as
+    # it appears, rather than waiting for it to grow "significant". But right
+    # at the floor, every candidate maps to the same clipped tau regardless
+    # of how it's justified, and small scales are exactly where SE can shrink
+    # faster than the real signal (huge per-mode sample counts), so a value
+    # statistically indistinguishable from zero can register as a
+    # "reversal" there. Only when accepting the candidate as-is would clip
+    # tau to the floor, also require the same significance test the peak
+    # already gets - elsewhere a reversal still needs no such test.
     reversal = None
     for r in range(p + 1, hi + 1):
+        would_clip = scale(r - 1) <= cfg_det.min_tau_s + 1e-9
         if np.sign(d_smooth[r]) != sigma:
+            if would_clip and not significant(r):
+                continue
             reversal = (r, "sign")
             break
         if abs(d_smooth[r]) > abs(d_smooth[r - 1]):
+            if would_clip and not significant(r):
+                continue
             reversal = (r, "increase")
             break
 

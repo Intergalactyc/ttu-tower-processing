@@ -45,6 +45,23 @@ def test_check_hash_guard_clears_stage_dir_with_force(tmp_path):
     assert not (tmp_path / "run_meta.json").exists()
 
 
+def test_check_hash_guard_fresh_clears_stage_dir_even_with_matching_hash(tmp_path):
+    """`fresh` is for a code-only fix: the config hash never changes, so the
+    ordinary guard (even with `force`) would see a match and skip every
+    batch by marker instead of actually rerunning them.
+    """
+    write_run_meta(tmp_path, stage="primary", tag="t", config_hash="abc", upstream_hash=None,
+                    package_version="2.0.0", timezone="Etc/GMT+6")
+    (tmp_path / "leftover.txt").write_text("x")
+    check_hash_guard(tmp_path, "abc", force=False, fresh=True)
+    assert not (tmp_path / "leftover.txt").exists()
+    assert not (tmp_path / "run_meta.json").exists()
+
+
+def test_check_hash_guard_fresh_is_a_noop_on_an_empty_stage_dir(tmp_path):
+    check_hash_guard(tmp_path, "abc", force=False, fresh=True)  # no raise, nothing to clear
+
+
 def test_write_run_summary(tmp_path):
     write_run_summary(tmp_path, stage="primary", config_hash="abc", package_version="2.0.0",
                        started="t0", finished="t1", status_counts={"success": 3}, totals={"files_loaded": 10},

@@ -14,6 +14,7 @@ from ttu_tower.io import store
 from ttu_tower.io.rawfiles import period_slots_from_table
 from ttu_tower.io.runs import register_run
 from ttu_tower.io.stage import check_hash_guard, write_run_meta, write_run_summary
+from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.secondary import sun
 from ttu_tower.secondary.derived import (
@@ -89,7 +90,7 @@ def run_secondary(cfg, args) -> dict:
     primary_dir = run_dir / "primary"
     stage_dir = run_dir / "secondary"
     config_hash = secondary_hash(cfg, __version__)
-    check_hash_guard(stage_dir, config_hash, force=args.force)
+    check_hash_guard(stage_dir, config_hash, force=args.force, fresh=getattr(args, "fresh", False))
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     write_run_meta(stage_dir, stage="secondary", tag=cfg.tag, config_hash=config_hash,
@@ -105,19 +106,20 @@ def run_secondary(cfg, args) -> dict:
 
     started = datetime.now().astimezone().isoformat(timespec="seconds")
     status_counts = {"processed": 0, "skipped": 0}
-    totals: dict = {}
+    totals: dict = {"numpy_warnings": {}}
 
-    for batch in batches:
-        marker = stage_dir / "data" / _MARKER_TABLE / f"{batch.id}.parquet"
-        if marker.is_file():
-            status_counts["skipped"] += 1
-            continue
+    with capture_warnings(totals["numpy_warnings"]):
+        for batch in batches:
+            marker = stage_dir / "data" / _MARKER_TABLE / f"{batch.id}.parquet"
+            if marker.is_file():
+                status_counts["skipped"] += 1
+                continue
 
-        tables = _process_batch(batch, primary_dir, cfg.files.booms, slots_all, cfg)
-        for table in _SECONDARY_TABLES:
-            store.write_fragment(stage_dir / "data" / table, batch.id, schema.cast(table, tables[table]))
-        status_counts["processed"] += 1
-        _accumulate(totals, tables["tau_selected"])
+            tables = _process_batch(batch, primary_dir, cfg.files.booms, slots_all, cfg)
+            for table in _SECONDARY_TABLES:
+                store.write_fragment(stage_dir / "data" / table, batch.id, schema.cast(table, tables[table]))
+            status_counts["processed"] += 1
+            _accumulate(totals, tables["tau_selected"])
 
     finished = datetime.now().astimezone().isoformat(timespec="seconds")
     write_run_summary(stage_dir, stage="secondary", config_hash=config_hash, package_version=__version__,

@@ -303,6 +303,27 @@ a dependency; the pieces needed are ported.
   overestimates weak fluxes. The adopted rule also follows the literature. Its own limits show
   in the last rows: weak fluxes are underestimated, very weak ones scatter badly, and a long
   turbulent timescale costs agreement.
+
+- **Recalibrated after the first run: the reversal also needs significance, but only where
+  accepting it would floor τ.** The full-year pilot showed high, boom-dependent clip rates
+  (τ floored to `min_tau_s`) concentrated in strongly unstable conditions and the upper booms,
+  traced to reversals accepted at or just above the floor whose |D̃| was indistinguishable from
+  zero (the same 1–2–1-smoothed z-score already used for the peak, evaluated at the candidate
+  reversal, was well under 1 in every real case checked). Every mode at that scale carries a very
+  large block count, so S̃ can shrink well below what the true signal supports there specifically,
+  which the un-gated reversal test (deliberately trigger-happy elsewhere, to cut off same-signed
+  contamination as soon as it appears) has no way to distinguish from a real feature. Gating only
+  candidates that would floor τ leaves the un-gated behavior intact everywhere else, including
+  scenario G above (mesoscale stress, aligned) where blanket gating was rejected - confirmed by
+  rerunning that same benchmark: A–D, F, G, H are unchanged; only E (a wave right at the floor)
+  moves, from 35/50 clipped to 4/50, with the selected-τ flux ratio unchanged (0.79 either way) -
+  most of what changes is which candidate earns the label, not the operative τ. Checked directly
+  against the real clipped cases that motivated this: 7 of 11 moved from a floor-level,
+  insignificant reversal to a real one several rungs out (τ commonly doubling); the other 4 still
+  floor, now on a genuinely significant reversal rather than noise. Also fixed in the same pass:
+  the `clip_rate` validation check (validation.md §3.5) compared `reversal_scale_s` to `min_tau_s`
+  directly, missing that a reversal one rung above `min_tau_s` floors τ just the same - it now
+  checks `τ` itself.
 - **Statuses** (exactly one per cospectrum): `no_data` (no usable data for that family in the
   slot), `weak` (no significant peak), `found` (τ from a reversal), `capped` (no reversal
   through the 40-min mode: τ = 20 min), `unresolved` (a mode became unusable first: only a

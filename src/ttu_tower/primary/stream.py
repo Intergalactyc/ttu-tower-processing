@@ -3,7 +3,6 @@
 """
 import tempfile
 import time
-import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +14,7 @@ from ttu_tower.constants import SAMPLE_HZ, STAGE_B_MARGIN_S
 from ttu_tower.io.load import BadFileError, load_boom
 from ttu_tower.io.rawfiles import accepted_half_hours
 from ttu_tower.io.store import write_fragment, write_manifest_entry
+from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch
 from ttu_tower.primary.products import file_products
 from ttu_tower.primary.stage_a import StageA, stage_a
@@ -60,9 +60,7 @@ def run_unit(batch: Batch, boom: int, file_table: pd.DataFrame, period_slots: tu
     collected: dict[str, list[pd.DataFrame]] = {t: [] for t in _TABLES}
     summary = UnitSummary()
 
-    with tempfile.TemporaryDirectory(prefix="ttu_unit_") as temp_dir, warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-
+    with tempfile.TemporaryDirectory(prefix="ttu_unit_") as temp_dir, capture_warnings(summary.numpy_warnings):
         for h in range(h_a - 3, h_b + 4):
             path = accepted.get(h)
             if path is None:
@@ -100,12 +98,6 @@ def run_unit(batch: Batch, boom: int, file_table: pd.DataFrame, period_slots: tu
             df = pd.concat(collected[table], ignore_index=True) if collected[table] else _empty_table(table)
             write_fragment(Path(out_dir) / "data" / table, unit_id, schema.cast(table, df))
         summary.timings["writing"] = time.perf_counter() - t0
-
-        warning_counts: dict[str, int] = {}
-        for w in caught:
-            key = str(w.message)
-            warning_counts[key] = warning_counts.get(key, 0) + 1
-        summary.numpy_warnings = warning_counts
 
     slot_boom_all = pd.concat(collected["slot_boom"], ignore_index=True) if collected["slot_boom"] else _empty_table("slot_boom")
     summary.slot_counts = {str(k): int(v) for k, v in slot_boom_all["status"].value_counts().items()}

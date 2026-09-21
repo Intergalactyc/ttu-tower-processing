@@ -80,7 +80,7 @@ def run_primary(cfg, args) -> dict:
     run_dir = register_run(cfg, args.config, test=args.test, force=args.force, package_version=__version__)
     stage_dir = run_dir / "primary"
     config_hash = primary_hash(cfg, __version__)
-    check_hash_guard(stage_dir, config_hash, force=args.force)
+    check_hash_guard(stage_dir, config_hash, force=args.force, fresh=getattr(args, "fresh", False))
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     write_run_meta(stage_dir, stage="primary", tag=cfg.tag, config_hash=config_hash, upstream_hash=None,

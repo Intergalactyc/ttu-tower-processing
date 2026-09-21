@@ -153,3 +153,33 @@ def test_no_data():
     assert np.isnan(r.tau_s)
     assert np.isnan(r.tau_lb_s)
     assert r.sign == 0
+
+
+def test_insignificant_reversal_at_the_floor_is_skipped_for_a_real_one_further_out():
+    # A small, noise-level dip right after the peak (mode 5, |d|=0.02 against
+    # se=0.05 - well under the 2-SE bar) would flip sign and floor tau under
+    # a bare reversal test, at exactly the kind of small scale where SE can
+    # be spuriously tiny in real (especially strongly unstable) data. The
+    # real, clearly significant reversal is much further out at mode 8.
+    d = [0.0, 1.0, 0.5, 0.05, -0.02, -0.03, -0.05, -0.08, -0.1, -0.5, -1.5, -0.2, -0.1, -0.05, -0.02]
+    r = _run(d)
+    assert r.status == "found"
+    assert r.peak_scale_s == pytest.approx(P[1])
+    assert r.reversal_scale_s == pytest.approx(P[7])
+    assert r.reversal_type == "sign"
+    assert r.tau_s == pytest.approx(P[6])
+    assert r.tau_s > _CFG.min_tau_s  # not floored
+
+
+def test_significant_reversal_at_the_floor_still_floors():
+    # A reversal right after the peak that IS clearly significant (0.1 vs.
+    # se=0.05, a 3.3-SE swing after smoothing) must still floor tau exactly
+    # as before - the added gate only ever screens out insignificant
+    # candidates, never a real one just because it's close to the floor.
+    d = [0.0, 0.3, 1.0, -0.5, -0.4, -0.3, -0.2, -0.1, -0.05, -0.02, 0.0, 0.0, 0.0, 0.0, 0.0]
+    r = _run(d)
+    assert r.status == "found"
+    assert r.peak_scale_s == pytest.approx(P[1])
+    assert r.reversal_scale_s == pytest.approx(P[3])
+    assert r.reversal_type == "sign"
+    assert r.tau_s == pytest.approx(_CFG.min_tau_s)

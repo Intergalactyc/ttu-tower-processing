@@ -25,14 +25,20 @@ def _boom_stats_row(slot, boom, variant, variable, value):
     return {"slot": slot, "boom": boom, "variant": variant, "variable": variable, "stat": None, "value": value}
 
 
+def _coverage_row(slot, boom, variant, family, value):
+    """A `boom_stats` coverage row, exactly as `secondary.derived.selected_stats`
+    produces it - the real source of variant coverage in `candidate` now that
+    tertiary no longer reads primary's `ladder_coverage` directly (that table
+    never has a `naive` row, and copied `mrd_unexcised` rows come from
+    `boom_stats`, not from primary).
+    """
+    return {"slot": slot, "boom": boom, "variant": variant, "variable": family, "stat": "coverage", "value": value}
+
+
 def _flag_store(boom, test, variable, starts, ends) -> FlagStore:
     rows = [{"start": s, "end": e, "test": test, "kind": "quality", "boom": boom, "variable": variable}
             for s, e in zip(starts, ends)]
     return FlagStore(pd.DataFrame(rows, columns=["start", "end", "test", "kind", "boom", "variable"]))
-
-
-def _empty_ladder_coverage():
-    return pd.DataFrame(columns=["slot", "boom", "variant", "rung_s", "family", "coverage"])
 
 
 def _empty_tau_selected():
@@ -82,9 +88,7 @@ def test_low_coverage_fails_only_that_group():
         {"slot": _SLOT, "boom": _BOOM, "variable": "momentum", "layer": "usable", "fraction": 0.5},
         {"slot": _SLOT, "boom": _BOOM, "variable": "ts", "layer": "usable", "fraction": 1.0},
     ])
-    fail_keys, log = filtering.evaluate(
-        candidate, coverage, _empty_ladder_coverage(), _empty_tau_selected(), {}, _Cfg(),
-    )
+    fail_keys, log = filtering.evaluate(candidate, coverage, _empty_tau_selected(), {}, _Cfg())
     filtered = filtering.apply(candidate, fail_keys)
 
     assert filtered.loc[filtered["variable"] == "ue", "value"].isna().all()
@@ -103,20 +107,18 @@ def test_bad_ts_bounds_fails_heat_and_ts_not_momentum():
         _means_row(_SLOT, _BOOM, "w", "mean", 0.0),
         _means_row(_SLOT, _BOOM, "ts", "mean", 290.0),
         _boom_stats_row(_SLOT, _BOOM, "mrd", "wvpts", 0.01),
+        _coverage_row(_SLOT, _BOOM, "mrd", "momentum", 1.0),
+        _coverage_row(_SLOT, _BOOM, "mrd", "heat", 1.0),
     ])
     coverage = pd.DataFrame([
         {"slot": _SLOT, "boom": _BOOM, "variable": "momentum", "layer": "usable", "fraction": 1.0},
         {"slot": _SLOT, "boom": _BOOM, "variable": "ts", "layer": "usable", "fraction": 1.0},
     ])
-    ladder_coverage = pd.DataFrame([
-        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "rung_s": 37.5, "family": "momentum", "coverage": 1.0},
-        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "rung_s": 37.5, "family": "heat", "coverage": 1.0},
-    ])
     # 5% of the slot flagged bounds on ts - well above max_bounds_fraction.
     flagged = int(0.05 * SAMPLES_PER_SLOT)
     flag_stores = {_BOOM: _flag_store(_BOOM, "bounds", "ts", [_G0], [_G0 + flagged])}
 
-    fail_keys, log = filtering.evaluate(candidate, coverage, ladder_coverage, tau_selected, flag_stores, _Cfg())
+    fail_keys, log = filtering.evaluate(candidate, coverage, tau_selected, flag_stores, _Cfg())
     filtered = filtering.apply(candidate, fail_keys)
 
     assert filtered.loc[filtered["variable"] == "ts", "value"].isna().all()
@@ -135,9 +137,7 @@ def test_spike_fraction_threshold_flips_decision(fraction, expect_fail):
     flagged = int(fraction * SAMPLES_PER_SLOT)
     flag_stores = {_BOOM: _flag_store(_BOOM, "spike", "t", [_G0], [_G0 + flagged])}
 
-    fail_keys, _ = filtering.evaluate(
-        candidate, coverage, _empty_ladder_coverage(), _empty_tau_selected(), flag_stores, _Cfg(),
-    )
+    fail_keys, _ = filtering.evaluate(candidate, coverage, _empty_tau_selected(), flag_stores, _Cfg())
     filtered = filtering.apply(candidate, fail_keys)
     assert filtered["value"].isna().iloc[0] == expect_fail
 
@@ -145,16 +145,16 @@ def test_spike_fraction_threshold_flips_decision(fraction, expect_fail):
 def test_1200s_tau_uses_20min_window_support():
     tau_selected = pd.DataFrame([{"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "tau_s": 1200.0,
                                    "source": "momentum", "source_status": "found"}])
-    candidate = pd.DataFrame([_boom_stats_row(_SLOT, _BOOM, "mrd", "ustar", 0.3)])
-    coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
-    ladder_coverage = pd.DataFrame([
-        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "rung_s": 1200.0, "family": "momentum", "coverage": 1.0},
+    candidate = pd.DataFrame([
+        _boom_stats_row(_SLOT, _BOOM, "mrd", "ustar", 0.3),
+        _coverage_row(_SLOT, _BOOM, "mrd", "momentum", 1.0),
     ])
+    coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
     # A bounds flag entirely in the neighbouring slot's half (before slot
     # start, within the 20-min window's +-5 min reach but outside the slot).
     flag_stores = {_BOOM: _flag_store(_BOOM, "bounds", "ue", [_G0 - 10_000], [_G0 - 1_000])}
 
-    fail_keys, log = filtering.evaluate(candidate, coverage, ladder_coverage, tau_selected, flag_stores, _Cfg())
+    fail_keys, log = filtering.evaluate(candidate, coverage, tau_selected, flag_stores, _Cfg())
     assert (_SLOT, _BOOM, "mrd", "momentum") in fail_keys
     assert (log["criterion"] == "bounds").any()
 
@@ -162,18 +162,25 @@ def test_1200s_tau_uses_20min_window_support():
 def test_slot_only_support_ignores_flags_outside_the_slot():
     tau_selected = pd.DataFrame([{"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "tau_s": 37.5,
                                    "source": "momentum", "source_status": "found"}])
-    candidate = pd.DataFrame([_boom_stats_row(_SLOT, _BOOM, "mrd", "ustar", 0.3)])
-    coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
-    ladder_coverage = pd.DataFrame([
-        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "rung_s": 37.5, "family": "momentum", "coverage": 1.0},
+    candidate = pd.DataFrame([
+        _boom_stats_row(_SLOT, _BOOM, "mrd", "ustar", 0.3),
+        _coverage_row(_SLOT, _BOOM, "mrd", "momentum", 1.0),
     ])
+    coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
     flag_stores = {_BOOM: _flag_store(_BOOM, "bounds", "ue", [_G0 - 10_000], [_G0 - 1_000])}
 
-    fail_keys, _ = filtering.evaluate(candidate, coverage, ladder_coverage, tau_selected, flag_stores, _Cfg())
+    fail_keys, _ = filtering.evaluate(candidate, coverage, tau_selected, flag_stores, _Cfg())
     assert (_SLOT, _BOOM, "mrd", "momentum") not in fail_keys
 
 
-def test_low_ladder_coverage_nans_only_that_variant():
+def test_low_variant_coverage_nans_only_that_variant():
+    """Regression test: `naive` and `mrd_unexcised`-copied rows never have a
+    primary `ladder_coverage` row of their own (naive borrows mrd's 600-s
+    rung; a copied mrd_unexcised row comes from `boom_stats`, not primary).
+    Coverage must come from `boom_stats`'s own per-variant rows in
+    `candidate`, or every `naive`/copied-`mrd_unexcised` value is wrongly
+    NaN'd regardless of its actual coverage.
+    """
     tau_selected = pd.DataFrame([
         {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "tau_s": 37.5, "source": "momentum", "source_status": "found"},
         {"slot": _SLOT, "boom": _BOOM, "variant": "naive", "tau_s": 600.0, "source": "fixed", "source_status": "fixed"},
@@ -181,18 +188,37 @@ def test_low_ladder_coverage_nans_only_that_variant():
     candidate = pd.DataFrame([
         _boom_stats_row(_SLOT, _BOOM, "mrd", "ustar", 0.3),
         _boom_stats_row(_SLOT, _BOOM, "naive", "ustar", 0.3),
+        _coverage_row(_SLOT, _BOOM, "mrd", "momentum", 0.5),
+        _coverage_row(_SLOT, _BOOM, "naive", "momentum", 1.0),
     ])
     coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
-    ladder_coverage = pd.DataFrame([
-        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "rung_s": 37.5, "family": "momentum", "coverage": 0.5},
-        {"slot": _SLOT, "boom": _BOOM, "variant": "naive", "rung_s": 600.0, "family": "momentum", "coverage": 1.0},
-    ])
 
-    fail_keys, _ = filtering.evaluate(candidate, coverage, ladder_coverage, tau_selected, {}, _Cfg())
+    fail_keys, _ = filtering.evaluate(candidate, coverage, tau_selected, {}, _Cfg())
     filtered = filtering.apply(candidate, fail_keys)
 
     assert filtered.loc[filtered["variant"] == "mrd", "value"].isna().all()
     assert not filtered.loc[filtered["variant"] == "naive", "value"].isna().any()
+
+
+def test_naive_variant_has_no_ladder_coverage_row_and_is_not_penalized_for_it():
+    """The exact shape of the bug: `candidate` (built from real `boom_stats`)
+    never has a primary-style `ladder_coverage` row for `naive` at all - only
+    its own `boom_stats` coverage row. A `naive` value must survive on that
+    alone, not be treated as zero coverage because no separate table has it.
+    """
+    tau_selected = pd.DataFrame([
+        {"slot": _SLOT, "boom": _BOOM, "variant": "naive", "tau_s": 600.0, "source": "fixed", "source_status": "fixed"},
+    ])
+    candidate = pd.DataFrame([
+        _boom_stats_row(_SLOT, _BOOM, "naive", "ustar", 0.3),
+        _coverage_row(_SLOT, _BOOM, "naive", "momentum", 0.9),
+    ])
+    coverage = pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"])
+
+    fail_keys, _ = filtering.evaluate(candidate, coverage, tau_selected, {}, _Cfg())
+    filtered = filtering.apply(candidate, fail_keys)
+
+    assert not filtered.loc[filtered["variable"] == "ustar", "value"].isna().any()
 
 
 def test_apply_to_labels_nulls_aniso_class_when_momentum_group_fails():

@@ -41,8 +41,9 @@ def mrd_modes(sx: np.ndarray, sy: np.ndarray, n: np.ndarray, block_len: float, c
 
         coverage = n_h / (h * block_len)
         valid_half = coverage >= c
-        mean_x = sx_h / n_h
-        mean_y = sy_h / n_h
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean_x = sx_h / n_h
+            mean_y = sy_h / n_h
 
         valid_block = valid_half[0::2] & valid_half[1::2]
         dx = mean_x[1::2] - mean_x[0::2]

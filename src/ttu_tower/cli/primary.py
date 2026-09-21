@@ -13,6 +13,9 @@ def parse_args(argv=None):
     parser.add_argument("--redo-failures", action="store_true", help="Retry units marked failed in the manifest.")
     parser.add_argument("--force", action="store_true",
                          help="Clear this stage's outputs on a config-hash mismatch, or re-register a tag pointed elsewhere.")
+    parser.add_argument("--fresh", action="store_true",
+                         help="Clear this stage's outputs unconditionally before running, regardless of the config hash "
+                              "(for a code-only change, which a hash match would otherwise skip batch-by-batch).")
     parser.add_argument("--allow-non-parquet", action="store_true",
                          help="Allow accepted files that are still raw .csv/.csv.gz/.zip (slow; for small runs).")
     return parser.parse_args(argv)

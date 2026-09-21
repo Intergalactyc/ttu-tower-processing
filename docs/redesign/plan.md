@@ -192,10 +192,10 @@ tests/
 | Command | Does |
 |---|---|
 | `ttu-files CONFIG [--allow-non-parquet]` | Build and print the file table (status counts); write `primary/files.parquet`. |
-| `ttu-primary CONFIG [--nproc N] [--test] [--redo-failures] [--force] [--allow-non-parquet]` | Run primary. |
-| `ttu-secondary CONFIG [--test] [--force]` | Run secondary. |
-| `ttu-tertiary CONFIG [--test] [--force]` | Run tertiary. |
-| `ttu-runall CONFIG [--skip-primary] [--nproc N] [--test]` | Run the stages in sequence (subprocesses, like the old `runall`). `--nproc` goes to primary. |
+| `ttu-primary CONFIG [--nproc N] [--test] [--redo-failures] [--force] [--fresh] [--allow-non-parquet]` | Run primary. |
+| `ttu-secondary CONFIG [--test] [--force] [--fresh]` | Run secondary. |
+| `ttu-tertiary CONFIG [--test] [--force] [--fresh]` | Run tertiary. |
+| `ttu-runall CONFIG [--skip-primary] [--nproc N] [--test] [--force] [--fresh]` | Run the stages in sequence (subprocesses, like the old `runall`). `--nproc` goes to primary; `--force`/`--fresh` go to every stage run (primary too, unless `--skip-primary`). |
 | `ttu-report CONFIG [--stability]` | Write the QC/yield reports (`<run dir>/reports/`). |
 | `ttu-validate CONFIG --check NAME` | Run a first-run validation check (validation.md §3). |
 | `ttu-runs [--test]` | List the registered runs: tag, run directory, whether it exists, stages present (§3.10). |
@@ -208,6 +208,12 @@ tests/
 - `--force` overrides the config-hash guard by clearing the stage's outputs and every later
   stage's first. It also re-registers a tag whose link points to another existing run
   directory (§3.10).
+- `--fresh` clears the stage's own outputs unconditionally before running, whether or not the
+  config hash matches. A config hash covers config content and the package version, not source,
+  so a code-only fix leaves it unchanged; without `--fresh`, rerunning (even with `--force`, which
+  only acts on a mismatch) would skip every batch whose marker fragment already exists and reuse
+  stale output. Unlike `--force`, `--fresh` does not cascade to later stages - rerun those
+  explicitly too if the fix affects their inputs.
 - `--allow-non-parquet` lets raw `.csv`/`.csv.gz`/`.zip` files be read directly (Phase 5).
   Without it, finding such a file stops the run with the message "N unconverted raw files in
   <dir>; run `ttu-convert-parquet` first, or pass --allow-non-parquet (slow; for small runs)".
@@ -1153,7 +1159,15 @@ Steps:
 
    σ = sign(D̃_p).
 5. **Gap.** The reversal r is the first mode after p in R with sign(D̃_r) ≠ σ (type `sign`) or
-   |D̃_r| > |D̃_(r−1)| (type `increase`): `found`, τ = max(P_(r−1), `min_tau_s`).
+   |D̃_r| > |D̃_(r−1)| (type `increase`): `found`, τ = max(P_(r−1), `min_tau_s`). A candidate at
+   mode r is skipped (the scan continues past it) if accepting it would floor τ to `min_tau_s`
+   (P_(r−1) ≤ `min_tau_s`) and it is not itself significant (same test as the peak, §4). Recalibrated
+   after the first run (validation.md §3.5): every other candidate is accepted on sight, so that
+   contamination sharing the turbulent flux's sign is cut off as soon as it appears rather than
+   once it grows large enough to be "significant" - but right at the floor every candidate maps to
+   the same τ regardless of how it is justified, and small scales are exactly where S̃ can shrink
+   faster than a real signal (many blocks per mode), letting a value indistinguishable from zero
+   register as a reversal.
 6. **No reversal** through the end of R: `unresolved` with τ_lb = P_(u−1) if u ≤ i_top, else
    `capped` with τ = `max_tau_s`.
 7. **Diagnostic for `capped`:** look at mode i_top + 1 (the 80-min mode: one block, unsmoothed)

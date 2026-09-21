@@ -16,12 +16,17 @@ def _drop_nan_triples(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[np.n
 
 
 def ls_linear_fit(xvals, yvals) -> tuple[float, float]:
-    """Least-squares fit to y = a + b*x. Returns (a, b)."""
+    """Least-squares fit to y = a + b*x. Returns (a, b), or (0.0, 0.0) if
+    fewer than two (x, y) pairs are both finite - too few points to fit a
+    line, and `det` would be zero anyway.
+    """
     x = np.asarray(xvals, dtype=float)
     y = np.asarray(yvals, dtype=float)
     if x.size == 0 or y.size == 0:
         return 0.0, 0.0
     x, y = _drop_nan_pairs(x, y)
+    if x.size < 2:
+        return 0.0, 0.0
     n = x.size
     sum_x = x.sum()
     sum_x2 = np.sum(x * x)
@@ -34,13 +39,17 @@ def ls_linear_fit(xvals, yvals) -> tuple[float, float]:
 
 
 def ls_weighted_linear_fit(xvals, yvals, weights) -> tuple[float, float]:
-    """Weighted least-squares fit to y = a + b*x. Returns (a, b)."""
+    """Weighted least-squares fit to y = a + b*x. Returns (a, b), or
+    (0.0, 0.0) if fewer than two (x, y, w) triples are all finite.
+    """
     x = np.asarray(xvals, dtype=float)
     y = np.asarray(yvals, dtype=float)
     w = np.asarray(weights, dtype=float)
     if x.size == 0 or y.size == 0:
         return 0.0, 0.0
     x, y, w = _drop_nan_triples(x, y, w)
+    if x.size < 2:
+        return 0.0, 0.0
     sum_w = w.sum()
     sum_wx = np.sum(w * x)
     sum_wx2 = np.sum(w * x * x)

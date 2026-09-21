@@ -186,8 +186,9 @@ suggest, not what to change.
 ### 3.5 `floor_peak`: the small-scale end
 - The distribution of `peak_scale_s` (both cospectra) at booms 1–3, and the fraction of slots
   whose peak is at the smallest analysed mode (0.59 s).
-- The fraction of `found` detections clipped to `min_tau_s` (the reversal at or below
-  9.375 s).
+- The fraction of `found` detections clipped to `min_tau_s` (τ itself at or below 9.375 s - a
+  reversal one rung above the floor floors τ just the same, so this isn't simply the reversal at
+  or below 9.375 s).
 - **Informs:** `mrd.floor_level` (16 halves the floor), and whether a 4.69-s rung is worth
   adding.
 - **Reading:** a peak often at the floor means the floor may cut it; frequent clipping at the

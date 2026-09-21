@@ -91,9 +91,9 @@ def build_candidate(means: pd.DataFrame, slow: pd.DataFrame, boom_stats: pd.Data
 def _support_bounds(keys: pd.DataFrame) -> pd.DataFrame:
     """Per key, the [start, end) sample support: the slot, or the 20-min
     window when a variant row's selected tau is 1200s. A `variant` row's own
-    `ladder_coverage` at that rung is already computed over the right
-    support; only the `bounds`/`spike` FlagStore reach needs the wider
-    window explicitly.
+    coverage (from `boom_stats`) is already computed over the right support;
+    only the `bounds`/`spike` FlagStore reach needs the wider window
+    explicitly.
     """
     keys = keys.copy()
     g0 = SAMPLES_PER_SLOT * keys["slot"]
@@ -103,7 +103,22 @@ def _support_bounds(keys: pd.DataFrame) -> pd.DataFrame:
     return keys
 
 
-def _coverage_fail_keys(keys: pd.DataFrame, coverage: pd.DataFrame, ladder_coverage: pd.DataFrame, min_coverage: float) -> set:
+def _variant_coverage(candidate: pd.DataFrame) -> pd.DataFrame:
+    """Per (slot, boom, variant, family): the family's coverage at that
+    variant's already-selected tau, from `boom_stats`'s own coverage rows
+    (`secondary.derived.selected_stats`). Unlike primary's `ladder_coverage`,
+    these exist for every variant `boom_stats` actually has a row for -
+    `naive` (which borrows `mrd`'s 600-s rung, never a `ladder_coverage` row
+    of its own) and the slots where `mrd_unexcised` was copied from `mrd`
+    (`materialize_missing_unexcised` copies `boom_stats`, so its coverage
+    rows come along) - so no join here can miss a variant `ladder_coverage`
+    never populated in the first place.
+    """
+    cov = candidate[candidate["stat"] == "coverage"]
+    return cov.rename(columns={"variable": "family", "value": "cov_variant"})[["slot", "boom", "variant", "family", "cov_variant"]]
+
+
+def _coverage_fail_keys(keys: pd.DataFrame, coverage: pd.DataFrame, variant_cov: pd.DataFrame, min_coverage: float) -> set:
     fam_map = pd.DataFrame(
         [(g, f) for g, fams in _GROUP_REQUIRED_FAMILIES.items() for f in fams], columns=["group", "family"],
     )
@@ -112,11 +127,7 @@ def _coverage_fail_keys(keys: pd.DataFrame, coverage: pd.DataFrame, ladder_cover
     none_cov = coverage[coverage["layer"] == "usable"].rename(columns={"variable": "family", "fraction": "cov_none"})
     req = req.merge(none_cov[["slot", "boom", "family", "cov_none"]], on=["slot", "boom", "family"], how="left")
 
-    variant_cov = ladder_coverage.rename(columns={"rung_s": "tau_s", "coverage": "cov_variant"})
-    req = req.merge(
-        variant_cov[["slot", "boom", "variant", "tau_s", "family", "cov_variant"]],
-        on=["slot", "boom", "variant", "tau_s", "family"], how="left",
-    )
+    req = req.merge(variant_cov, on=["slot", "boom", "variant", "family"], how="left")
 
     is_none = req["variant"] == "none"
     req["coverage_value"] = np.where(is_none, req["cov_none"], req["cov_variant"])
@@ -144,7 +155,7 @@ def _flag_fraction_checks(keys: pd.DataFrame, flag_stores: dict) -> pd.DataFrame
     return checks
 
 
-def evaluate(candidate: pd.DataFrame, coverage: pd.DataFrame, ladder_coverage: pd.DataFrame,
+def evaluate(candidate: pd.DataFrame, coverage: pd.DataFrame,
              tau_selected: pd.DataFrame, flag_stores: dict, cfg_tertiary) -> tuple[set, pd.DataFrame]:
     """Per (slot, boom, variant, group) present in `candidate`: whether it
     fails, and the `filter_log` rows explaining why. `flag_stores` maps
@@ -157,7 +168,7 @@ def evaluate(candidate: pd.DataFrame, coverage: pd.DataFrame, ladder_coverage: p
     keys = keys.merge(tau_selected[["slot", "boom", "variant", "tau_s"]], on=["slot", "boom", "variant"], how="left")
     keys = _support_bounds(keys)
 
-    coverage_fail = _coverage_fail_keys(keys, coverage, ladder_coverage, cfg_tertiary.min_coverage)
+    coverage_fail = _coverage_fail_keys(keys, coverage, _variant_coverage(candidate), cfg_tertiary.min_coverage)
     checks = _flag_fraction_checks(keys, flag_stores)
     bounds_fail = checks[checks["bounds_fraction"] > cfg_tertiary.max_bounds_fraction]
     spike_fail = checks[checks["spike_fraction"] > cfg_tertiary.max_spike_fraction]

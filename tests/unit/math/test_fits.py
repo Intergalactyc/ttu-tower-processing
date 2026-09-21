@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import numpy as np
 from pytest import approx
@@ -39,6 +40,31 @@ def test_ls_linear_fit_duplicate_values_with_nan():
 
     assert a == approx(expected_a, abs=1e-9)
     assert b == approx(expected_b, abs=1e-9)
+
+
+def test_ls_linear_fit_all_nan_input_gives_zero_with_no_warning():
+    """A caller (e.g. linear_detrend on a fully-missing slot/file) can pass an
+    array that's entirely NaN; the pre-drop `x.size == 0` guard doesn't catch
+    this since x.size is nonzero before dropping - only after.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        a, b = ls_linear_fit([1.0, 2.0, 3.0], [float("nan")] * 3)
+    assert (a, b) == (0.0, 0.0)
+
+
+def test_ls_linear_fit_single_surviving_point_gives_zero_with_no_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        a, b = ls_linear_fit([1.0, float("nan")], [5.0, float("nan")])
+    assert (a, b) == (0.0, 0.0)
+
+
+def test_ls_weighted_linear_fit_all_nan_input_gives_zero_with_no_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        a, b = ls_weighted_linear_fit([1.0, 2.0], [float("nan")] * 2, [1.0, 1.0])
+    assert (a, b) == (0.0, 0.0)
 
 
 def test_constrained_linear_fit_fixed_intercept():

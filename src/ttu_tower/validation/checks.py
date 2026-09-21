@@ -16,6 +16,7 @@ from ttu_tower.flags import mask_to_intervals
 from ttu_tower.io.load import BadFileError, load_boom
 from ttu_tower.io.rawfiles import build_file_table
 from ttu_tower.io.store import read_table
+from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.math.polar import signed_angular_distance
 from ttu_tower.math.stats import autocovariance, efolding_integral, linear_detrend
 from ttu_tower.post.classify import stability_classes
@@ -130,8 +131,9 @@ def _despike_one_file(task: dict) -> dict[str, list]:
     rng = np.random.default_rng(task["seed"])
 
     rate_rows, old_rows, excursion_rows, excursion_examples, injection_rows = [], [], [], [], []
+    numpy_warnings: dict[str, int] = {}
 
-    with tempfile.TemporaryDirectory(prefix="ttu_validate_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="ttu_validate_") as temp_dir, capture_warnings(numpy_warnings):
         for boom in booms:
             try:
                 raw = load_boom(path, boom, temp_dir)
@@ -183,7 +185,7 @@ def _despike_one_file(task: dict) -> dict[str, list]:
                                                 detected / n_inject, (result.spike & outside).sum() / outside.sum()))
 
     return {"rates": rate_rows, "old": old_rows, "excursions": excursion_rows,
-            "examples": excursion_examples, "injection": injection_rows}
+            "examples": excursion_examples, "injection": injection_rows, "numpy_warnings": numpy_warnings}
 
 
 def despike_calibration(cfg, run_dir: Path, rng: np.random.Generator, n_per_class: int = 30,
@@ -223,6 +225,11 @@ def despike_calibration(cfg, run_dir: Path, rng: np.random.Generator, n_per_clas
     excursion_examples = [row for r in results for row in r["examples"]]
     injection_rows = [row for r in results for row in r["injection"]]
 
+    numpy_warnings: dict[str, int] = {}
+    for r in results:
+        for message, n in r["numpy_warnings"].items():
+            numpy_warnings[message] = numpy_warnings.get(message, 0) + n
+
     return {
         "removal_rates": pd.DataFrame(rate_rows, columns=["stability_class", "boom", "variable", "z_threshold", "spike_fraction", "excursion_fraction"]),
         "old_method": pd.DataFrame(old_rows, columns=["stability_class", "boom", "variable", "old_spike_fraction"]),
@@ -231,6 +238,7 @@ def despike_calibration(cfg, run_dir: Path, rng: np.random.Generator, n_per_clas
         "injection": pd.DataFrame(injection_rows, columns=[
             "stability_class", "boom", "variable", "injected_sigma", "z_threshold", "detection_rate", "false_removal_rate",
         ]),
+        "numpy_warnings": pd.DataFrame(sorted(numpy_warnings.items()), columns=["message", "count"]),
     }
 
 
@@ -383,7 +391,11 @@ def floor_peak(mrd: pd.DataFrame, tau: pd.DataFrame, classes: pd.Series, cfg, bo
     floor_rate = floor_rate.rename("floor_fraction").reset_index()
 
     found = _add_class(tau[(tau["variant"] == "mrd") & (tau["status"] == "found")], classes).copy()
-    found["clipped"] = found["reversal_scale_s"] <= cfg.secondary.detection.min_tau_s + 1e-9
+    # tau_s = max(scale(r-1), min_tau_s) (detect.py), so a reversal one rung
+    # above min_tau_s also floors tau_s to it - checking tau_s directly (never
+    # below min_tau_s by construction) catches that; reversal_scale_s <=
+    # min_tau_s alone misses it.
+    found["clipped"] = found["tau_s"] <= cfg.secondary.detection.min_tau_s + 1e-9
     clip_rate = found.groupby(["stability_class", "boom", "cospectrum"], observed=True)["clipped"].mean()
     clip_rate = clip_rate.rename("clip_fraction").reset_index()
 

@@ -14,6 +14,9 @@ def parse_args(argv=None):
                          help="Skip the primary stage (e.g. it already finished and you only want secondary/tertiary).")
     parser.add_argument("--test", action="store_true", help="Passed through to every stage.")
     parser.add_argument("--force", action="store_true", help="Passed through to every stage.")
+    parser.add_argument("--fresh", action="store_true",
+                         help="Passed through to every stage run (primary, unless --skip-primary; secondary; "
+                              "tertiary): clears that stage's outputs unconditionally before running.")
     return parser.parse_args(argv)
 
 
@@ -31,6 +34,8 @@ def main(argv=None):
         common.append("--test")
     if args.force:
         common.append("--force")
+    if args.fresh:
+        common.append("--fresh")
 
     if not args.skip_primary:
         primary_args = list(common)

@@ -136,6 +136,15 @@ def resolve_period_slots(cfg, file_table: pd.DataFrame) -> tuple[int, int]:
     return slot_a, slot_b
 
 
+def period_slots_from_table(slots: pd.DataFrame) -> tuple[int, int]:
+    """The `(slot_a, slot_b)` primary actually wrote to `slots.parquet`, as
+    the single source of truth for secondary/tertiary: re-resolving
+    `[period]` independently in every stage risks the stages silently
+    disagreeing about which slots exist if the config is edited between runs.
+    """
+    return int(slots["slot"].min()), int(slots["slot"].max()) + 1
+
+
 def check_raw_allowed(table: pd.DataFrame, allow_non_parquet: bool) -> None:
     """Stop (unless `allow_non_parquet`) if any accepted file still needs conversion."""
     raw = table[(table["status"] == "accepted") & ~table["name"].str.endswith(".parquet")]

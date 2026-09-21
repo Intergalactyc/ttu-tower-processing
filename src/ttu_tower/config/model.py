@@ -42,7 +42,7 @@ class BoundsConfig:
 class DespikeConfig:
     window_s: float
     stride_s: float
-    z_threshold: float
+    z_threshold: dict[str, float]
     max_spike_samples: int
     min_mad: dict[str, float]
 

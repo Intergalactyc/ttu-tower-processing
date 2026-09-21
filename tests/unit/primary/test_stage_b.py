@@ -107,8 +107,8 @@ def test_slow_sensor_unchecked_sample_excluded_from_usable(monkeypatch):
     span = build_span({99: _stage_a(seed=0), 100: a100, 101: _stage_a(seed=200)}, h=100, margin=30_000)
 
     # core-local [40000, 40100) (slot 301) is span-local [70000, 70100) with a 30000 margin.
-    def fake_despike(x, g0, cfg_despike, min_mad, c):
-        result = real_despike(x, g0, cfg_despike, min_mad, c)
+    def fake_despike(x, g0, cfg_despike, min_mad, z_threshold, c):
+        result = real_despike(x, g0, cfg_despike, min_mad, z_threshold, c)
         if x is span.series["p"]:
             unchecked = result.unchecked.copy()
             unchecked[70_000:70_100] = True  # a finite region forced "unchecked"

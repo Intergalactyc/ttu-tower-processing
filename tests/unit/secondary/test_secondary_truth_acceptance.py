@@ -55,7 +55,8 @@ def _cfg(raw_dir, tag):
         # slot's sample kurtosis past the default range by chance - that's a
         # property of this synthetic setup, not a sensor defect, so no
         # quality test should be allowed to remove anything here.
-        "qc": {"despike": {"z_threshold": 50.0}, "unusable_tests": []},
+        "qc": {"despike": {"z_threshold": {v: 50.0 for v in ("ue", "vn", "w", "ts", "t", "rh", "p")}},
+               "unusable_tests": []},
         "tertiary": {"veer_reference_boom": 1, "fits": {k: [1] for k in
                      ("alpha_booms", "gamma_booms", "wdgamma_booms", "loglaw_booms")}},
     }

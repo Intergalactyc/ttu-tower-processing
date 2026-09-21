@@ -131,7 +131,7 @@ def _split_and_classify(x: np.ndarray, m: np.ndarray, outlier: np.ndarray, max_s
     return spike, excursion
 
 
-def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, c: float) -> Despiked:
+def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, z_threshold: float, c: float) -> Despiked:
     """A 5-min median/MAD reference (VM97), evaluated every `stride_s` and
     linearly interpolated between reference centers. Per sample: if both
     bracketing centers are valid (finite coverage >= c), interpolate; if
@@ -142,7 +142,9 @@ def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, c: float) -> De
     x - m changes sign, since a real signal can't jump across the reference
     without passing through it - a run that does is a noise burst however
     long. Each piece of at most `max_spike_samples` is a spike (removed);
-    a longer one is an excursion (kept).
+    a longer one is an excursion (kept). `min_mad` and `z_threshold` are the
+    caller's resolved values for this variable (both are per-variable in
+    config); everything else needed comes off `cfg_despike` directly.
     """
     x = np.asarray(x, dtype=np.float64)
     n = x.size
@@ -154,7 +156,7 @@ def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, c: float) -> De
     m, mad, unchecked = _interpolated_reference(g, centers, m_c, mad_c, valid_c, half_window)
 
     z = _MAD_TO_SIGMA * np.abs(x - m) / mad  # NaN (unchecked, or x is NaN) is never > threshold
-    outlier = z > cfg_despike.z_threshold
+    outlier = z > z_threshold
 
     spike, excursion = _split_and_classify(x, m, outlier, cfg_despike.max_spike_samples)
 

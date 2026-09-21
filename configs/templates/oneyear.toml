@@ -39,7 +39,7 @@ p = [50.0, 110.0]
 [qc.despike]
 window_s = 300.0
 stride_s = 30.0
-z_threshold = 3.5
+z_threshold = { ue = 3.5, vn = 3.5, w = 3.5, ts = 3.5, t = 3.5, rh = 3.5, p = 6.0 }
 max_spike_samples = 3
 min_mad = { ue = 0.001, vn = 0.001, w = 0.001, ts = 0.01, t = 0.002, rh = 0.00002, p = 0.0004 }
 

@@ -145,7 +145,7 @@ def stage_b(span: Span, h: int, boom: int, cfg) -> StageBOut:
     # 1. despike every variable; couple the ue/vn/w triplet's spike removals
     despiked = {}
     for var in _ALL_DESPIKED:
-        despiked[var] = despike(span.series[var], span.g0, qc.despike, qc.despike.min_mad[var], c)
+        despiked[var] = despike(span.series[var], span.g0, qc.despike, qc.despike.min_mad[var], qc.despike.z_threshold[var], c)
         clip_add("spike", var, *mask_to_intervals(despiked[var].spike, g0=span.g0))
         clip_add("excursion", var, *mask_to_intervals(despiked[var].excursion, g0=span.g0))
         clip_add("unchecked", var, *mask_to_intervals(despiked[var].unchecked, g0=span.g0))

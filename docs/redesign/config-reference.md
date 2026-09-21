@@ -108,7 +108,7 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 |---|---|---|---|---|
 | `window_s` | float | `300.0` | LIT (VM97) | Length of the reference window. |
 | `stride_s` | float | `30.0` | DES | The reference is evaluated every stride and interpolated in between. |
-| `z_threshold` | float | `3.5` | DES, **provisional** | A sample is an outlier if 0.6745·\|x − median\|/MAD exceeds this. Recalibrated in the first run (validation.md §3.2). The old value, 5.0 on a whole-file reference, isn't comparable. Old: `despiking_deviations`. |
+| `z_threshold` | table | `{ ue = 3.5, vn = 3.5, w = 3.5, ts = 3.5, t = 3.5, rh = 3.5, p = 6.0 }` | DES, **provisional** | Per-variable: a sample is an outlier if 0.6745·\|x − median\|/MAD exceeds this. Recalibrated from the April 2014 pilot (validation.md §3.2): `p` alone was raised to 6.0 after its per-slot spike fraction exceeded `tertiary.max_spike_fraction` on nearly every slot for a subset of booms (2, 3, 8), even though those booms' raw pressure signal wasn't dramatically noisier than the others - still under investigation, expect further recalibration. The old value, 5.0 on a whole-file reference, isn't comparable. Old: `despiking_deviations`. |
 | `max_spike_samples` | int | `3` | LIT (VM97) | Outlier runs up to this long are spikes (removed); longer ones are excursions (kept and recorded). Runs are split where they cross the median first (plan.md Phase 2). |
 | `min_mad` | table | `{ ue = 0.001, vn = 0.001, w = 0.001, ts = 0.01, t = 0.002, rh = 0.00002, p = 0.0004 }` | DES | Lower bound on the MAD. For ts, t, rh and p: one quantization step, measured on real files. For the winds, whose stored values are effectively continuous: a chosen floor well below the weakest turbulent MADs. |
 
@@ -295,7 +295,7 @@ p = [50.0, 110.0]
 [qc.despike]
 window_s = 300.0
 stride_s = 30.0
-z_threshold = 3.5
+z_threshold = { ue = 3.5, vn = 3.5, w = 3.5, ts = 3.5, t = 3.5, rh = 3.5, p = 6.0 }
 max_spike_samples = 3
 min_mad = { ue = 0.001, vn = 0.001, w = 0.001, ts = 0.01, t = 0.002, rh = 0.00002, p = 0.0004 }
 

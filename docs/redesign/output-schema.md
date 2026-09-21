@@ -397,7 +397,8 @@ Columns: `slot`, `slot_start`, `boom`, `variant` (`none` | `mrd` | `naive` | `mr
 - `variant = none`: the rows of `means` and `slow`.
 - Other variants: the rows of `boom_stats`.
 
-Values that fail filtering are NaN (§5.6).
+Values that fail filtering are NaN (§5.6). `boom_labels` (the anisotropy class) isn't part of
+this table - see `boom_labels_final` (§5.8).
 
 ### 5.2 `tau_final`
 
@@ -411,7 +412,7 @@ Columns: `slot`, `slot_start`, `boom`, `boom2`, `variant`, `variable`, `value`.
 |---|---|---|
 | `rib` | none | Bulk Richardson number between `boom` < `boom2` (all 45 pairs); vector wind difference from ue/vn means; slow VPT; local g. |
 | `lapse_vpt` | none | (VPT₂ − VPT₁)/(z₂ − z₁), K/m, all pairs. |
-| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. |
+| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. Includes the reference boom's own row (`boom == boom2`, value 0 unless the reference's own `wd` was filtered) - unlike `rib`/`lapse_vpt`, `veer` doesn't follow the `boom < boom2` convention, since `boom2` here is a fixed reference rather than a pair partner. |
 
 ### 5.4 `profile`: profile fits per slot
 
@@ -422,8 +423,8 @@ Columns: `slot`, `slot_start`, `variant`, `variable`, `value`.
 | `alpha`, `alpha_n` | none | Power-law exponent of ws mean vs height (weighted fit); booms used. |
 | `gamma`, `gamma_n`, `gamma_n_capped` | mrd / naive / mrd_unexcised | Power-law exponent of TI vs height; booms used; how many of them had a `capped` τ. |
 | `wdgamma`, `wdgamma_n`, `wdgamma_n_capped` | as above | Power-law exponent of wd std vs height. |
-| `loglaw_ustar`, `loglaw_z0` | none | Unconstrained neutral log-law fit on `loglaw_booms` ws means. |
-| `loglaw_z0_constrained` | mrd / naive / mrd_unexcised | z0 with u* fixed at the median of that variant's `ustar` over `loglaw_booms`. |
+| `loglaw_ustar`, `loglaw_z0`, `loglaw_n` | none | Unconstrained neutral log-law fit on `loglaw_booms` ws means; `loglaw_n` is the boom count shared by both (one fit produces both values, so there's one count, not two). |
+| `loglaw_z0_constrained`, `loglaw_z0_constrained_n`, `loglaw_z0_constrained_n_capped` | mrd / naive / mrd_unexcised | z0 with u* fixed at the median of that variant's `ustar` over `loglaw_booms`; booms used; how many had a `capped` τ - same τ-policy treatment as gamma/wdgamma. |
 
 **Profile-fit rules.** These are all of them. Each is configurable in `[tertiary.fits]`
 (config-reference.md):
@@ -487,6 +488,20 @@ the files in order gives the whole period. Column naming:
 - profile: `{variable}[_{variant}]`;
 - slot: `{variable}`;
 - τ: `tau_b{boom}_{variant}` and `tau_source_b{boom}_{variant}` (string).
+
+### 5.8 `boom_labels_final`: filtered anisotropy labels
+
+Columns: `slot`, `slot_start`, `boom`, `variant`, `label`, `value`.
+
+Secondary's `boom_labels` (`aniso_class`, from the barycentric-map classification) copied
+verbatim, except that `value` is null wherever that (slot, boom, variant)'s momentum group
+failed tertiary filtering (§5.6) - the same failure that already NaNs `boom_final`'s
+`aniso_l1`/`l2`/`l3`/`aniso_beta`/`aniso_phi` for that row. Without this table, `aniso_class`
+could stay a real classification while the eigenvalues it was computed from are NaN'd in
+`boom_final`, since secondary's own NaN-guard on `aniso_class` only catches a momentum family
+whose *coverage* was too low (`var_u`/`cov_uv`/etc. are already NaN by the time they reach the
+anisotropy calculation in that case) - it can't anticipate a later `bounds`/`spike`
+flag-fraction failure, which secondary never evaluates.
 
 ---
 

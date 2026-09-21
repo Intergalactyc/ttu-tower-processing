@@ -16,7 +16,7 @@ from ttu_tower.validation.synthetic import write_raw_dataset
 _HALF_HOURS = list(range(6100, 6108))  # 8 half-hours
 _BOOMS = [1, 2]
 _MISSING = [6103]  # one outage, to exercise the mrd_unexcised copy path
-_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log")
+_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log", "boom_labels_final")
 
 
 def _args(config, **overrides):
@@ -105,6 +105,17 @@ def test_run_tertiary_end_to_end(tmp_path, monkeypatch, raw_dir):
 
     filter_log = tables["filter_log"]
     assert list(filter_log.columns) == ["slot", "boom", "variant", "group", "criterion", "variable"]
+
+    boom_labels_final = tables["boom_labels_final"]
+    assert not boom_labels_final.empty
+    assert set(boom_labels_final["label"].unique()) == {"aniso_class"}
+    assert boom_labels_final["slot_start"].notna().all()
+    # aniso_class is null everywhere aniso_l1 (same momentum group) is NaN in
+    # boom_final, and only there - the two tables can't disagree.
+    aniso_l1 = boom_final[boom_final["variable"] == "aniso_l1"].set_index(["slot", "boom", "variant"])["value"]
+    joined = boom_labels_final.set_index(["slot", "boom", "variant"])
+    joined = joined.join(aniso_l1.rename("aniso_l1"), how="inner")
+    assert (joined["value"].isna() == joined["aniso_l1"].isna()).all()
 
     wide_files = sorted((run_dir / "tertiary" / "wide").glob("*.parquet"))
     assert wide_files

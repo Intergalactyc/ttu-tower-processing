@@ -21,11 +21,11 @@ from ttu_tower.tertiary import filtering, mesonet, multiboom, profiles, wide
 
 _PRIMARY_TABLES = ("coverage", "means", "ladder_coverage")
 _PRIMARY_MARKER_TABLE = "means"  # any primary unit's fragment existing implies the unit succeeded
-_SECONDARY_TABLES = ("tau_selected", "boom_stats", "slow", "slot_stats")
+_SECONDARY_TABLES = ("tau_selected", "boom_stats", "slow", "slot_stats", "boom_labels")
 _SECONDARY_MARKER_TABLE = "boom_stats"
-_TERTIARY_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log")
+_TERTIARY_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log", "boom_labels_final")
 _TERTIARY_MARKER_TABLE = "boom_final"  # a batch is "done" once this table's fragment exists
-_SLOT_START_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final")
+_SLOT_START_TABLES = ("boom_final", "tau_final", "pairs", "profile", "slot_final", "boom_labels_final")
 
 _logger = logging.getLogger(__name__)
 
@@ -106,6 +106,7 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
         candidate, primary["coverage"], primary["ladder_coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary,
     )
     boom_final = filtering.apply(candidate, fail_keys)
+    boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
 
     pairs = multiboom.multiboom(boom_final, cfg.files.booms, cfg.tertiary.veer_reference_boom)
     profile = profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits)
@@ -118,6 +119,7 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
     tables = {
         "boom_final": boom_final, "tau_final": tau_final, "pairs": pairs,
         "profile": profile, "slot_final": slot_final, "filter_log": filter_log,
+        "boom_labels_final": boom_labels_final,
     }
     slot_start_by_slot = batch_slots.set_index("slot")["slot_start"]
     for name in _SLOT_START_TABLES:
@@ -168,7 +170,8 @@ def run_tertiary(cfg, args) -> dict:
             store.write_fragment(stage_dir / "data" / table, batch.id, schema.cast(table, tables[table]))
         status_counts["processed"] += 1
 
-    full_tables = {t: store.read_table(stage_dir / "data" / t) for t in _TERTIARY_TABLES if t != "filter_log"}
+    wide_source_tables = ("boom_final", "tau_final", "pairs", "profile", "slot_final")
+    full_tables = {t: store.read_table(stage_dir / "data" / t) for t in wide_source_tables}
     wide.write_wide_export(stage_dir, full_tables, cfg.output.timezone)
 
     finished = datetime.now().astimezone().isoformat(timespec="seconds")

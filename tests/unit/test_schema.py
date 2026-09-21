@@ -9,7 +9,8 @@ def test_every_table_has_a_spec():
         "files", "slots", "slot_boom", "coverage", "means", "slot_qc", "flags",
         "ladder", "ladder_coverage", "mrd", "mrd_frame",
         "tau", "tau_selected", "boom_stats", "boom_labels", "slow", "slot_stats",
-        "boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log", "wide",
+        "boom_final", "tau_final", "pairs", "profile", "slot_final", "filter_log",
+        "boom_labels_final", "wide",
     }
     assert set(schema.TABLES) == expected
 

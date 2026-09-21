@@ -143,6 +143,10 @@ _TABLE_DEFS = [
         ("slot", "int64"), ("boom", "int8"), ("variant", "category"),
         ("group", "category"), ("criterion", "category"), ("variable", "category"),
     ]),
+    _spec("boom_labels_final", "tertiary", "fragments", [
+        ("slot", "int64"), ("slot_start", "timestamp"), ("boom", "int8"),
+        ("variant", "category"), ("label", "category"), ("value", "string"),
+    ]),
     # "wide" is a pivoted, dynamic-width convenience export: only slot_start
     # is guaranteed, so cast() isn't used on it. Its TableSpec exists so
     # load_results can resolve its path.

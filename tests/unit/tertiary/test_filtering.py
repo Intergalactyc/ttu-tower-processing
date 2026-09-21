@@ -193,3 +193,28 @@ def test_low_ladder_coverage_nans_only_that_variant():
 
     assert filtered.loc[filtered["variant"] == "mrd", "value"].isna().all()
     assert not filtered.loc[filtered["variant"] == "naive", "value"].isna().any()
+
+
+def test_apply_to_labels_nulls_aniso_class_when_momentum_group_fails():
+    boom_labels = pd.DataFrame([
+        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "label": "aniso_class", "value": "2c"},
+        {"slot": _SLOT, "boom": _BOOM, "variant": "naive", "label": "aniso_class", "value": "3c"},
+    ])
+    fail_keys = {(_SLOT, _BOOM, "mrd", "momentum")}
+
+    result = filtering.apply_to_labels(boom_labels, fail_keys)
+
+    mrd_row = result[result["variant"] == "mrd"]
+    naive_row = result[result["variant"] == "naive"]
+    assert pd.isna(mrd_row["value"].iloc[0])
+    assert naive_row["value"].iloc[0] == "3c"
+
+
+def test_apply_to_labels_leaves_an_already_null_class_alone():
+    boom_labels = pd.DataFrame([
+        {"slot": _SLOT, "boom": _BOOM, "variant": "mrd", "label": "aniso_class", "value": None},
+    ])
+
+    result = filtering.apply_to_labels(boom_labels, fail_keys=set())
+
+    assert pd.isna(result["value"].iloc[0])

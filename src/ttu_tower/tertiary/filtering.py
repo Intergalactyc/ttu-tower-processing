@@ -182,3 +182,18 @@ def apply(candidate: pd.DataFrame, fail_keys: set) -> pd.DataFrame:
     fail_mask = pd.MultiIndex.from_frame(out[["slot", "boom", "variant", "group"]]).isin(fail_keys)
     out.loc[fail_mask, "value"] = np.nan
     return out.drop(columns=["group"])
+
+
+def apply_to_labels(boom_labels: pd.DataFrame, fail_keys: set) -> pd.DataFrame:
+    """`boom_labels_final`: `boom_labels` (currently just `aniso_class`) with
+    `value` nulled wherever that row's momentum group failed filtering - the
+    same failure that already NaNs the eigenvalues it was classified from.
+    Every `boom_labels` row depends only on momentum-family inputs, so
+    "momentum" is the one group that ever applies here, not a per-row lookup.
+    """
+    out = boom_labels.copy()
+    fail_mask = pd.MultiIndex.from_arrays(
+        [out["slot"], out["boom"], out["variant"], pd.Series("momentum", index=out.index)],
+    ).isin(fail_keys)
+    out.loc[fail_mask, "value"] = None
+    return out

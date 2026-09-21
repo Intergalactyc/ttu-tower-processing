@@ -3,6 +3,7 @@ import argparse
 
 from ttu_tower.config.load import load_config
 from ttu_tower.io.runs import run_dir_for
+from ttu_tower.post.report import write_stability_reports
 from ttu_tower.primary.report import write_primary_reports
 
 
@@ -27,7 +28,12 @@ def main(argv=None):
         print("primary stage has no run_summary.json yet; skipping its reports")
 
     if args.stability:
-        print("--stability reports are not implemented yet")
+        tertiary_dir = run_dir / "tertiary"
+        if (tertiary_dir / "run_summary.json").is_file():
+            write_stability_reports(run_dir, reports_dir, cfg)
+            print(f"wrote stability reports to {reports_dir}")
+        else:
+            print("tertiary stage has no run_summary.json yet; skipping stability reports")
 
 
 if __name__ == "__main__":

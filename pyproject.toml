@@ -22,6 +22,7 @@ mesonet = [
 viewer = [
     "PySide6>=6.8",
     "pyqtgraph>=0.13.7",
+    "scipy",
 ]
 dev = [
     "pytest",

@@ -4,8 +4,14 @@
 **2026-09-28:** phases 1 and 2 are built, checkpoint-tested by Elliott, and revised per his
 feedback. See "Phase 1 checkpoint revisions" and "Phase 2 as built" below.
 
-**Next: Phase 3** (QC and Profile tabs, τ what-if, QC overlays). Phases were renumbered at the
-phase-1 checkpoint: 4 = QC what-if, 5 = scatter/find/bookmarks, 6 = later. Nothing is committed.
+**Phases 3 and 4 are built; Elliott hasn't reviewed either yet.**
+- Phase 3 includes the anisotropy band/map, the scatter tab and distribution fits, plus his
+  same-day revisions (scatter interval + Fit button, the wind rose tab). See "Phase 3 as built".
+- Phase 4 (QC what-if) was started at his request before his phase-3 review. See "Phase 4 as
+  built".
+
+**Next: Elliott reviews phases 3 and 4.** Then phase 5 (linked brushing, find, bookmarks);
+phase 6 is the rest. Neither phase 3 nor phase 4 is committed.
 
 ## Context
 
@@ -36,10 +42,11 @@ before the next starts; phases 1–3 matter most.
   1. main window, timelines, distributions, and the drill-down series view (done; see "Phase 1
      checkpoint revisions")
   2. Slot Inspector
-  3. QC/Profile tabs and τ what-if
+  3. QC/Profile tabs and τ what-if, plus the anisotropy band/map, scatter tab and distribution
+     fits (added during phase 3)
   4. QC what-if (added at the phase-1 checkpoint)
-  5. scatter/brushing, find, bookmarks
-  6. the rest (run comparison, PSD, composites, distribution fits, and so on)
+  5. linked brushing, find, bookmarks
+  6. the rest (run comparison, PSD, composites, and so on)
 
 **Working rules carried over from the implementation workflow:**
 - Stop after each phase and wait for Elliott's go-ahead.
@@ -705,6 +712,116 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
 - **Tests:** what-if with unchanged parameters reproduces stored `tau_selected`; the filtered
   overlay equals the non-NaN secondary rows where tertiary is NaN; tab smoke tests.
 
+### Phase 3 as built (2026-09-28)
+- **Inspector tabs**, in order: Series · Spectra · Scales · QC · Profile · Anisotropy ·
+  τ what-if · Numbers.
+  - Profile, Anisotropy and what-if read the slot across every boom (`slotdata.load_across`),
+    only when one of them is opened.
+- **QC tab** (`slotqc.py`), stored rows only:
+  - **Coverage ladder:** variable × layer. Usable coverage below tertiary's `min_coverage` is red.
+  - **Flag fractions:** test × variable, over the slot, the 20-min ladder window or the 80-min
+    detection window.
+  - **Slot statistics against their limits:** skew/kurt ranges, the shadow sector, and the
+    bounce limits. Tripped tests are red if they remove samples, orange if only recorded.
+  - **Tertiary's filtering gates, recomputed with their values:** coverage per required family,
+    and bounds/spike fraction per input variable over the slot (±5 min where τ = 1200 s).
+    - The note turns red if the failures differ from the stored `filter_log`.
+    - Checked on `oneyear`: 60 boom-slots, all identical.
+- **Profile tab** (`profiledata.py`):
+  - ten panels against height: ws, wd, veer, θv, selected τ, TI, σw, u*, w'θv', wd std
+  - tertiary-filtered booms drawn hollow grey at their pre-filter value, with filter_log's
+    reasons on hover; the inspected boom ringed; click a point to switch boom
+  - the stored fits drawn through the data, over the heights they were fitted to: α power law
+    and both log laws on ws, γ on TI, γ_wd on wd std. The coefficient is refit; the exponent is
+    the stored one, and a mismatch is noted.
+  - tables: Ri_b and dθv/dz for every pair (the stability pair first), and every stored `profile`
+    row
+- **Anisotropy tab** (`anisotropy.py`):
+  - the barycentric map (1C left, 2C right, 3C apex) with the class regions tinted and the
+    plane-strain line
+  - every boom of the slot, height-coloured; filtered ones hollow at their pre-filter
+    eigenvalues; the inspected boom ringed
+  - the inspected boom's track over ±N slots (click a point to go there)
+  - optionally, its whole-period density behind
+  - a table of λ1–3, β, φ and class per boom
+  - The map classification reproduces `physics.turbulence._classify_anisotropy_state`, and the
+    stored `aniso_class`, exactly.
+- **τ what-if tab** (`whatif.py`):
+  - a form over `[secondary.detection]` and `[secondary.selection]`, prefilled from the run,
+    with the loader's cross-key rules checked live
+  - reruns `secondary.derived.tau_tables` (+ `materialize_missing_unexcised`) on the slot's
+    stored spectra for every boom
+  - a table of stored vs what-if heat/momentum/selected τ, plus u* and σw read off the ladder at
+    either τ
+  - for the inspected boom: both cospectra with the what-if detection trace and stored (solid)
+    vs what-if (dashed) τ lines
+  - With the run's own parameters it reproduces every stored τ; this is tested on the fixture
+    and checked on 6 `oneyear` slots.
+- **Timeline overlays** (panel checkboxes):
+  - **filtered values:** hollow grey markers at the pre-filter value (from `means`, `slow` or
+    `boom_stats`), wherever tertiary NaN'd a `boom_final` value. On by default.
+    - Hover gives filter_log's reasons.
+    - A click opens the inspector on the QC tab.
+    - Reads only the batches holding a NaN'd slot: 0.5–1.5 s for a year of 10 booms.
+  - **τ status:** markers where the selected τ was capped (▲), unresolved (◆), fallback (■) or
+    none (✕), on τ-dependent quantities.
+- **Clicks now also open:**
+  - pair and profile quantities → the Profile tab
+  - coverage, slot_qc and slot status → the QC tab (flag fractions still open the Series tab
+    with its rug)
+  - slot-level quantities → the Numbers tab
+- **Anisotropy band:** under the stability band. It shows each boom's `aniso_class` per slot
+  from `boom_labels_final`, with a variant picker and per-boom toggle buttons. A click on a cell
+  opens the inspector's Anisotropy tab. Toggle it from the controls dock.
+- **Scatter tab** in the right dock (`ui/scatter.py`, `curvefits.py`), modelled on
+  ttu-windprofiles' `baseplots.compare`:
+  - x and y default to panels A and B, each with its own boom/pair dropdown, plus a swap
+  - visible range or whole period
+  - points or a density map (linear/log counts), coloured by one colour, stability or month
+  - log axes
+  - Overlays:
+    - a linear trend
+    - a binned median/mean line
+    - y = x
+    - the curve-fit catalogue of `curve_fits`: linear, through origin, power, log, exponential,
+      neutral log law, double linear (± through origin), ζ(Ri) and α(Ri). Each fit takes
+      x-percentile limits and optional binning (count, mean/median, minimum per bin).
+  - Statistics: N, Pearson r, Spearman ρ, and Cohen's κ on signs.
+  - The view frames the 1st–99th percentiles.
+  - A click on a point opens the inspector.
+- **Distribution fits** (`distfits.py`) in each histogram's "fit" menu:
+  - normal, log-normal, Weibull and gamma (positive-only where needed), or von Mises for
+    directions
+  - maximum likelihood per boom on at most 50k values, run in the worker
+  - dashed PDFs over the histograms, plus a table of parameters, KS and AIC
+- **Revisions (Elliott, same day):**
+  - **Scatter:**
+    - no month colouring
+    - it uses the viewed interval unless the right dock's shared "whole period" box is checked,
+      exactly like the distributions
+    - curve fits run only when **Fit** is pressed, in the worker. A fit whose data or settings
+      have since changed stays drawn, dashed and marked "earlier", until refitted. Trend and
+      binned lines still follow live.
+  - **Wind rose tab** (right dock, `windrose.py`, `ui/windrose_view.py`):
+    - roses for one chosen boom and for the mesonet (10 m), over the viewed interval or the
+      whole period
+    - the tower rose uses tertiary's final values, or "unfiltered": final plus the values
+      tertiary filtered out, i.e. primary's means
+    - 8/16/36 sectors and speed bins 0–2–4–…–15+ m/s
+    - hover a wedge for its share
+  - The right dock only refreshes its visible tab; the others catch up when shown.
+- `scipy` moved into the `viewer` extra; it's already installed.
+- **Tests:**
+  - `test_slot_qc_whatif.py`: gates vs filter_log, what-if reproduction, overlay vs secondary,
+    τ status, profile
+  - `test_viewer_fits_aniso.py`: map classes vs the pipeline, fits recover parameters,
+    distribution fits, band vs `boom_labels_final`
+  - `test_inspector_tabs_ui.py` (slow): every new tab, overlay clicks, the band, scatter and
+    fits
+- **Found on `oneyear`** (not a viewer issue): at 2014-08-05 05:50, booms 1–7 are `no_data`,
+  although their data are present. QC excised all of it: ts usable_l1 is 0 and momentum usable
+  is 0.
+
 ### Phase 4 — QC what-if (added 2026-09-28)
 - **What.** In the slot viewer, a side panel lists the run's `[qc]` parameters, prefilled from
   its resolved config:
@@ -739,10 +856,82 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
   - raising `z_threshold` removes a known synthetic spike from `removed["spike"]`
   - what-if caches never leak into the stored-config caches
 
-### Phase 5 — Scatter/brushing, find, bookmarks
-- A scatter dock (A vs B, a 2-D histogram above 50k points, colored by boom / stability /
-  month).
-- Linked brushing via a `selection` signal on `ViewerState`.
+### Phase 4 as built (2026-09-28)
+- **Where:** a **QC what-if…** button on the Series tab opens a side panel (`ui/qc_whatif_panel.py`).
+- **The form:** every `[qc]` setting of the run (`qcwhatif.fields` walks the config, so new
+  settings appear on their own), grouped by section:
+  - coverage and gaps, and `unusable_tests` as checkboxes
+  - bounds
+  - despiking, including per-variable `z_threshold` and `min_mad`
+  - window tests
+  - slow smoothing
+  - second layer
+  Edited fields are highlighted.
+- **Apply:**
+  - The edited config is first checked with the config loader's own rules (`config_from_dict`);
+    rejections are shown and the last what-if stays.
+  - Then the loaded slots are reprocessed with a second `Reprocessor(cfg=what-if)`, which has
+    Stage A/B caches of its own.
+  - It reads the run's Stage A unless the bounds changed, the only thing Stage A depends on.
+  - The run's own caches are never written.
+- **Shown after Apply:**
+  - The series, masks, ghosts and despike band switch to the what-if.
+  - The flag rug gains "… what-if" rows for every test·group that differs: magenta = flagged
+    only with the what-if, green = flagged only with the run's.
+  - A table compares, per loaded slot, usable coverage (momentum, heat, ts, t, rh, p) and slot
+    means (ws, wd, w, ts, t, rh, p): the run's stored rows vs the what-if, with changes
+    highlighted.
+  - **"τ for the focus slot"** (the optional follow-on, built):
+    - recomputes the slot's primary products (`file_products` over h−2..h+2) with the what-if
+      QC
+    - then runs secondary's `tau_tables` with the run's own secondary settings
+    - shows heat, momentum and selected τ plus u*/σw (ladder at τ), stored vs what-if
+    - takes about 2.7 s
+- **Reset:** returns to the run's settings.
+- **Checked on `oneyear`** (boom 8, 2013-11-09 12:10):
+  - An unchanged what-if reproduces all 39 stored coverage/mean rows exactly, and the stored τ.
+  - Apply takes 1.2 s.
+  - Raising p's z_threshold to 10 drops nearly all of the continuous p spike flags.
+- **Tests:** `test_qc_whatif.py`
+  - unchanged settings reproduce the stored flags (every test and variable) and slot rows
+    exactly
+  - a higher ts `z_threshold` keeps the injected spike
+  - what-if caches never touch the run's, and a bounds edit stops Stage A sharing
+  - unchanged settings reproduce the stored τ (slow)
+  - plus a UI test in `test_viewer_ui.py`
+
+### Review fixes (Elliott, during his phase-3/4 review, 2026-09-28)
+- **Wind rose:**
+  - "unfiltered" is now the first-layer means (`slot_qc` ws/wd `mean_l1`), taken before the
+    direction (shadow) and bounce removals and tertiary filtering, so the shadow sector shows
+    what was removed. This matches ttu-windprofiles' windrose notebook.
+  - Dashed lines of constant bearing: comma-separated, by default the shadow sector's edges.
+  - Both roses share one radial scale.
+  - A "mesonet: same slots" option restricts the mesonet rose to the tower rose's slots.
+- **Night shading** is on by default.
+- **Series tab:** a **flag rug** toggle, off by default (the last series then carries the time
+  axis). Applying a QC what-if turns it on, since that's where the what-if's differences are
+  drawn.
+- **Filtered values on the timelines:** a grey ring around an × in the boom's colour.
+- **Warnings:**
+  - The console warnings were pyqtgraph computing the extent of all-NaN marker series (no data
+    in view): benign. They're removed at the source (decimated curves and inspector plots
+    draw nothing when nothing is finite).
+  - `QWindowsWindow::setGeometry` was real: with 10 booms selected, the timeline headers and
+    the band legends made the window's minimum width 1634 px, wider than a 1920-px screen once
+    the docks were added.
+    - Legend buttons now read "b10", with the height in the tooltip.
+    - Titles and legends wrap.
+    - The minimum width is now about 1050 px.
+  - `ui/logs.py` sends Python warnings (each once per place) and Qt's messages to
+    `<home>/viewer/ttu-view.log`, a rotating 2 MB file, instead of the console. Errors go to
+    both.
+  - The status bar shows "N warnings logged" as a link to the log.
+  - After the fixes, a scripted session over every tab on `oneyear` logged none.
+
+### Phase 5 — Brushing, find, bookmarks
+- (The scatter tab was built in phase 3.) Linked brushing: a lasso on the scatter highlights
+  those slots on the timelines, and vice versa.
 - A find bar: a pandas `query` over a frame assembled from catalog quantities, plus a "random
   sample of slots flagged by test X on boom b" preset. The result list drives inspector ◀ ▶.
 - Bookmarks as JSON under `<home>/viewer/bookmarks.json`, created on first save, with export.
@@ -754,14 +943,7 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
 - Barycentric anisotropy map.
 - Publication export (matplotlib).
 - PSD, once the pipeline computes it, in the reserved Spectra switch.
-- **Distribution fits** (scope later).
-  - In the distribution dock, a "fit" menu overlays fitted PDFs on the plotted histogram:
-    normal, log-normal, Weibull and gamma for positive quantities, and von Mises for
-    directions.
-  - It fits per boom, over the same visible or whole-period values the histogram uses.
-  - A table shows each fit's parameters with a goodness of fit (KS statistic, AIC).
-  - It uses `scipy.stats`, which moves from the `dev` extra into `viewer`. Fits run in the
-    worker, since they can take a second on a year of values.
+- (Distribution fits were built in phase 3.)
 
 ---
 

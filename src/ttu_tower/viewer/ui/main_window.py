@@ -1,6 +1,10 @@
 """The main window: two x-linked timelines of any quantities, their
-distributions, a whole-period overview, and click-through to the raw data.
+distributions, a scatter of one against the other and wind roses, stability
+and anisotropy bands, a whole-period overview, and click-through to the raw
+data.
 """
+import logging
+
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
@@ -12,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.timegrid import time_to_slot
-from ttu_tower.viewer import timeline
+from ttu_tower.viewer import anisotropy, timeline
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
 from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_variables
@@ -20,9 +24,11 @@ from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.run import RunHandle, list_registered
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix
 from ttu_tower.viewer.ui.distribution import DistributionView
-from ttu_tower.viewer.ui.overview import OverviewStrip, StabilityBand
+from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
 from ttu_tower.viewer.ui.inspector.inspector import InspectorWindow
+from ttu_tower.viewer.ui.scatter import ScatterView
+from ttu_tower.viewer.ui.windrose_view import WindRoseView
 from ttu_tower.viewer.ui.timeline_plot import TimelinePlot
 from ttu_tower.viewer.ui.worker import JobRunner
 
@@ -31,6 +37,7 @@ _ZOOMS = (("Y", 366 * _DAY), ("M", 31 * _DAY), ("W", 7 * _DAY), ("D", _DAY), ("6
 _HF_VARIABLES = ["ue", "vn", "w", "ts", "vpts", "t", "rh", "p"]
 _DEFAULTS = (("boom_final|ws|mean", "none", (1, 5, 10)), ("boom_final|ustar|", "mrd", (1, 5, 10)))
 _FALLBACKS = (("coverage|momentum|usable", "none", (1,)), ("slot_qc|ts|skew", "none", (1,)))
+_TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "profile": "profile", "none": "numbers"}
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +54,7 @@ class MainWindow(QMainWindow):
         self.specs = [PanelSpec(), PanelSpec()]
         self.datas = [None, None]
         self.night = None
+        self.stability = None
         self.inspectors: list[InspectorWindow] = []
         self._have_range = False
 
@@ -60,14 +68,21 @@ class MainWindow(QMainWindow):
         self.plots[1].plot_item.setXLink(self.plots[0].plot_item)
         self.stability_band = StabilityBand()
         self.stability_band.link_to(self.plots[0].plot_item)
+        self.aniso_band = AnisotropyBand()
+        self.aniso_band.link_to(self.plots[0].plot_item)
+        self.aniso_band.variantChanged.connect(lambda *_: self._load_aniso_band())
+        self.aniso_band.cellClicked.connect(
+            lambda slot, boom: QTimer.singleShot(0, lambda: self.inspect(
+                boom, slot, variant=self.aniso_band.variant.currentData(), tab="anisotropy")))
         self.overview = OverviewStrip()
         self.overview.rangeRequested.connect(lambda x0, x1: self.set_x_range(x0, x1))
         splitter = QSplitter(Qt.Orientation.Vertical)
         for p in self.plots:
             splitter.addWidget(p)
         splitter.addWidget(self.stability_band)
+        splitter.addWidget(self.aniso_band)
         splitter.addWidget(self.overview)
-        splitter.setSizes([400, 400, 50, 140])
+        splitter.setSizes([400, 400, 50, 120, 140])
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -81,33 +96,57 @@ class MainWindow(QMainWindow):
             tabs.addTab(panel, "Panel A" if i == 0 else "Panel B")
             panel.specChanged.connect(lambda spec, i=i: self._on_spec(i, spec))
         self.night_box = QCheckBox("shade night")
+        self.night_box.setChecked(True)
         self.night_box.toggled.connect(self._apply_night)
         self.stability_box = QCheckBox("stability band")
         self.stability_box.setChecked(True)
         self.stability_box.toggled.connect(self.stability_band.setVisible)
+        self.aniso_box = QCheckBox("anisotropy band")
+        self.aniso_box.setChecked(True)
+        self.aniso_box.toggled.connect(self.aniso_band.setVisible)
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(tabs, stretch=1)
         left_layout.addWidget(self.night_box)
         left_layout.addWidget(self.stability_box)
+        left_layout.addWidget(self.aniso_box)
         self._dock("Controls", left, Qt.DockWidgetArea.LeftDockWidgetArea)
 
-        self.dists = [DistributionView(), DistributionView()]
+        self.dists = [DistributionView(self.runner), DistributionView(self.runner)]
         self.full_period = QCheckBox("whole period (not just the visible range)")
+        self.full_period.setToolTip("distributions, scatter and wind roses use the viewed interval unless this is checked")
         self.full_period.toggled.connect(lambda *_: self._refresh_distributions())
+        dist_split = QSplitter(Qt.Orientation.Vertical)
+        for d in self.dists:
+            dist_split.addWidget(d)
+        self.scatter = ScatterView(self.runner)
+        self.scatter.pointClicked.connect(lambda slot, member: QTimer.singleShot(0, lambda: self._on_scatter_point(slot, member)))
+        self.windrose = WindRoseView(self.runner)
+        self.right_tabs = QTabWidget()
+        self.right_tabs.addTab(dist_split, "Distributions")
+        self.right_tabs.addTab(self.scatter, "Scatter")
+        self.right_tabs.addTab(self.windrose, "Wind rose")
+        self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_split = QSplitter(Qt.Orientation.Vertical)
-        for d in self.dists:
-            right_split.addWidget(d)
+        right_layout.setContentsMargins(2, 2, 2, 2)
         right_layout.addWidget(self.full_period)
-        right_layout.addWidget(right_split, stretch=1)
+        right_layout.addWidget(self.right_tabs, stretch=1)
         self._dock("Distributions", right, Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.hover = QLabel()
         self.busy = QLabel()
+        self.warn_label = QLabel()
+        self.warn_label.setTextFormat(Qt.TextFormat.RichText)
+        self.warn_label.linkActivated.connect(self._open_log)
+        self.warn_label.setToolTip("warnings and Qt messages go to the viewer's log file, not the console")
         self.statusBar().addWidget(self.hover, 1)
+        self.statusBar().addPermanentWidget(self.warn_label)
         self.statusBar().addPermanentWidget(self.busy)
+        from ttu_tower.viewer.ui import logs
+        if logs.counter is not None:
+            logs.counter.warned.connect(
+                lambda n: self.warn_label.setText(f"<a href='log'>{n} warning{'s' if n != 1 else ''} logged</a>"))
         self.runner.busyChanged.connect(self._on_busy)
 
         self._dist_timer = QTimer(self)
@@ -119,6 +158,8 @@ class MainWindow(QMainWindow):
             # queued: open the inspector once the click has finished, or Windows can hand focus back to
             # this window and leave the new one hidden behind it
             p.pointClicked.connect(lambda slot, member, i=i: QTimer.singleShot(0, lambda: self._on_point(i, slot, member)))
+            p.filteredClicked.connect(
+                lambda slot, member, i=i: QTimer.singleShot(0, lambda: self._on_point(i, slot, member, filtered=True)))
             p.vb.fitXRequested.connect(self.zoom_all)
             p.hovered.connect(self._on_hover)
             p.legend.toggled.connect(lambda i=i: self._dist_timer.start())
@@ -239,6 +280,7 @@ class MainWindow(QMainWindow):
         self.index = FragmentIndex(run.run_dir)
         self.reprocessor = Reprocessor(run) if run.cfg is not None else None
         self.catalog, self.datas, self.night, self._have_range = None, [None, None], None, False
+        self.stability = None
         self.specs = [PanelSpec(), PanelSpec()]
         self.settings.setValue("last_run", run.tag)
         self.setWindowTitle(f"ttu-view — {run.tag}  ({run.run_dir})")
@@ -272,6 +314,17 @@ class MainWindow(QMainWindow):
         booms = run.booms
         self.runner.submit(_overlays, run, self.index, booms, key="overlays", label="loading overlays",
                            on_done=lambda result: self._overlays_ready(result, booms), on_error=self._report_error)
+        self.aniso_band.set_booms(booms)
+        self.windrose.set_run(run, self.index, booms)
+        self._load_aniso_band()
+
+    def _load_aniso_band(self) -> None:
+        if self.run is None:
+            return
+        run, booms, variant = self.run, self.run.booms, self.aniso_band.variant.currentData()
+        self.runner.submit(anisotropy.class_image, run, self.index, variant, booms, key="aniso_band",
+                           label="loading anisotropy classes", on_error=self._report_error,
+                           on_done=lambda result: run is self.run and self.aniso_band.set_classes(*result, booms))
 
     def _catalog_ready(self, catalog) -> None:
         self.catalog = catalog
@@ -286,7 +339,7 @@ class MainWindow(QMainWindow):
 
     def _overlays_ready(self, result, booms) -> None:
         slots, image, stability, night = result
-        self.night = night
+        self.night, self.stability = night, stability
         self.overview.set_availability(slots, image, booms)
         self.stability_band.set_classes(slots, stability)
         self._apply_night()
@@ -295,7 +348,12 @@ class MainWindow(QMainWindow):
 
     def _report_error(self, exc, tb) -> None:
         self.statusBar().showMessage(f"error: {exc}", 15_000)
-        print(tb)
+        logging.getLogger("ttu_view").error(tb)
+
+    def _open_log(self, *_) -> None:
+        from ttu_tower.viewer.ui import logs
+        if logs.log_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs.log_path)))
 
     # --- panels -----------------------------------------------------------------------------------
 
@@ -317,11 +375,34 @@ class MainWindow(QMainWindow):
             return
         self.datas[i] = data
         self.plots[i].set_data(data, spec)
+        self._load_overlays(i, spec)
         self._sync_axis_widths()
         self._apply_night()
         if not self._have_range:
             self.zoom_all()
         self._refresh_distributions()
+
+    def _load_overlays(self, i: int, spec: PanelSpec) -> None:
+        """Filtered values, then tau statuses (which sit on them where the final value is gone)."""
+        def tau(_=None):
+            if spec.show_tau and spec is self.specs[i]:
+                self.runner.submit(timeline.tau_status, self.run, self.index, spec.variant, spec.members,
+                                   key=f"tau{i}", label="reading τ statuses",
+                                   on_done=lambda marks: spec is self.specs[i] and self.plots[i].set_tau_status(marks),
+                                   on_error=self._report_error)
+
+        if not spec.show_filtered:
+            tau()
+            return
+
+        def filtered_ready(overlay):
+            if spec is self.specs[i]:
+                self.plots[i].set_filtered(overlay)
+                tau()
+
+        self.runner.submit(timeline.filtered, self.run, self.index, spec.quantity, spec.variant, spec.members,
+                           key=f"filtered{i}", label="reading filtered values", on_done=filtered_ready,
+                           on_error=self._report_error)
 
     def _sync_axis_widths(self) -> None:
         """One left-axis width for everything stacked in the middle, wide enough
@@ -331,6 +412,7 @@ class MainWindow(QMainWindow):
         for p in self.plots:
             p.plot_item.getAxis("left").setWidth(width)
         self.stability_band.set_axis_width(width)
+        self.aniso_band.set_axis_width(width)
         self.overview.set_axis_width(width)
 
     def _show_all_members(self) -> None:
@@ -409,12 +491,31 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(4000, lambda p=p, m=marker: p.plot_item.removeItem(m))
 
     def _refresh_distributions(self) -> None:
+        """Whichever right-hand tab is showing (the others catch up when shown)."""
         x_range = None if self.full_period.isChecked() else self.x_range()
-        for data, plot, dist in zip(self.datas, self.plots, self.dists):
-            if data is None:
-                dist.set_data(None, [], None)
-            else:
-                dist.set_data(data, plot.visible_members(), x_range)
+        shown = self.right_tabs.currentWidget()
+        if shown is self.scatter:
+            self.scatter.set_sources(self.datas, x_range, self.stability)
+        elif shown is self.windrose:
+            self.windrose.set_range(x_range)
+        else:
+            for data, plot, dist in zip(self.datas, self.plots, self.dists):
+                if data is None:
+                    dist.set_data(None, [], None)
+                else:
+                    dist.set_data(data, plot.visible_members(), x_range)
+
+    def _on_scatter_point(self, slot: int, member) -> None:
+        data = self.scatter._data(0)
+        q = data.quantity if data is not None else None
+        if isinstance(member, tuple):
+            boom = member[0]
+        elif isinstance(member, int):
+            boom = member
+        else:
+            boom = self.goto_boom.currentData()
+        variant = self.specs[self.scatter.source[0].currentData()].variant
+        self.inspect(boom, slot, q, variant)
 
     # --- clicks -----------------------------------------------------------------------------------
 
@@ -423,31 +524,36 @@ class MainWindow(QMainWindow):
             self.hover.setText(f"{format_slot(slot, self.tz_box.currentData() or self.run.timezone)}"
                                f"  (slot {slot})   {values}")
 
-    def _on_point(self, i: int, slot: int, member) -> None:
+    def _on_point(self, i: int, slot: int, member, filtered: bool = False) -> None:
         q = self.specs[i].quantity
         if q is None:
             return
-        target = drill_target(q)
-        if q.kind != "boom" or target.kind in ("profile", "none"):
-            self.statusBar().showMessage(f"{q.label} has no single-boom slot to inspect (a profile view "
-                                         "isn't built yet).", 8000)
-            return
-        self.inspect(member, slot, q, self.specs[i].variant)
+        if q.kind == "pair":
+            boom = member[0]
+        elif q.kind == "slot":
+            boom = self.inspectors[-1].boom if self.inspectors else self.goto_boom.currentData()
+        else:
+            boom = member
+        self.inspect(boom, slot, q, self.specs[i].variant, tab="qc" if filtered else None)
 
-    def inspect(self, boom: int, slot: int, q=None, variant: str = "mrd") -> "InspectorWindow":
-        """Open (or reuse an unpinned) Slot Inspector on the tab that explains `q`."""
+    def inspect(self, boom: int, slot: int, q=None, variant: str = "mrd", tab: str | None = None) -> "InspectorWindow":
+        """Open (or reuse an unpinned) Slot Inspector on the tab that explains `q`
+        (or on `tab`).
+        """
         window = next((w for w in self.inspectors if not w.pin.isChecked()), None)
         if window is None:
             reprocessor = self.reprocessor if self.run.can_reprocess else None
             window = InspectorWindow(self.run, self.index, reprocessor, self.runner)
             window.closed.connect(lambda w: self.inspectors.remove(w) if w in self.inspectors else None)
             self.inspectors.append(window)
-        tab, frame, emphasis, focus = "series", None, None, ()
+        explains, frame, emphasis, focus = "series", None, None, ()
         if q is not None:
             target = drill_target(q)
-            tab = {"flux": "spectra", "spectra": "spectra", "acf": "scales"}.get(target.kind, "series")
-            if tab == "series" and window.reprocessor is None:
-                tab = "spectra"
+            explains = _TAB_FOR_TARGET.get(target.kind, "series")
+            if target.kind == "qc" and (q.table != "flags" or window.reprocessor is None):
+                explains = "qc"  # a flag fraction is best seen on the series' flag rug
+            elif explains == "series" and window.reprocessor is None:
+                explains = "spectra"
             frame = "streamwise" if target.kind == "fluctuation" else None
             emphasis = target.spectrum
             focus = scale_variables(q)
@@ -455,8 +561,8 @@ class MainWindow(QMainWindow):
             variables = ordered_variables(target, _HF_VARIABLES)
         else:
             context, variables = "", list(_HF_VARIABLES)
-        window.show_slot(boom, slot, tab=tab, mode="unexcised", variables=variables, context=context, frame=frame,
-                         emphasis=emphasis, focus_vars=focus, variant=variant)
+        window.show_slot(boom, slot, tab=tab or explains, mode="unexcised", variables=variables, context=context,
+                         frame=frame, emphasis=emphasis, focus_vars=focus, variant=variant)
         return window
 
     def _on_busy(self, count: int, label: str) -> None:

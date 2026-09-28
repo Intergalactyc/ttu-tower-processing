@@ -11,7 +11,7 @@ from ttu_tower.viewer.run import RunHandle  # noqa: E402
 from ttu_tower.viewer.timeaxis import display_offset_s, slot_to_unix  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
 from ttu_tower.viewer.ui.main_window import MainWindow  # noqa: E402
-from ttu_tower.viewer.ui.series_view import MODES as SERIES_MODES, SeriesPanel  # noqa: E402
+from ttu_tower.viewer.ui.series_view import MODES as SERIES_MODES, SeriesPanel, rug_differences, rug_rows  # noqa: E402
 
 from viewer_fixtures import FAULT_HALF_HOUR  # noqa: E402
 
@@ -114,6 +114,10 @@ def test_a_click_off_the_data_falls_through(window):
 
 
 def _open_series(window, qtbot, slot):
+    key = "flags|spike|ts"  # a flag fraction opens the series with its flag rug
+    if window.specs[0].quantity is None or window.specs[0].quantity.key != key:
+        window.panels[0].select(key, "none", (1,))
+        qtbot.waitUntil(lambda: window.datas[0] is not None and window.datas[0].quantity.key == key, timeout=60_000)
     window.plots[0].pointClicked.emit(slot, 1)
     qtbot.waitUntil(lambda: bool(window.inspectors) and window.inspectors[-1].series.result is not None
                     and window.inspectors[-1].series.slot == slot, timeout=60_000)
@@ -238,3 +242,42 @@ def test_long_category_labels_fit_and_axes_stay_aligned(window, qtbot):
               window.stability_band.plot.getPlotItem().getAxis("left").width(),
               window.overview.getPlotItem().getAxis("left").width()}
     assert len(widths) == 1
+
+
+def test_qc_whatif_panel_reprocesses_and_marks_what_changed(window, qtbot):
+    from viewer_fixtures import TS_SPIKE_INDEX
+    from ttu_tower.timegrid import SAMPLES_PER_HALF_HOUR
+
+    inspector = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 2)
+    series = inspector.series
+    series.mode.setCurrentIndex([k for _, k in SERIES_MODES].index("qc"))
+    qtbot.waitUntil(lambda: series.result["mode"] == "qc", timeout=60_000)
+    panel = series.whatif
+    assert not series.rug.isChecked() and "rug" not in " ".join(series.plots)  # the rug starts hidden
+    series.whatif_button.setChecked(True)
+    assert panel.isVisible()
+    panel.apply()  # nothing edited: nothing to apply
+    assert series.whatif_rp is None
+    panel.editors[("despike", "z_threshold", "ts")].setText("1000000")
+    assert "background" in panel.editors[("despike", "z_threshold", "ts")].styleSheet()
+    panel.apply()
+    qtbot.waitUntil(lambda: series.result.get("whatif") is not None and panel.comparison.rowCount() > 0
+                    and _idle(window), timeout=120_000)
+    whatif = series.result["whatif"]
+    assert series.rug.isChecked()  # turned on to show the what-if's differences
+    g = FAULT_HALF_HOUR * SAMPLES_PER_HALF_HOUR + TS_SPIKE_INDEX - whatif.g0
+    assert series.result["qc"].removed["spike"]["ts"][g]
+    assert not whatif.removed.get("spike", {}).get("ts", np.zeros(whatif.n, bool))[g]
+    diffs = rug_differences(rug_rows(series.result["removed"], series.result["qc"].filled),
+                            rug_rows(whatif.removed, whatif.filled), whatif.n)
+    assert diffs["spike · ts"][1][g]  # flagged only with the run's settings
+    assert "z_threshold.ts" in panel.state.text()
+    panel.tauRequested.emit()
+    qtbot.waitUntil(lambda: _idle(window), timeout=120_000)
+    panel.editors[("despike", "window_s")].setText("5000")
+    panel.apply()
+    assert "window_s" in panel.state.text() and series.whatif_rp is not None  # rejected; the last what-if stays
+    panel.reset()
+    qtbot.waitUntil(lambda: series.whatif_rp is None and series.result.get("whatif") is None and _idle(window),
+                    timeout=60_000)
+    inspector.close()

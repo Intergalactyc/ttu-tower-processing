@@ -10,6 +10,7 @@ import pyarrow.dataset as pa_dataset
 from ttu_tower import schema
 from ttu_tower.flags import FlagStore
 from ttu_tower.post.classify import stability_classes
+from ttu_tower.tertiary.filtering import QUANTITY_GROUPS
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer.catalog import Quantity
 from ttu_tower.viewer.fragments import FragmentIndex, alias_bounds_variables
@@ -148,6 +149,102 @@ def _load_flag_fractions(run, index: FragmentIndex, q: Quantity, members: tuple)
     return TimelineData(quantity=q, variant="none", curves=curves)
 
 
+# --- what filtering removed, and how tau was chosen ------------------------------------
+
+TAU_MARKED = ("capped", "unresolved", "fallback", "none")  # source statuses marked on tau-dependent curves
+
+
+@dataclass
+class FilteredOverlay:
+    curves: dict  # member -> Curve of values before filtering, only where tertiary NaN'd them
+    reasons: dict  # (slot, member) -> filter_log's criteria for that value's group
+
+
+def has_filtered_overlay(q: Quantity) -> bool:
+    return q.table == "boom_final" and q.variable in QUANTITY_GROUPS
+
+
+def has_tau_overlay(q: Quantity, variant: str) -> bool:
+    return q.table in ("boom_final", "boom_labels_final") and variant in ("mrd", "mrd_unexcised")
+
+
+def filtered(run, index: FragmentIndex, q: Quantity, variant: str, members) -> FilteredOverlay:
+    members = tuple(members)
+    key = ("filtered", q.key, variant, members)
+    return run.cache("timeline", 32).get(key, lambda: _filtered(run, index, q, variant, members))
+
+
+def _prefilter_table(q: Quantity, variant: str) -> str:
+    """Where tertiary's candidate row came from (boom_final is it, filtered)."""
+    if variant != "none":
+        return "boom_stats"
+    return "slow" if q.stat is None else "means"
+
+
+def _filtered(run, index: FragmentIndex, q: Quantity, variant: str, members: tuple) -> FilteredOverlay:
+    final = load(run, index, q, variant, members)
+    table = _prefilter_table(q, variant)
+    f = pa_dataset.field
+    flt = (f("variable") == q.variable) & f("boom").isin(list(members))
+    if table != "slow":
+        flt = flt & (f("stat").is_null() if q.stat is None else f("stat") == q.stat)
+    if table == "boom_stats":
+        flt = flt & (f("variant") == variant)
+    # only batches holding a slot tertiary NaN'd can hold a filtered value
+    gone = [c.slots[np.isnan(c.y)] for c in final.curves.values()]
+    half_hours = np.unique(np.concatenate(gone) // 3) if gone else np.empty(0, dtype=np.int64)
+    pre = index.read(table, booms=list(members) if _is_per_boom_fragments(table) else None,
+                     half_hours=half_hours.tolist(), columns=["slot", "boom", "value"], filter=flt)
+    curves = {}
+    for b in members:
+        rows = pre[pre["boom"] == b] if not pre.empty else pre
+        slots = rows["slot"].to_numpy(dtype=np.int64) if not rows.empty else np.empty(0, dtype=np.int64)
+        values = rows["value"].to_numpy(dtype=np.float64) if not rows.empty else np.empty(0)
+        fin = final.curves.get(b)
+        fin_value = np.full(slots.size, np.nan)
+        if fin is not None and fin.slots.size:
+            i = np.clip(np.searchsorted(fin.slots, slots), 0, fin.slots.size - 1)
+            hit = fin.slots[i] == slots
+            fin_value[hit] = fin.y[i[hit]]
+        keep = np.isfinite(values) & np.isnan(fin_value)
+        curves[b] = _curve(slots[keep], values[keep])
+
+    log = index.read("filter_log", columns=["slot", "boom", "criterion", "variable"],
+                     filter=(f("variant") == variant) & (f("group") == QUANTITY_GROUPS[q.variable])
+                     & f("boom").isin(list(members)))
+    reasons = {}
+    if not log.empty:
+        log = log.astype({"criterion": object, "variable": object})
+        text = log["criterion"] + log["variable"].map(lambda v: f" {v}" if isinstance(v, str) else "")
+        for (slot, boom), parts in text.groupby([log["slot"], log["boom"]]):
+            reasons[(int(slot), int(boom))] = ", ".join(sorted(parts))
+    return FilteredOverlay(curves=curves, reasons=reasons)
+
+
+def tau_status(run, index: FragmentIndex, variant: str, members) -> dict:
+    """member -> (slots, source_status) where the selected tau's status is one
+    of TAU_MARKED.
+    """
+    members = tuple(members)
+    return run.cache("timeline", 32).get(("tau_status", variant, members),
+                                         lambda: _tau_status(index, variant, members))
+
+
+def _tau_status(index: FragmentIndex, variant: str, members: tuple) -> dict:
+    f = pa_dataset.field
+    df = index.read("tau_final", columns=["slot", "boom", "source_status"],
+                    filter=(f("variant") == variant) & f("boom").isin(list(members))
+                    & f("source_status").isin(list(TAU_MARKED)))
+    out = {}
+    for b in members:
+        rows = df[df["boom"] == b] if not df.empty else df
+        slots = rows["slot"].to_numpy(dtype=np.int64) if not rows.empty else np.empty(0, dtype=np.int64)
+        status = rows["source_status"].astype(object).to_numpy() if not rows.empty else np.empty(0, dtype=object)
+        order = np.argsort(slots, kind="stable")
+        out[b] = (slots[order], status[order])
+    return out
+
+
 # --- overlays -------------------------------------------------------------------------
 
 def night(run, index: FragmentIndex) -> Curve | None:
@@ -190,3 +287,9 @@ def availability(run, index: FragmentIndex, booms) -> tuple[np.ndarray, np.ndarr
         ok &= ~pd.isna(rows)
         image[rows[ok].astype(np.int64), col[ok]] = codes[ok]
     return slots, image
+
+
+def joined(a: Curve, b: Curve) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(slots, a values, b values) at the slots both curves have."""
+    slots, ia, ib = np.intersect1d(a.slots, b.slots, assume_unique=True, return_indices=True)
+    return slots, a.y[ia], b.y[ib]

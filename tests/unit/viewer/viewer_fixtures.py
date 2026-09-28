@@ -11,6 +11,8 @@ TS_SPIKE_INDEX = 60_000
 
 FULL_HALF_HOURS = list(range(6100, 6108))
 FULL_BOOMS = [1, 2]
+SPIKY_HALF_HOUR, SPIKY_BOOM = 6105, 2
+SPIKY_SLOT = 3 * SPIKY_HALF_HOUR + 1  # w spikes every 50 samples: its spike fraction fails tertiary's filter
 
 
 def mutate_primary(h, boom, df):
@@ -20,6 +22,15 @@ def mutate_primary(h, boom, df):
     df.loc[df.index[BOUNDS_INDEX], f"u_{boom}"] = 500.0
     df.loc[df.index[W_SPIKE_INDEX], f"w_{boom}"] += 12.0
     df.loc[df.index[TS_SPIKE_INDEX], f"ts_{boom}"] += 25.0
+    return df
+
+
+def mutate_full(h, boom, df):
+    if (h, boom) != (SPIKY_HALF_HOUR, SPIKY_BOOM):
+        return df
+    df = df.copy()
+    rows = df.index[30_000:60_000:50]
+    df.loc[rows, f"w_{boom}"] += 12.0
     return df
 
 

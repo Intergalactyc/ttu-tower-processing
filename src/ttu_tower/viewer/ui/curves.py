@@ -49,6 +49,8 @@ class DecimatedCurve:
             with np.errstate(divide="ignore", invalid="ignore"):
                 y = np.where(y > 0, y, np.nan)
         dx, dy = minmax_decimate(self.x, y, x0, x1, buckets)
+        if not np.isfinite(dy).any():  # nothing to draw here (and pyqtgraph warns on all-NaN markers)
+            dx = dy = np.empty(0)
         self.item.setData(dx, dy, connect="finite")
 
 

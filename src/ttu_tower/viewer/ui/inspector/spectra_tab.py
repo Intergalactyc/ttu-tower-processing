@@ -167,7 +167,9 @@ class SpectraTab(QWidget):
             ok = np.isfinite(y) & np.isfinite(top) & np.isfinite(bottom)
             plot.addItem(pg.ErrorBarItem(x=x[ok], y=y[ok], top=top[ok], bottom=bottom[ok], beam=0.03,
                                          pen=pg.mkPen((31, 78, 156, 140))))
-        plot.plot(x, y, pen=pg.mkPen(_MAIN, width=1.6), symbol="o", symbolSize=5, symbolBrush=_MAIN, symbolPen=None)
+        if np.isfinite(y).any():
+            plot.plot(x, y, pen=pg.mkPen(_MAIN, width=1.6), symbol="o", symbolSize=5, symbolBrush=_MAIN,
+                      symbolPen=None)
 
         for family, view in views.items():
             if view.spectrum == name and self.boxes["detection"].isChecked() and self.mode.currentData() == "value":

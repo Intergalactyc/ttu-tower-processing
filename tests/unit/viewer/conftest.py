@@ -12,7 +12,7 @@ from ttu_tower.tertiary.runner import run_tertiary
 from ttu_tower.validation.synthetic import write_raw_dataset
 
 from viewer_fixtures import (
-    FULL_BOOMS, FULL_HALF_HOURS, PRIMARY_HALF_HOURS, PRIMARY_MISSING, mutate_primary, write_config,
+    FULL_BOOMS, FULL_HALF_HOURS, PRIMARY_HALF_HOURS, PRIMARY_MISSING, mutate_full, mutate_primary, write_config,
 )
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -44,7 +44,8 @@ def full_run(tmp_path_factory):
     """(run_dir, cfg, config_path) of a primary+secondary+tertiary synthetic run."""
     base = tmp_path_factory.mktemp("viewer_full")
     raw_dir = base / "raw"
-    write_raw_dataset(raw_dir, FULL_HALF_HOURS, FULL_BOOMS, np.random.default_rng(11), missing=[6103])
+    write_raw_dataset(raw_dir, FULL_HALF_HOURS, FULL_BOOMS, np.random.default_rng(11), missing=[6103],
+                      mutate=mutate_full)
     config_path = write_config(base / "viewer_full.toml", "viewer_full", raw_dir, FULL_HALF_HOURS, FULL_BOOMS, 3)
     cfg = load_config(config_path)
     run_primary(cfg, _args(config_path))

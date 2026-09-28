@@ -1,22 +1,26 @@
 """The Series tab of the Slot Inspector: the 50-Hz series behind a slot - as
 measured, QC applied, or unexcised - in the earth, streamwise or sonic frame,
 with the samples each test removed ghosted and a rug per test. Neighbouring
-slots can be loaded alongside, and the ladder's tau blocks overlaid.
+slots can be loaded alongside, and the ladder's tau blocks overlaid. A QC
+what-if reprocesses the loaded slots with edited [qc] settings and shows
+what that changes.
 """
 import numpy as np
 import pyarrow.dataset as pa_dataset
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.flags import TESTS
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.viewer import qcwhatif
 from ttu_tower.viewer.catalog import variable_label
 from ttu_tower.viewer.reprocess import HFWindow, removed_by_test, tau_block_ids, to_streamwise
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, format_slot, sample_to_unix, slot_to_unix
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator
+from ttu_tower.viewer.ui.qc_whatif_panel import QCWhatIfPanel
 
 MODES = (("unexcised", "unexcised"), ("QC applied", "qc"), ("as measured", "as_measured"),
          ("QC over as measured", "overlay"))
@@ -29,6 +33,8 @@ _RUG_GROUPS = (("sonic", ("ue", "vn", "w", "u", "v")), ("ts", ("ts", "vpts")), (
                ("p", ("p",)))
 _RUG_ROW_PX = 16
 _EARTH_TO_STREAM = {"ue": "u", "vn": "v"}
+WHATIF_ADDED = "#e7298a"  # flagged only with the what-if settings
+WHATIF_DROPPED = "#1b9e77"  # flagged only with the run's
 
 
 def _intervals(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -53,6 +59,20 @@ def rug_rows(removed: dict, filled: dict | None = None) -> dict[str, np.ndarray]
     return rows
 
 
+def rug_differences(stored: dict[str, np.ndarray], whatif: dict[str, np.ndarray], n: int) -> dict:
+    """"test · group" -> (flagged only with the what-if, flagged only with the
+    run's), for every rug row where the two differ.
+    """
+    out = {}
+    empty = np.zeros(n, dtype=bool)
+    for name in list(stored) + [k for k in whatif if k not in stored]:
+        s, w = stored.get(name, empty), whatif.get(name, empty)
+        added, dropped = w & ~s, s & ~w
+        if added.any() or dropped.any():
+            out[name] = (added, dropped)
+    return out
+
+
 class SeriesPanel(QWidget):
     loaded = Signal()
 
@@ -66,6 +86,7 @@ class SeriesPanel(QWidget):
         self.context = ""
         self.result = None
         self.selected_tau: float | None = None
+        self.whatif_rp = None  # a Reprocessor with the what-if QC, while one is applied
         self._closed = False
 
         self.header = QLabel()
@@ -92,7 +113,21 @@ class SeriesPanel(QWidget):
         self.fluct = QCheckBox("fluctuations")
         self.fluct.setToolTip("subtract each τ block's mean (usable samples): what the ladder's variances see")
         self.fluct.toggled.connect(lambda *_: self.redraw())
+        self.rug = QCheckBox("flag rug")
+        self.rug.setToolTip("a row under the series for each test's flagged samples (and the what-if's differences)")
+        self.rug.toggled.connect(lambda *_: self.redraw())
         self._fill_blocks()
+        self.whatif_button = QPushButton("QC what-if…")
+        self.whatif_button.setCheckable(True)
+        self.whatif_button.setToolTip("edit the run's [qc] settings and reprocess these slots with them")
+        self.whatif = QCWhatIfPanel(run.cfg) if run.cfg is not None and reprocessor is not None else None
+        if self.whatif is None:
+            self.whatif_button.setEnabled(False)
+        else:
+            self.whatif.hide()
+            self.whatif_button.toggled.connect(self.whatif.setVisible)
+            self.whatif.applied.connect(self.set_whatif)
+            self.whatif.tauRequested.connect(self._whatif_tau)
 
         nav = QHBoxLayout()
         self.nav_buttons = {}
@@ -116,16 +151,23 @@ class SeriesPanel(QWidget):
 
         self.graphics = pg.GraphicsLayoutWidget()
         controls = QHBoxLayout()
-        for w in (self.mode, self.frame, self.wide, self.band, QLabel("τ blocks"), self.blocks, self.fluct):
+        for w in (self.mode, self.frame, self.wide, self.band, QLabel("τ blocks"), self.blocks, self.fluct, self.rug):
             controls.addWidget(w)
         controls.addStretch(1)
+        controls.addWidget(self.whatif_button)
+        body = QSplitter(Qt.Orientation.Horizontal)
+        body.addWidget(self.graphics)
+        if self.whatif is not None:
+            body.addWidget(self.whatif)
+            body.setStretchFactor(0, 3)
+            body.setStretchFactor(1, 1)
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
         layout.addLayout(controls)
         layout.addLayout(nav)
         layout.addWidget(boxes)
         layout.addWidget(self.status)
-        layout.addWidget(self.graphics, stretch=1)
+        layout.addWidget(body, stretch=1)
         self.resize(1250, 900)
         self._decimators: list[PlotDecimator] = []
         self.plots: dict[str, pg.PlotItem] = {}
@@ -224,6 +266,15 @@ class SeriesPanel(QWidget):
             self.hidden.add(var)
         self.redraw()
 
+    def set_whatif(self, cfg) -> None:
+        """Reprocess with a what-if QC config (None: back to the run's own)."""
+        if self.whatif_rp is not None:
+            self.whatif_rp.close()
+        self.whatif_rp = qcwhatif.reprocessor(self.reprocessor, cfg) if cfg is not None else None
+        if cfg is not None:
+            self.rug.setChecked(True)  # where the what-if's flag differences are drawn
+        self.reload()
+
     def reload(self) -> None:
         if self.boom is None:
             return
@@ -231,10 +282,30 @@ class SeriesPanel(QWidget):
         self.frame.model().item(2).setEnabled(mode == "as_measured")  # the sonic frame exists only as measured
         g0, n = self.window_samples()
         self._update_header()
-        self.status.setText("reprocessing from the raw files…")
+        self.status.setText("reprocessing from the raw files…" + (" (and with the what-if QC)" if self.whatif_rp else ""))
         self.runner.submit(compute_series, self.reprocessor, self.index, self.boom, g0, n, mode,
-                           self.frame.currentData(), key=self.key, label=f"reprocessing boom {self.boom}",
-                           on_done=self._loaded, on_error=self._failed)
+                           self.frame.currentData(), self.whatif_rp, key=self.key,
+                           label=f"reprocessing boom {self.boom}", on_done=self._loaded, on_error=self._failed)
+
+    def _compare_slots(self) -> None:
+        rp, boom, slots = self.whatif_rp, self.boom, range(self.lo, self.hi + 1)
+        self.runner.submit(qcwhatif.slot_comparison, self.index, rp, boom, slots, key=f"qcwhatif-{id(self)}",
+                           label="comparing slot values",
+                           on_done=lambda df: not self._closed and rp is self.whatif_rp and self.whatif.show_comparison(
+                               df, lambda k: format_slot(k, self.run.timezone)),
+                           on_error=lambda exc, tb: not self._closed and self.whatif.comparison_note.setText(
+                               f"could not compare: {exc}"))
+
+    def _whatif_tau(self) -> None:
+        if self.whatif_rp is None or self.slot is None:
+            return
+        rp = self.whatif_rp
+        self.whatif.tau_note.setText("recomputing the focus slot's spectra and τ…")
+        self.runner.submit(qcwhatif.slot_tau, self.index, rp, self.boom, self.slot, self.run.cfg.secondary,
+                           key=f"qcwhatif-tau-{id(self)}", label="recomputing τ with the what-if QC",
+                           on_done=lambda df: not self._closed and rp is self.whatif_rp and self.whatif.show_tau(df),
+                           on_error=lambda exc, tb: not self._closed and self.whatif.tau_note.setText(
+                               f"could not recompute τ: {exc}"))
 
     def _update_header(self) -> None:
         tz = self.run.timezone
@@ -261,6 +332,12 @@ class SeriesPanel(QWidget):
             notes.append(f"streamwise: each slot rotated to its own mean wind ({wind})")
         if self.frame.currentData() == "sonic" and result["frame"] != "sonic":
             notes.append("the sonic frame exists only as measured; showing the earth frame")
+        if result.get("whatif") is not None:
+            notes.append("<b>QC what-if</b>: series and ghosts use the what-if settings; rug rows marked "
+                         f"<span style='color:{WHATIF_ADDED}'>■ flagged only with the what-if</span> / "
+                         f"<span style='color:{WHATIF_DROPPED}'>■ only with the run's</span>")
+            self._compare_slots()
+        self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.setText(" · ".join(notes))
         self.redraw()
         self.loaded.emit()
@@ -273,6 +350,10 @@ class SeriesPanel(QWidget):
         if self.result is None:
             return
         am, qc, mode, frame = self.result["am"], self.result["qc"], self.result["mode"], self.result["frame"]
+        stored_qc = qc
+        whatif = self.result.get("whatif")
+        if whatif is not None and mode != "as_measured":
+            qc = whatif
         base = qc if qc is not None else am
         x = sample_to_unix(base.g0 + np.arange(base.n))
         rename = {} if frame == "earth" else _EARTH_TO_STREAM
@@ -285,6 +366,15 @@ class SeriesPanel(QWidget):
         fluct = blocks is not None and self.fluct.isChecked()
         if fluct:
             am, qc = _fluctuations(am, blocks), _fluctuations(qc, blocks)
+        diffs = None
+        if whatif is not None:
+            if stored_qc is not None:
+                stored_rows = rug_rows(self.result["removed"], stored_qc.filled)
+                whatif_rows = rug_rows(whatif.removed, whatif.filled)
+            else:  # as measured, the run's rug is its stored flags, which hold no fills or coupling
+                stored_rows = rug_rows(self.result["removed"])
+                whatif_rows = rug_rows({t: m for t, m in whatif.removed.items() if t != "coupled"})
+            diffs = rug_differences(stored_rows, whatif_rows, base.n)
 
         first = None
         for row, var in enumerate(names):
@@ -302,7 +392,12 @@ class SeriesPanel(QWidget):
             self._draw_variable(plot, dec, var, x, am, qc, mode, _SERIES_COLORS[row % len(_SERIES_COLORS)])
             plot.getAxis("bottom").setStyle(showValues=False)
 
-        self._draw_rug(x, qc, self.result["removed"], len(names), first)
+        if self.rug.isChecked():
+            self._draw_rug(x, stored_qc, self.result["removed"], len(names), first, diffs)
+        elif names:  # the last series carries the time axis instead
+            last = self.plots[names[-1]]
+            last.getAxis("bottom").setStyle(showValues=True)
+            last.setLabel("bottom", f"time ({self.run.timezone})")
         self._fit_x()
         for dec in self._decimators:
             dec.redraw()
@@ -393,12 +488,13 @@ class SeriesPanel(QWidget):
                 plot.addItem(pg.ScatterPlotItem(x[idx], raw[idx], size=6, pen=None, symbol="x",
                                                 brush=pg.mkBrush(style.TEST_COLORS.get(test, "#000000"))))
 
-    def _draw_rug(self, x, qc, removed, row, link):
+    def _draw_rug(self, x, qc, removed, row, link, diffs=None):
         rug = self._new_plot(row, link)
         rug.setMouseEnabled(y=False)
         rug.setLabel("bottom", f"time ({self.run.timezone})")
         rows = rug_rows(removed, qc.filled if qc is not None else None)
-        height = max(len(rows), 1) * _RUG_ROW_PX + 45
+        diffs = diffs or {}
+        height = (max(len(rows), 1) + len(diffs)) * _RUG_ROW_PX + 45
         rug.setMaximumHeight(height)
         rug.setMinimumHeight(height)
         unusable = set(self.run.unusable_tests) | {"bounds", "spike", "coupled"}
@@ -414,12 +510,25 @@ class SeriesPanel(QWidget):
                            style=Qt.PenStyle.DotLine if recorded_only else Qt.PenStyle.SolidLine)
             rug.addItem(pg.PlotDataItem(xs, np.full(xs.size, i), pen=pen, connect="pairs"))
             ticks.append((i, name))
+        for name, (added, dropped) in diffs.items():
+            i = len(ticks)
+            for mask, color in ((added, WHATIF_ADDED), (dropped, WHATIF_DROPPED)):
+                if not mask.any():
+                    continue
+                starts, ends = _intervals(mask)
+                xs = np.empty(2 * starts.size)
+                xs[0::2] = x[starts]
+                xs[1::2] = x[np.minimum(ends, x.size) - 1] + 1 / SAMPLE_HZ
+                rug.addItem(pg.PlotDataItem(xs, np.full(xs.size, i), pen=pg.mkPen(color, width=8), connect="pairs"))
+            ticks.append((i, f"{name} what-if"))
         rug.getAxis("left").setTicks([ticks])
         rug.setYRange(-0.7, max(len(ticks), 1) - 0.3, padding=0)
         return rug
 
     def shutdown(self) -> None:
         self._closed = True
+        if self.whatif_rp is not None:
+            self.whatif_rp.close()
 
 
 def _fluctuations(win: HFWindow | None, blocks: np.ndarray) -> HFWindow | None:
@@ -460,9 +569,10 @@ def _stored_slot_means(index, boom, g0, n) -> dict:
     return {int(k): (row["ue"], row["vn"]) for k, row in wide.iterrows()}
 
 
-def compute_series(reprocessor, index, boom, g0, n, mode, frame) -> dict:
+def compute_series(reprocessor, index, boom, g0, n, mode, frame, whatif_rp=None) -> dict:
     """Runs on a worker thread. As-measured mode needs no Stage B, so its flag
-    rug comes from the run's stored flags instead.
+    rug comes from the run's stored flags instead. With `whatif_rp`, the same
+    window QC'd with the what-if settings comes back as "whatif".
     """
     sonic = frame == "sonic" and mode == "as_measured"
     am = reprocessor.as_measured(boom, g0, n, frame="sonic" if sonic else "earth")
@@ -475,11 +585,16 @@ def compute_series(reprocessor, index, boom, g0, n, mode, frame) -> dict:
     else:
         removed = {}
     missing = am.missing_half_hours + (qc.missing_half_hours if qc is not None else [])
+    whatif = None
+    if whatif_rp is not None:
+        whatif = whatif_rp.qc_applied(boom, g0, n, variant="mrd_unexcised" if mode == "unexcised" else "mrd")
 
     bearings, shown_frame = {}, "sonic" if sonic else "earth"
     if frame == "streamwise":
         means = _stored_slot_means(index, boom, g0, n) if index is not None else {}
         am, bearings = to_streamwise(am, means)
+        if whatif is not None:
+            whatif, _ = to_streamwise(whatif, means)
         if qc is not None:
             qc, bearings = to_streamwise(qc, means)
             removed = qc.removed
@@ -488,4 +603,4 @@ def compute_series(reprocessor, index, boom, g0, n, mode, frame) -> dict:
                        for test, per_var in removed.items()}
         shown_frame = "streamwise"
     return {"am": am, "qc": qc, "mode": mode, "frame": shown_frame, "missing": missing, "removed": removed,
-            "bearings": bearings}
+            "bearings": bearings, "whatif": whatif}

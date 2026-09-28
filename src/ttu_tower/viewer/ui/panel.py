@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer.catalog import Catalog, Quantity
+from ttu_tower.viewer.timeline import has_filtered_overlay, has_tau_overlay
 
 _VARIANT_LABELS = {"none": "—", "mrd": "mrd (selected τ)", "naive": "naive (10 min)",
                    "mrd_unexcised": "mrd unexcised"}
@@ -25,6 +26,8 @@ class PanelSpec:
     log_y: bool = False
     style: str = "lines + points"
     visible: set = field(default_factory=set)  # members shown (legend toggles); empty = all
+    show_filtered: bool = False  # ghost the values tertiary filtered
+    show_tau: bool = False  # mark values whose selected tau wasn't simply found
 
 
 class PanelControls(QWidget):
@@ -77,6 +80,14 @@ class PanelControls(QWidget):
         self.style.addItems(STYLES)
         self.style.setCurrentText("lines + points")
         self.style.currentIndexChanged.connect(lambda *_: self._emit())
+        self.filtered_box = QCheckBox("filtered values")
+        self.filtered_box.setChecked(True)
+        self.filtered_box.setToolTip("hollow grey: a value tertiary filtered, drawn as it was before filtering "
+                                     "(hover for why; click to open the QC tab)")
+        self.filtered_box.toggled.connect(lambda *_: self._emit())
+        self.tau_box = QCheckBox("τ status")
+        self.tau_box.setToolTip("mark the values whose selected τ was capped, unresolved, a fallback or none")
+        self.tau_box.toggled.connect(lambda *_: self._emit())
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"<b>{title}</b>"))
@@ -90,6 +101,11 @@ class PanelControls(QWidget):
         row = QHBoxLayout()
         row.addWidget(self.log_y)
         row.addWidget(self.style, stretch=1)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(self.filtered_box)
+        row.addWidget(self.tau_box)
+        row.addStretch(1)
         layout.addLayout(row)
 
     # --- population -------------------------------------------------------------------
@@ -214,8 +230,14 @@ class PanelControls(QWidget):
             members = tuple(self._checked_pairs())
         else:
             members = (None,)
-        return PanelSpec(quantity=q, variant=self.variant.currentData() or q.variants[0], members=members,
-                         log_y=self.log_y.isChecked() and not q.categorical, style=self.style.currentText())
+        variant = self.variant.currentData() or q.variants[0]
+        can_filter, can_tau = has_filtered_overlay(q), has_tau_overlay(q, variant)
+        self.filtered_box.setEnabled(can_filter)
+        self.tau_box.setEnabled(can_tau)
+        return PanelSpec(quantity=q, variant=variant, members=members,
+                         log_y=self.log_y.isChecked() and not q.categorical, style=self.style.currentText(),
+                         show_filtered=can_filter and self.filtered_box.isChecked(),
+                         show_tau=can_tau and self.tau_box.isChecked())
 
     def _on_quantity_changed(self, *_) -> None:
         q = self.current_quantity()

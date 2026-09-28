@@ -73,13 +73,56 @@ def load_slot(index: FragmentIndex, k: int, boom: int, booms=range(1, 11)) -> Sl
             bundle.mrd[col] = bundle.mrd[col].astype(str)
     bundle.ladder = bundle.tables.get("ladder")
     bundle.ladder_coverage = bundle.tables.get("ladder_coverage")
-    for name in list(bundle.tables):
-        df = bundle.tables[name]
-        for col in ("variant", "variable", "stat", "spectrum", "cospectrum", "family", "layer", "status", "source",
-                    "source_status", "label", "group", "criterion", "test"):
-            if col in df.columns:
-                df[col] = df[col].astype(object)
+    for df in bundle.tables.values():
+        _plain(df)
     return bundle
+
+
+_KEY_COLUMNS = ("variant", "variable", "stat", "spectrum", "cospectrum", "family", "layer", "status", "source",
+                "source_status", "label", "group", "criterion", "test", "reversal_type")
+
+
+def _plain(df: pd.DataFrame) -> pd.DataFrame:
+    """Categorical key columns as plain objects, so rows compare and filter as strings."""
+    for col in _KEY_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].astype(object)
+    return df
+
+
+# --- the slot across every boom -------------------------------------------------------------
+
+_ACROSS_TABLES = ("slot_boom", "coverage", "means", "ladder", "tau", "tau_selected", "boom_stats", "slow",
+                  "boom_labels", "boom_final", "tau_final", "pairs", "profile", "filter_log")
+
+
+@dataclass
+class SlotAcross:
+    """One slot's rows for every boom: what the profile and the tau what-if need."""
+    slot: int
+    booms: tuple[int, ...]
+    tables: dict[str, pd.DataFrame] = field(default_factory=dict)
+    mrd: pd.DataFrame | None = None
+
+    def table(self, name: str) -> pd.DataFrame:
+        df = self.tables.get(name)
+        return df if df is not None else pd.DataFrame(columns=list(schema.TABLES[name].columns))
+
+
+def load_across(index: FragmentIndex, k: int, booms) -> SlotAcross:
+    f = pa_dataset.field
+    booms = tuple(booms)
+    across = SlotAcross(slot=k, booms=booms)
+    h = k // 3
+    for name in _ACROSS_TABLES:
+        if not _stage_present(index, name):
+            continue
+        per_boom = schema.TABLES[name].stage == "primary"
+        across.tables[name] = _plain(index.read(name, booms=list(booms) if per_boom else None, half_hours=[h],
+                                                filter=f("slot") == k))
+    if _stage_present(index, "mrd"):
+        across.mrd = _plain(index.read("mrd", booms=list(booms), half_hours=[h], filter=f("slot") == k))
+    return across
 
 
 # --- spectra --------------------------------------------------------------------------------

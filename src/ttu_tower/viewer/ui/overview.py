@@ -1,13 +1,15 @@
-"""Strips under the timelines: the stability class along the viewed interval
-(x-linked to the timelines), and the whole-period availability overview,
-whose draggable box shows and sets the viewed interval.
+"""Strips under the timelines: the stability class and each boom's
+anisotropy state along the viewed interval (x-linked to the timelines), and
+the whole-period availability overview, whose draggable box shows and sets
+the viewed interval.
 """
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, slot_to_unix
+from ttu_tower.viewer.anisotropy import CASE_COLORS, CASES
+from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.curves import FixedXViewBox
 
@@ -49,13 +51,13 @@ class StabilityBand(QWidget):
         self.plot.addItem(self.image)
         self.plot.setYRange(0, 1, padding=0)
         self.legend = QLabel()
+        self.legend.setWordWrap(True)
         self.legend.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         row = QHBoxLayout()
-        row.addWidget(self.legend)
-        row.addStretch(1)
+        row.addWidget(self.legend, stretch=1)
         layout.addLayout(row)
         layout.addWidget(self.plot, stretch=1)  # resizing the strip resizes the band, not the legend
 
@@ -79,6 +81,106 @@ class StabilityBand(QWidget):
         self.legend.setText("stability: " + "  ".join(
             f"<span style='color:{style.stability_color(name, i).name()}'>■</span> {name}"
             for i, name in enumerate(names)))
+
+
+class AnisotropyBand(QWidget):
+    """Each chosen boom's anisotropy class per slot, one row per boom (the
+    lowest at the bottom), x-linked to the timelines. A click on a cell asks
+    for that slot and boom.
+    """
+
+    variantChanged = Signal(str)
+    cellClicked = Signal(int, int)  # slot, boom
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.vb = FixedXViewBox()
+        self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot.setMinimumHeight(30)
+        self.plot.hideAxis("bottom")
+        self.plot.getPlotItem().getAxis("left").setWidth(60)
+        self.plot.setMouseEnabled(x=True, y=False)
+        self.plot.getPlotItem().setMenuEnabled(False)
+        self.plot.hideButtons()
+        self.image = pg.ImageItem(axisOrder="row-major")
+        self.plot.addItem(self.image)
+        self.plot.scene().sigMouseClicked.connect(self._on_click)
+        self.variant = QComboBox()
+        for v in ("mrd", "naive", "mrd_unexcised"):
+            self.variant.addItem(v, v)
+        self.variant.currentIndexChanged.connect(lambda *_: self.variantChanged.emit(self.variant.currentData()))
+        self.boom_buttons: dict[int, QToolButton] = {}
+        self.boom_row = QHBoxLayout()
+        self.boom_row.setSpacing(1)
+        legend = QLabel("anisotropy: " + "  ".join(
+            f"<span style='color:{CASE_COLORS[c]}'>■</span> {c}" for c in CASES))
+        legend.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        legend.setWordWrap(True)  # wraps rather than widening the window
+        head = QHBoxLayout()
+        head.addWidget(legend, stretch=1)
+        head.addWidget(self.variant)
+        head.addLayout(self.boom_row)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addLayout(head)
+        layout.addWidget(self.plot, stretch=1)
+        self.slots = np.empty(0, dtype=np.int64)
+        self.codes = None  # booms x slots
+        self.booms: list[int] = []
+        self.rows: list[int] = []  # the booms drawn, bottom row first
+
+    def set_axis_width(self, width: int) -> None:
+        self.plot.getPlotItem().getAxis("left").setWidth(width)
+
+    def link_to(self, plot_item) -> None:
+        self.plot.getPlotItem().setXLink(plot_item)
+
+    def set_booms(self, booms, shown=None) -> None:
+        for btn in self.boom_buttons.values():
+            btn.deleteLater()
+        self.boom_buttons = {}
+        shown = set(booms if shown is None else shown)
+        for b in booms:
+            btn = QToolButton()
+            btn.setText(str(b))
+            btn.setCheckable(True)
+            btn.setChecked(b in shown)
+            btn.setToolTip(f"show boom {b}")
+            btn.toggled.connect(lambda *_: self._draw())
+            self.boom_buttons[b] = btn
+            self.boom_row.addWidget(btn)
+
+    def set_classes(self, slots: np.ndarray, codes: np.ndarray, booms) -> None:
+        self.slots, self.codes, self.booms = slots, codes, list(booms)
+        self._draw()
+
+    def _draw(self) -> None:
+        if self.codes is None or self.slots.size == 0:
+            self.image.clear()
+            return
+        self.rows = [b for b in self.booms if self.boom_buttons.get(b) is None or self.boom_buttons[b].isChecked()]
+        if not self.rows:
+            self.image.clear()
+            return
+        index = {b: i for i, b in enumerate(self.booms)}
+        codes = self.codes[[index[b] for b in self.rows]]
+        colors = {-1: (255, 255, 255, 0)}
+        colors.update({i: pg.mkColor(CASE_COLORS[c]).getRgb() for i, c in enumerate(CASES)})
+        self.image.setImage(_color_rows(codes.astype(np.int64), colors))
+        self.image.setRect(slot_to_unix(self.slots[0]), 0, self.slots.size * SLOT_SECONDS, len(self.rows))
+        self.plot.getPlotItem().getAxis("left").setTicks([[(i + 0.5, f"b{b}") for i, b in enumerate(self.rows)]])
+        self.plot.setYRange(0, len(self.rows), padding=0)
+
+    def _on_click(self, ev) -> None:
+        if ev.button() != Qt.MouseButton.LeftButton or not self.rows:
+            return
+        if not self.vb.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        pos = self.vb.mapSceneToView(ev.scenePos())
+        row = int(np.floor(pos.y()))
+        if 0 <= row < len(self.rows):
+            self.cellClicked.emit(int(unix_to_slot(pos.x())), self.rows[row])
 
 
 class OverviewStrip(pg.PlotWidget):

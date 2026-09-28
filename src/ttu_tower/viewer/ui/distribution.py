@@ -1,15 +1,20 @@
 """Histograms of what a timeline panel shows - over its visible range, or the
-whole period - with a summary table per boom.
+whole period - with a summary table per boom, and fitted distributions.
 """
 import warnings
 
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+)
 
 from ttu_tower.math.polar import yamartino_std
+from ttu_tower.viewer import distfits
 from ttu_tower.viewer.decimate import visible_slice
-from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui import style, tables
 
 _STATS = ("N", "NaN %", "mean", "median", "σ", "p5", "p95")
 
@@ -30,12 +35,27 @@ def summary(values: np.ndarray, circular: bool = False) -> list[float]:
     return [finite.size, nan_pct, finite.mean(), p50, finite.std(), p5, p95]
 
 
+def _fit_all(values: dict, name: str) -> dict:
+    """Runs on a worker thread."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return {m: distfits.fit(name, v) for m, v in values.items()}
+
+
 class DistributionView(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, runner=None, parent=None):
         super().__init__(parent)
+        self.runner = runner
         self.title = QLabel()
         self.log_bins = QCheckBox("log bins")
         self.log_bins.toggled.connect(lambda *_: self.refresh())
+        self.fit_box = QComboBox()
+        self.fit_box.setToolTip("fit a distribution to each boom's values (maximum likelihood; dashed)")
+        self.fit_box.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.fit_table = tables.new_table()
+        self.fit_table.setMaximumHeight(120)
+        self.fit_table.hide()
+        self.fits: dict = {}
         self.plot = pg.PlotWidget()
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         for side in ("left", "bottom"):
@@ -48,11 +68,31 @@ class DistributionView(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         head = QHBoxLayout()
         head.addWidget(self.title, stretch=1)
+        head.addWidget(QLabel("fit"))
+        head.addWidget(self.fit_box)
         head.addWidget(self.log_bins)
         layout.addLayout(head)
         layout.addWidget(self.plot, stretch=1)
         layout.addWidget(self.table)
+        layout.addWidget(self.fit_table)
         self._args = None
+        self._log = False
+        self._edges = np.linspace(0.0, 1.0, 2)
+        self._fit_choices(False)
+
+    def _fit_choices(self, circular: bool) -> None:
+        names = [distfits.CIRCULAR] if circular else [n for n in distfits.available(np.array([1.0]), False)]
+        current = self.fit_box.currentData()
+        if [self.fit_box.itemData(i) for i in range(1, self.fit_box.count())] == names:
+            return
+        self.fit_box.blockSignals(True)
+        self.fit_box.clear()
+        self.fit_box.addItem("none", None)
+        for n in names:
+            self.fit_box.addItem(n, n)
+        i = self.fit_box.findData(current)
+        self.fit_box.setCurrentIndex(max(i, 0))
+        self.fit_box.blockSignals(False)
 
     def set_data(self, data, members, x_range) -> None:
         """`x_range`: (x0, x1) unix seconds, or None for the whole period."""
@@ -87,11 +127,56 @@ class DistributionView(QWidget):
         values = self.values_by_member()
         scope = "whole period" if self._args[2] is None else "visible range"
         self.title.setText(f"<b>{q.title}</b> — {scope}")
+        self.fit_box.setEnabled(not q.categorical)
+        self._fit_choices(q.circular)
         if q.categorical:
             self._bars(values, data.categories or [])
         else:
             self._histograms(values, q.unit, q.circular)
         self._fill_table(values, q.categorical, q.circular)
+        self._start_fits(values, q)
+
+    # --- fits ---------------------------------------------------------------------------------
+
+    def _start_fits(self, values: dict, q) -> None:
+        name = self.fit_box.currentData()
+        self.fits = {}
+        if name is None or q.categorical:
+            self.fit_table.hide()
+            return
+        values = {m: v[np.isfinite(v)] for m, v in values.items()}
+        if name != distfits.CIRCULAR and name not in distfits.available(
+                np.concatenate(list(values.values())) if values else np.empty(0), False):
+            self.fit_table.show()
+            tables.fill(self.fit_table, pd.DataFrame({"note": [f"{name} needs positive values"]}))
+            return
+        args = self._args
+        if self.runner is None:
+            self._fits_ready(args, _fit_all(values, name))
+        else:
+            self.runner.submit(_fit_all, values, name, key=f"distfit-{id(self)}", label=f"fitting {name}",
+                               on_done=lambda fits: self._fits_ready(args, fits))
+
+    def _fits_ready(self, args, fits: dict) -> None:
+        if args is not self._args:
+            return
+        self.fits = fits
+        rows = []
+        for i, (member, f) in enumerate(fits.items()):
+            label = style.member_label(member) or "value"
+            if f is None:
+                rows.append({"boom": label, "N": 0})
+                continue
+            rows.append({"boom": label, "N": f.n, **f.params, "KS": f.ks, "AIC": f.aic})
+            lo, hi = self._edges[0], self._edges[-1]
+            x = np.geomspace(lo, hi, 300) if self._log else np.linspace(lo, hi, 300)
+            with np.errstate(all="ignore"):
+                y = f.pdf(x)
+            self.plot.addItem(pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
+                style.member_color(member, i), width=1.6, style=Qt.PenStyle.DashLine)))
+        self.fit_table.show()
+        tables.fill(self.fit_table, pd.DataFrame(rows))
+        self.fit_table.setToolTip("KS: Kolmogorov–Smirnov statistic (smaller fits better); AIC: lower is better")
 
     def _histograms(self, values: dict, unit: str, circular: bool = False) -> None:
         pooled = np.concatenate([v[np.isfinite(v)] for v in values.values()]) if values else np.empty(0)
@@ -99,6 +184,7 @@ class DistributionView(QWidget):
         if pooled.size < 2:
             return
         log = self.log_bins.isChecked() and (pooled > 0).all()
+        self._log = log
         if log:
             edges = np.logspace(np.log10(pooled.min()), np.log10(pooled.max()), 61)
         else:
@@ -106,6 +192,7 @@ class DistributionView(QWidget):
             if lo == hi:
                 lo, hi = lo - 0.5, hi + 0.5
             edges = np.linspace(lo, hi, 61)
+        self._edges = edges
         for i, (member, v) in enumerate(values.items()):
             v = v[np.isfinite(v)]
             if v.size == 0:

@@ -4,6 +4,7 @@ an older one, whose result is then dropped - that's how navigating away
 "cancels" work.
 """
 import itertools
+import logging
 import traceback
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
@@ -70,7 +71,7 @@ class JobRunner(QObject):
             if on_error is not None:
                 on_error(exc, tb)
             else:
-                print(tb)
+                logging.getLogger("ttu_view").error(tb)
 
     def _report(self):
         labels = [label for (_, _, _, label) in self._callbacks.values() if label]

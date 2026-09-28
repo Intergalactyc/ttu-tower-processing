@@ -70,13 +70,18 @@ def slot_window(k: int, before_min: float = 10.0, after_min: float = 20.0) -> tu
 
 
 class Reprocessor:
-    """Stage A and Stage B outputs per (boom, half-hour), cached, for one run."""
+    """Stage A and Stage B outputs per (boom, half-hour), cached, for one run
+    (with its own config, or `cfg` - a what-if - which can read Stage A from
+    `stage_a_from` when their bounds agree).
+    """
 
-    def __init__(self, run, stage_a_cache: int = 64, stage_b_cache: int = 24):
-        if run.cfg is None:
+    def __init__(self, run, stage_a_cache: int = 64, stage_b_cache: int = 24, cfg=None,
+                 stage_a_from: "Reprocessor | None" = None):
+        if (cfg or run.cfg) is None:
             raise ValueError("this run's config is unavailable, so it can't be reprocessed")
         self.run = run
-        self.cfg = run.cfg
+        self.cfg = cfg or run.cfg
+        self._stage_a_from = stage_a_from
         self._A = LRUCache(stage_a_cache)
         self._B = LRUCache(stage_b_cache)
         self._tmp = tempfile.TemporaryDirectory(prefix="ttu_view_")
@@ -99,6 +104,9 @@ class Reprocessor:
             return None
 
     def stage_a(self, boom: int, h: int) -> StageA | None:
+        if self._stage_a_from is not None:
+            return self._stage_a_from.stage_a(boom, h)
+
         def compute():
             raw = self.raw(boom, h)
             return None if raw is None else stage_a(raw, boom, self.cfg.qc)

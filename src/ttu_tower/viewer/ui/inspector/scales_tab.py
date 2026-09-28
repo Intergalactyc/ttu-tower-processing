@@ -130,6 +130,8 @@ class ScalesTab(QWidget):
                 with np.errstate(divide="ignore", invalid="ignore"):
                     y = np.log10(scales[col].to_numpy(float))
                 width = 2.4 if var in self.focus_vars else 1.2
+                if not np.isfinite(y).any():  # nothing to draw
+                    continue
                 plot.plot(x, y, pen=pg.mkPen(color, width=width), symbol="o", symbolSize=5, symbolBrush=color,
                           symbolPen=None, name=var)
         ratio = self.cfg.secondary.min_tau_its_ratio

@@ -44,6 +44,15 @@ def stability_color(name: str, i: int) -> pg.QtGui.QColor:
     return pg.mkColor(STABILITY_COLORS[name]) if name in STABILITY_COLORS else category_color(i + 4)
 
 
+def member_short(member) -> str:
+    """A legend button's text: the height goes in its tooltip."""
+    if member is None:
+        return ""
+    if isinstance(member, tuple):
+        return f"b{member[0]}–b{member[1]}"
+    return f"b{member}"
+
+
 def member_label(member) -> str:
     if member is None:
         return ""

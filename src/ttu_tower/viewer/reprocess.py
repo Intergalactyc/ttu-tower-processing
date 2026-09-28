@@ -14,11 +14,14 @@ from ttu_tower.constants import SAMPLE_HZ, STAGE_B_MARGIN_S
 from ttu_tower.flags import TESTS, FlagStore
 from ttu_tower.io.load import BadFileError, load_boom
 from ttu_tower.math.polar import rotate_streamwise, streamwise_angle, vector_to_bearing
-from ttu_tower.primary.products import assemble_samples, half_hours_overlapping
+from ttu_tower.primary.products import (
+    assemble_samples, assemble_series_window, file_products, half_hours_overlapping, ladder_window,
+)
+from ttu_tower.primary.rawrung import rung_its_te
 from ttu_tower.primary.slow import vpts as compute_vpts
 from ttu_tower.primary.stage_a import StageA, couple_triplet, rotate_to_earth, stage_a, tilt_correct, to_si
 from ttu_tower.primary.stage_b import StageBOut, build_span, stage_b
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import SAMPLES_PER_SLOT, BlockGrid, majority_block
 from ttu_tower.viewer.cache import LRUCache
 from ttu_tower.viewer.fragments import alias_bounds_variables
 
@@ -192,6 +195,91 @@ class Reprocessor:
         if coupled:
             win.removed["coupled"] = coupled
         return win
+
+
+    # --- products -----------------------------------------------------------------------------
+
+    def acf(self, boom: int, k: int, variant: str = "mrd") -> tuple[list, dict]:
+        """Slot k's ITS/TE rows at every rung, recomputed, and the pooled
+        autocorrelation behind each ITS: trace["acf"][rung_s][variable].
+        """
+        g0, n = ladder_window(k)
+        B = {h: self.stage_b(boom, h)[0] for h in half_hours_overlapping(g0, n)}
+        series, masks = assemble_series_window(B, variant, g0, n)
+        trace: dict = {}
+        values, _ = rung_its_te(series, masks, g0, k, self.cfg.ladder, self.cfg.qc.min_coverage, trace=trace)
+        return values, trace
+
+    def verify(self, boom: int, k: int, stored: dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """Recompute slot k's primary products from the raw files and compare them
+        with the run's stored rows: one row per table with the rows compared,
+        rows present on only one side, and the largest absolute and relative
+        difference.
+        """
+        h = k // 3
+        B = {hh: self.stage_b(boom, hh)[0] for hh in range(h - 2, h + 3)}
+        fresh = file_products(h, B, boom, self.cfg)
+        rows = []
+        for table, keys, values in _VERIFY_TABLES:
+            new = fresh.get(table)
+            old = stored.get(table)
+            if new is None or old is None:
+                continue
+            new = new[new["slot"] == k] if "slot" in new.columns else new
+            rows.append(_compare(table, _normalize(new, keys), _normalize(old, keys), keys, values))
+        return pd.DataFrame(rows, columns=["table", "compared", "only recomputed", "only stored", "max abs diff",
+                                           "max rel diff"])
+
+
+_VERIFY_TABLES = (
+    ("means", ["variable", "stat"], ["value"]),
+    ("coverage", ["variable", "layer"], ["fraction"]),
+    ("slot_qc", ["variable", "stat"], ["value"]),
+    ("mrd_frame", ["variant"], ["wd_deg", "coverage_momentum", "coverage_heat"]),
+    ("mrd", ["variant", "spectrum", "scale_s"], ["value", "se", "n_pairs"]),
+    ("ladder", ["variant", "rung_s", "variable", "stat"], ["value"]),
+    ("ladder_coverage", ["variant", "rung_s", "family"], ["blocks_used", "blocks_total", "coverage"]),
+)
+
+
+def _normalize(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    df = df.copy()
+    for col in keys:
+        if df[col].dtype == object or isinstance(df[col].dtype, pd.CategoricalDtype):
+            df[col] = df[col].astype(str)
+    return df
+
+
+def _compare(table, new, old, keys, values) -> tuple:
+    merged = new.merge(old, on=keys, how="outer", suffixes=("_new", "_old"), indicator=True)
+    both = merged[merged["_merge"] == "both"]
+    max_abs = max_rel = 0.0
+    for col in values:
+        a = both[f"{col}_new"].to_numpy(dtype=float)
+        b = both[f"{col}_old"].to_numpy(dtype=float)
+        same_nan = np.isnan(a) & np.isnan(b)
+        diff = np.where(same_nan, 0.0, np.abs(a - b))
+        diff = np.where(np.isnan(diff), np.inf, diff)  # NaN on one side only
+        if diff.size:
+            max_abs = max(max_abs, float(diff.max()))
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rel = np.where(diff == 0, 0.0, diff / np.maximum(np.abs(a), np.abs(b)))
+            max_rel = max(max_rel, float(np.nanmax(rel)) if rel.size else 0.0)
+    return (table, len(both), int((merged["_merge"] == "left_only").sum()),
+            int((merged["_merge"] == "right_only").sum()), max_abs, max_rel)
+
+
+def tau_block_ids(g0: int, n: int, rung_s: float) -> np.ndarray | None:
+    """The ladder's τ-block index of each sample in [g0, g0 + n) at a rung up
+    to 600 s (blocks tile each slot from its start, by majority assignment on
+    the 9.375-s grid, as the ladder uses them); None for the 1200-s rung,
+    which is a single centered window rather than a tiling.
+    """
+    group = round(rung_s / 9.375)
+    if group > 64:
+        return None
+    finest = majority_block(g0 + np.arange(n, dtype=np.int64), BlockGrid.FINEST)
+    return finest // group
 
 
 def removed_by_test(flags: pd.DataFrame, boom: int, g0: int, n: int) -> dict[str, dict[str, np.ndarray]]:

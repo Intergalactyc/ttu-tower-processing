@@ -97,7 +97,7 @@ def _load(run, index: FragmentIndex, q: Quantity, variant: str, members: tuple) 
     categories = None
     values = df[q.column] if not df.empty else pd.Series(dtype=float)
     if q.categorical:
-        cat = values.astype("category") if not df.empty else pd.Categorical([])
+        cat = values.astype("category").cat.remove_unused_categories() if not df.empty else pd.Categorical([])
         categories = [str(c) for c in (cat.cat.categories if not df.empty else [])]
         if q.table == "slot_boom":
             categories = list(SLOT_STATUSES)

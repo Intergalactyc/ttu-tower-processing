@@ -141,3 +141,23 @@ def test_circular_summary_uses_the_vector_mean():
     assert n == 2 and nan_pct == pytest.approx(100 / 3)
     assert min(mean, 360 - mean) < 1e-9  # 0°, not the linear 180°
     assert 0 < sigma < 15 and np.isnan(median)
+
+
+def test_nearest_on_curve_counts_every_sample_in_the_radius_and_the_lines_between():
+    from ttu_tower.viewer.decimate import nearest_on_curve
+
+    x = np.arange(0.0, 1000.0)
+    y = np.zeros_like(x)
+    y[500] = 50.0  # a lone peak among many samples per pixel
+    # 10 x-units and 1 y-unit per pixel: the peak is found from 3 px away, though 30 samples off in x
+    assert nearest_on_curve(x, y, 530.0, 50.0, 10.0, 1.0, 8.0)[1] == 500
+
+    xs, ys = np.array([0.0, 100.0]), np.array([0.0, 10.0])
+    # a click on the drawn line halfway along, 50 px from either sample: hits with lines, not without
+    hit = nearest_on_curve(xs, ys, 60.0, 6.0, 1.0, 1.0, 8.0, lines=True)
+    assert hit is not None and hit[1] == 1 and hit[0] < 1e-9
+    assert nearest_on_curve(xs, ys, 60.0, 6.0, 1.0, 1.0, 8.0, lines=False) is None
+    # a segment across the 0/360 seam isn't drawn for a direction, so clicking there misses
+    xw, yw = np.array([0.0, 100.0]), np.array([350.0, 10.0])
+    assert nearest_on_curve(xw, yw, 50.0, 180.0, 1.0, 1.0, 8.0, wrap=360.0) is None
+    assert nearest_on_curve(np.array([]), np.array([]), 0.0, 0.0, 1.0, 1.0, 8.0) is None

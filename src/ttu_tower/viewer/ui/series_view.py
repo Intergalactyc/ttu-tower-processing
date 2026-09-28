@@ -1,7 +1,7 @@
-"""The slot viewer: the 50-Hz series behind a clicked slot - as measured, QC
-applied, or unexcised - in the earth, streamwise or sonic frame, with the
-samples each test removed ghosted and a rug per test. Neighbouring slots can
-be stepped to, or loaded alongside to see several slots in a row.
+"""The Series tab of the Slot Inspector: the 50-Hz series behind a slot - as
+measured, QC applied, or unexcised - in the earth, streamwise or sonic frame,
+with the samples each test removed ghosted and a rug per test. Neighbouring
+slots can be loaded alongside, and the ladder's tau blocks overlaid.
 """
 import numpy as np
 import pyarrow.dataset as pa_dataset
@@ -9,11 +9,11 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ttu_tower.constants import HEIGHTS, SAMPLE_HZ
+from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.flags import TESTS
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer.catalog import variable_label
-from ttu_tower.viewer.reprocess import removed_by_test, to_streamwise
+from ttu_tower.viewer.reprocess import HFWindow, removed_by_test, tau_block_ids, to_streamwise
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, format_slot, sample_to_unix, slot_to_unix
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator
@@ -53,13 +53,11 @@ def rug_rows(removed: dict, filled: dict | None = None) -> dict[str, np.ndarray]
     return rows
 
 
-class SeriesWindow(QWidget):
-    closed = Signal(object)
+class SeriesPanel(QWidget):
+    loaded = Signal()
 
     def __init__(self, reprocessor, runner, run, index=None, parent=None):
         super().__init__(parent)
-        self.setWindowFlag(Qt.WindowType.Window)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.reprocessor, self.runner, self.run, self.index = reprocessor, runner, run, index
         self.boom = self.slot = None
         self.lo = self.hi = None  # the loaded slots, inclusive
@@ -67,6 +65,7 @@ class SeriesWindow(QWidget):
         self.hidden: set[str] = set()
         self.context = ""
         self.result = None
+        self.selected_tau: float | None = None
         self._closed = False
 
         self.header = QLabel()
@@ -87,14 +86,17 @@ class SeriesWindow(QWidget):
         self.band = QCheckBox("despike band")
         self.band.setChecked(True)
         self.band.toggled.connect(lambda *_: self.redraw())
-        self.pin = QCheckBox("pin")
-        self.pin.setToolTip("keep this window; new clicks open a new one")
+        self.blocks = QComboBox()
+        self.blocks.setToolTip("the ladder's τ blocks, which tile each slot from its start")
+        self.blocks.currentIndexChanged.connect(lambda *_: self.redraw())
+        self.fluct = QCheckBox("fluctuations")
+        self.fluct.setToolTip("subtract each τ block's mean (usable samples): what the ladder's variances see")
+        self.fluct.toggled.connect(lambda *_: self.redraw())
+        self._fill_blocks()
 
         nav = QHBoxLayout()
         self.nav_buttons = {}
         for name, label, tip, handler in (
-            ("prev", "◀ slot", "show the previous slot instead", lambda: self.shift(-1)),
-            ("next", "slot ▶", "show the next slot instead", lambda: self.shift(1)),
             ("earlier", "+ earlier", "load the previous slot alongside", lambda: self.extend(-1)),
             ("later", "+ later", "load the next slot alongside", lambda: self.extend(1)),
             ("single", "single slot", "back to just the focus slot", self.collapse),
@@ -114,7 +116,7 @@ class SeriesWindow(QWidget):
 
         self.graphics = pg.GraphicsLayoutWidget()
         controls = QHBoxLayout()
-        for w in (self.mode, self.frame, self.wide, self.band, self.pin):
+        for w in (self.mode, self.frame, self.wide, self.band, QLabel("τ blocks"), self.blocks, self.fluct):
             controls.addWidget(w)
         controls.addStretch(1)
         layout = QVBoxLayout(self)
@@ -134,22 +136,46 @@ class SeriesWindow(QWidget):
 
     # --- what is shown ------------------------------------------------------------------------
 
-    def show_slot(self, boom: int, slot: int, mode: str, variables: list[str], context: str = "") -> None:
-        self.boom, self.slot, self.lo, self.hi = boom, slot, slot, slot
-        self.variables, self.context = list(variables), context
-        self.mode.blockSignals(True)
-        self.mode.setCurrentIndex([k for _, k in MODES].index(mode))
-        self.mode.blockSignals(False)
-        self._build_series_boxes()
+    def set_focus(self, boom: int, slot: int, mode: str | None = None, variables: list[str] | None = None,
+                  context: str | None = None, frame: str | None = None) -> None:
+        """Show `slot` (keeping any neighbours loaded alongside, shifted with it)."""
+        if self.slot is not None and self.boom == boom:
+            span_lo, span_hi = self.slot - self.lo, self.hi - self.slot
+        else:
+            span_lo = span_hi = 0
+        self.boom, self.slot, self.lo, self.hi = boom, slot, slot - span_lo, slot + span_hi
+        if context is not None:
+            self.context = context
+        for combo, value, items in ((self.mode, mode, MODES), (self.frame, frame, FRAMES)):
+            if value is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex([k for _, k in items].index(value))
+                combo.blockSignals(False)
+        if variables is not None and list(variables) != self.variables:
+            self.variables = list(variables)
+            self._build_series_boxes()
         self.reload()
-        self.show()
-        self.raise_()
 
-    def shift(self, step: int) -> None:
-        if self.slot is None:
-            return
-        self.slot, self.lo, self.hi = self.slot + step, self.lo + step, self.hi + step
-        self.reload()
+    def set_selected_tau(self, tau_s: float | None) -> None:
+        self.selected_tau = tau_s if tau_s is not None and np.isfinite(tau_s) else None
+        self._fill_blocks()
+
+    def _fill_blocks(self) -> None:
+        current = self.blocks.currentData()
+        self.blocks.blockSignals(True)
+        self.blocks.clear()
+        self.blocks.addItem("none", None)
+        if self.selected_tau is not None and self.selected_tau <= 600:
+            self.blocks.addItem(f"selected τ ({self.selected_tau:g} s)", "selected")
+        for r in (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0):
+            self.blocks.addItem(f"{r:g} s", r)
+        i = self.blocks.findData(current)
+        self.blocks.setCurrentIndex(i if i >= 0 else 0)
+        self.blocks.blockSignals(False)
+
+    def block_rung(self) -> float | None:
+        data = self.blocks.currentData()
+        return self.selected_tau if data == "selected" else data
 
     def extend(self, side: int) -> None:
         if self.slot is None:
@@ -212,13 +238,8 @@ class SeriesWindow(QWidget):
 
     def _update_header(self) -> None:
         tz = self.run.timezone
-        if self.lo == self.hi:
-            span = f"slot {format_slot(self.slot, tz)}"
-        else:
-            span = (f"{self.hi - self.lo + 1} slots from {format_slot(self.lo, tz)[:16]}"
-                    f" · focus {format_slot(self.slot, tz)}")
-        self.header.setText(f"<b>Boom {self.boom}</b> ({HEIGHTS[self.boom]:g} m) · {span} · "
-                            f"<b>{self.mode.currentText()}</b>" + (f" · {self.context}" if self.context else ""))
+        span = "" if self.lo == self.hi else f"{self.hi - self.lo + 1} slots from {format_slot(self.lo, tz)[:16]} · "
+        self.header.setText(span + f"<b>{self.mode.currentText()}</b>" + (f" · {self.context}" if self.context else ""))
 
     def _failed(self, exc, tb) -> None:
         if not self._closed:
@@ -242,6 +263,7 @@ class SeriesWindow(QWidget):
             notes.append("the sonic frame exists only as measured; showing the earth frame")
         self.status.setText(" · ".join(notes))
         self.redraw()
+        self.loaded.emit()
 
     # --- drawing -------------------------------------------------------------------------------
 
@@ -258,14 +280,23 @@ class SeriesWindow(QWidget):
         names = [rename.get(v, v) for v in self.variables if v not in self.hidden]
         names = [v for v in names if v in available]
 
+        rung = self.block_rung()
+        blocks = tau_block_ids(base.g0, base.n, rung) if rung is not None else None
+        fluct = blocks is not None and self.fluct.isChecked()
+        if fluct:
+            am, qc = _fluctuations(am, blocks), _fluctuations(qc, blocks)
+
         first = None
         for row, var in enumerate(names):
             plot = self._new_plot(row, first)
             first = first or plot
             self.plots[var] = plot
             label, unit = variable_label(var)
+            label = f"{label}'" if fluct else label
             plot.setLabel("left", f"{label} [{unit}]" if unit else label)
             self._shade_slots(plot)
+            if blocks is not None:
+                self._draw_blocks(plot, x, blocks)
             dec = PlotDecimator(plot)
             self._decimators.append(dec)
             self._draw_variable(plot, dec, var, x, am, qc, mode, _SERIES_COLORS[row % len(_SERIES_COLORS)])
@@ -311,6 +342,17 @@ class SeriesWindow(QWidget):
         for k in range(self.lo, self.hi + 2):
             line = pg.InfiniteLine(slot_to_unix(k), pen=pg.mkPen("#d0b060", width=1, style=Qt.PenStyle.DashLine))
             line.setZValue(-90)
+            plot.addItem(line, ignoreBounds=True)
+
+    def _draw_blocks(self, plot, x, blocks) -> None:
+        inside = (x >= slot_to_unix(self.lo)) & (x < slot_to_unix(self.hi + 1))
+        edges = np.flatnonzero(np.diff(blocks) != 0) + 1
+        edges = edges[inside[edges]]
+        if edges.size > 400:
+            return  # too many to draw usefully
+        for i in edges:
+            line = pg.InfiniteLine(x[i], pen=pg.mkPen((90, 90, 160, 110), width=1))
+            line.setZValue(-80)
             plot.addItem(line, ignoreBounds=True)
 
     def _draw_variable(self, plot, dec, var, x, am, qc, mode, color) -> None:
@@ -376,10 +418,30 @@ class SeriesWindow(QWidget):
         rug.setYRange(-0.7, max(len(ticks), 1) - 0.3, padding=0)
         return rug
 
-    def closeEvent(self, ev) -> None:
+    def shutdown(self) -> None:
         self._closed = True
-        self.closed.emit(self)
-        super().closeEvent(ev)
+
+
+def _fluctuations(win: HFWindow | None, blocks: np.ndarray) -> HFWindow | None:
+    """`win` with each τ block's mean (over its usable samples) subtracted from
+    every series; the despike band shifts with it.
+    """
+    if win is None:
+        return None
+    out = HFWindow(**{**win.__dict__, "series": {}, "despike_band": {}})
+    ids = blocks - blocks.min()
+    nb = int(ids.max()) + 1
+    for var, y in win.series.items():
+        ok = np.isfinite(y) & win.masks.get(var, np.ones(y.size, bool))
+        sums = np.bincount(ids[ok], weights=y[ok], minlength=nb)
+        counts = np.bincount(ids[ok], minlength=nb)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means = np.where(counts > 0, sums / counts, np.nan)
+        out.series[var] = y - means[ids]
+        if var in win.despike_band:
+            lo, hi = win.despike_band[var]
+            out.despike_band[var] = (lo - means[ids], hi - means[ids])
+    return out
 
 
 def _stored_slot_means(index, boom, g0, n) -> dict:

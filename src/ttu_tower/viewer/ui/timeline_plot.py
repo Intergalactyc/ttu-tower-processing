@@ -4,15 +4,18 @@
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QToolButton, QVBoxLayout, QWidget
 
-from ttu_tower.viewer.decimate import break_wraps
+from ttu_tower.viewer.decimate import break_wraps, nearest_on_curve
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, unix_to_slot
 from ttu_tower.viewer.timeline import Curve, TimelineData
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator
 
 PICK_RADIUS_PX = 8.0
+MIN_AXIS_WIDTH = 60
+MARKER_SIZE = 5
 AMBIGUOUS_PX = 2.0
 
 
@@ -99,7 +102,7 @@ class TimelinePlot(QWidget):
         self.plot_item = self.widget.getPlotItem()
         self.plot_item.showGrid(x=True, y=True, alpha=0.15)
         self.plot_item.getAxis("left").enableAutoSIPrefix(False)
-        self.plot_item.getAxis("left").setWidth(60)  # matches the strips below, so their x axes line up
+        self.plot_item.getAxis("left").setWidth(MIN_AXIS_WIDTH)
         self.vb.setAutoVisible(y=True)
         self.decimator = PlotDecimator(self.plot_item)
 
@@ -115,6 +118,7 @@ class TimelinePlot(QWidget):
         self.items: dict = {}  # member -> PlotDataItem
         self.curves: dict = {}  # member -> Curve
         self.log_y = False
+        self.lines_drawn = True
         self._night_items: list = []
         self.widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
@@ -150,12 +154,13 @@ class TimelinePlot(QWidget):
 
         symbol = None if spec.style == "lines" else "o"
         pen_on = spec.style != "points" and not q.categorical
+        self.lines_drawn = pen_on
         members = [m for m in spec.members if m in data.curves]
         colors = [style.member_color(m, i) for i, m in enumerate(members)]
         for member, color in zip(members, colors):
             curve = data.curves[member]
             item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.2) if pen_on else None,
-                                   symbol=symbol or ("o" if q.categorical else None), symbolSize=4,
+                                   symbol=symbol or ("o" if q.categorical else None), symbolSize=MARKER_SIZE,
                                    symbolBrush=color, symbolPen=None, connect="finite")
             self.plot_item.addItem(item)
             self.items[member] = item
@@ -171,6 +176,17 @@ class TimelinePlot(QWidget):
             left.setTicks(None)
         self.decimator.redraw()
         self.vb.enableAutoRange(axis=pg.ViewBox.YAxis)
+
+    def axis_width_needed(self) -> int:
+        """Pixels the left axis needs for its widest category label (pyqtgraph
+        silently drops tick labels that don't fit the axis width).
+        """
+        if self.data is None or not self.data.quantity.categorical or not self.data.categories:
+            return MIN_AXIS_WIDTH
+        axis = self.plot_item.getAxis("left")
+        metrics = QFontMetrics(axis.style.get("tickFont") or axis.font())
+        widest = max(metrics.horizontalAdvance(c) for c in self.data.categories)
+        return max(MIN_AXIS_WIDTH, widest + 30)  # room for the tick marks and the axis label
 
     def _apply_visibility(self) -> None:
         visible = self.legend.visible()
@@ -203,28 +219,25 @@ class TimelinePlot(QWidget):
 
     def pick(self, view_x: float, view_y: float) -> list[tuple[float, int, object]]:
         """(pixel distance, slot, member) of each visible curve's nearest point
-        within the pick radius of a view-coordinate position, nearest first.
+        (or drawn line) within the pick radius of a view position, nearest first.
         """
         px, py = self.vb.viewPixelSize()
-        if not px or not py:
+        if not px or not py or self.data is None:
             return []
+        circular = self.data.quantity.circular
         hits = []
         for member in self.visible_members():
             curve = self.curves[member]
             if curve.x.size == 0:
                 continue
-            i = int(np.searchsorted(curve.x, view_x))
-            lo, hi = max(i - 3, 0), min(i + 3, curve.x.size)
-            xs, ys = curve.x[lo:hi], curve.y[lo:hi]
+            ys = curve.y
             if self.log_y:
                 with np.errstate(divide="ignore", invalid="ignore"):
                     ys = np.where(ys > 0, np.log10(ys), np.nan)
-            d = np.hypot((xs - view_x) / px, (ys - view_y) / py)
-            if not np.isfinite(d).any():
-                continue
-            j = int(np.nanargmin(d))
-            if d[j] <= PICK_RADIUS_PX:
-                hits.append((float(d[j]), int(curve.slots[lo + j]), member))
+            found = nearest_on_curve(curve.x, ys, view_x, view_y, px, py, PICK_RADIUS_PX, lines=self.lines_drawn,
+                                     wrap=360.0 if circular else None)
+            if found is not None:
+                hits.append((found[0], int(curve.slots[found[1]]), member))
         return sorted(hits, key=lambda h: h[0])
 
     def _on_click(self, ev) -> bool:

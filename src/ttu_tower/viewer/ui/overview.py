@@ -59,6 +59,9 @@ class StabilityBand(QWidget):
         layout.addLayout(row)
         layout.addWidget(self.plot, stretch=1)  # resizing the strip resizes the band, not the legend
 
+    def set_axis_width(self, width: int) -> None:
+        self.plot.getPlotItem().getAxis("left").setWidth(width)
+
     def link_to(self, plot_item) -> None:
         self.plot.getPlotItem().setXLink(plot_item)
 
@@ -102,6 +105,9 @@ class OverviewStrip(pg.PlotWidget):
         self.axis.utcOffset = display_offset_s(tz)
         self.axis.picture = None
         self.axis.update()
+
+    def set_axis_width(self, width: int) -> None:
+        self.getPlotItem().getAxis("left").setWidth(width)
 
     def set_availability(self, slots: np.ndarray, availability: np.ndarray, booms: list[int]) -> None:
         """availability: (booms × slots) status codes."""

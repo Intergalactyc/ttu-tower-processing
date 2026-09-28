@@ -11,7 +11,7 @@ from ttu_tower.viewer.run import RunHandle  # noqa: E402
 from ttu_tower.viewer.timeaxis import display_offset_s, slot_to_unix  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
 from ttu_tower.viewer.ui.main_window import MainWindow  # noqa: E402
-from ttu_tower.viewer.ui.series_view import MODES as SERIES_MODES, SeriesWindow  # noqa: E402
+from ttu_tower.viewer.ui.series_view import MODES as SERIES_MODES, SeriesPanel  # noqa: E402
 
 from viewer_fixtures import FAULT_HALF_HOUR  # noqa: E402
 
@@ -115,40 +115,47 @@ def test_a_click_off_the_data_falls_through(window):
 
 def _open_series(window, qtbot, slot):
     window.plots[0].pointClicked.emit(slot, 1)
-    qtbot.waitUntil(lambda: bool(window.series_windows) and window.series_windows[-1].result is not None,
-                    timeout=60_000)
-    return window.series_windows[-1]
+    qtbot.waitUntil(lambda: bool(window.inspectors) and window.inspectors[-1].series.result is not None
+                    and window.inspectors[-1].series.slot == slot, timeout=60_000)
+    return window.inspectors[-1]
 
 
-def test_a_click_opens_the_slot_viewer_unexcised(window, qtbot):
-    series: SeriesWindow = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+def test_a_click_opens_the_inspector_on_the_unexcised_series(window, qtbot):
+    inspector = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+    series: SeriesPanel = inspector.series
+    assert inspector.tabs.currentWidget() is series
     assert series.current_mode() == "unexcised" and series.result["mode"] == "unexcised"
     assert series.plots, "no series were drawn"
     series.mode.setCurrentIndex([k for _, k in SERIES_MODES].index("qc"))
     qtbot.waitUntil(lambda: series.result["mode"] == "qc", timeout=60_000)
     assert "spike" in series.result["removed"]
-    series.close()
+    inspector.close()
 
 
-def test_slot_viewer_steps_and_loads_neighbours_alongside(window, qtbot):
+def test_stepping_and_loading_neighbours_alongside(window, qtbot):
     k = 3 * FAULT_HALF_HOUR + 1
-    series = _open_series(window, qtbot, k)
-    series.nav_buttons["next"].click()
-    qtbot.waitUntil(lambda: series.result is not None and series.window_samples()[0] == (k + 1) * 30_000 - 30_000
-                    and series.result["am"].g0 == series.window_samples()[0], timeout=60_000)
+    inspector = _open_series(window, qtbot, k)
+    series = inspector.series
+    inspector.nav_buttons["next"].click()
+    qtbot.waitUntil(lambda: series.result["am"].g0 == (k + 1) * 30_000 - 30_000, timeout=60_000)
     assert (series.lo, series.slot, series.hi) == (k + 1, k + 1, k + 1)
     series.nav_buttons["earlier"].click()
     series.nav_buttons["later"].click()
     qtbot.waitUntil(lambda: series.result["am"].n == series.window_samples()[1], timeout=60_000)
     assert (series.lo, series.slot, series.hi) == (k, k + 1, k + 2)
     assert series.result["am"].n == 3 * 30_000 + 2 * 30_000
+    inspector.nav_buttons["prev"].click()  # the neighbours move with the focus
+    qtbot.waitUntil(lambda: series.slot == k and series.result["am"].g0 == (k - 1) * 30_000 - 30_000,
+                    timeout=60_000)
+    assert (series.lo, series.hi) == (k - 1, k + 1)
     series.nav_buttons["single"].click()
     qtbot.waitUntil(lambda: series.result["am"].n == 30_000 + 2 * 30_000, timeout=60_000)
-    series.close()
+    inspector.close()
 
 
-def test_series_toggles_and_streamwise_frame(window, qtbot):
-    series = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+def test_series_toggles_streamwise_frame_and_tau_blocks(window, qtbot):
+    inspector = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+    series = inspector.series
     shown = set(series.plots)
     series.series_boxes["ts"].setChecked(False)
     assert "ts" not in series.plots and set(series.plots) == shown - {"ts"}
@@ -156,16 +163,36 @@ def test_series_toggles_and_streamwise_frame(window, qtbot):
     qtbot.waitUntil(lambda: series.result["frame"] == "streamwise", timeout=60_000)
     assert {"u", "v"} <= set(series.plots) and "ue" not in series.plots
     assert series.result["bearings"]
-    series.close()
+    series.blocks.setCurrentIndex(series.blocks.findData(75.0))
+    series.fluct.setChecked(True)
+    assert series.plots["w"].getAxis("left").labelText.startswith("w'")
+    inspector.close()
 
 
-def test_pinned_series_window_is_kept(window, qtbot):
+def test_numbers_tab_lists_stored_rows_and_verify_is_exact(window, qtbot):
+    inspector = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+    qtbot.waitUntil(lambda: inspector.bundle is not None, timeout=60_000)
+    numbers = inspector.numbers
+    numbers.table_box.setCurrentIndex(numbers.table_box.findData("means"))
+    assert numbers.shown_rows() > 10
+    numbers.search.setText("ts")
+    assert 0 < numbers.shown_rows() < len(numbers.current_frame())
+    numbers.verify()
+    qtbot.waitUntil(lambda: getattr(numbers, "last_report", None) is not None, timeout=120_000)
+    report = numbers.last_report
+    assert set(report["table"]) >= {"means", "coverage", "mrd", "ladder"}
+    assert (report["max abs diff"] == 0).all()
+    assert (report["only recomputed"] == 0).all() and (report["only stored"] == 0).all()
+    inspector.close()
+
+
+def test_pinned_inspector_is_kept(window, qtbot):
     slot = 3 * FAULT_HALF_HOUR
     _open_series(window, qtbot, slot).pin.setChecked(True)
     window.plots[0].pointClicked.emit(slot + 1, 1)
-    qtbot.waitUntil(lambda: len(window.series_windows) == 2 and window.series_windows[1].result is not None,
+    qtbot.waitUntil(lambda: len(window.inspectors) == 2 and window.inspectors[1].series.result is not None,
                     timeout=60_000)
-    assert window.series_windows[0].slot == slot and window.series_windows[1].slot == slot + 1
+    assert window.inspectors[0].slot == slot and window.inspectors[1].slot == slot + 1
 
 
 def test_distribution_follows_the_visible_range(window):
@@ -186,3 +213,28 @@ def test_time_axis_labels_are_in_the_run_timezone(window):
     ticks = axis.tickValues(x - 3600, x + 3600, 800)  # also sets the zoom level tickStrings formats by
     label = axis.tickStrings([x], 1.0, ticks[-1][0])[0]
     assert label == f"{slot_to_time(k):%H:%M}"
+
+
+def test_inspect_from_a_typed_time(window, qtbot):
+    k = 3 * FAULT_HALF_HOUR + 1
+    window.goto.setText(f"{slot_to_time(k).tz_convert(window.run.timezone):%Y-%m-%d %H:%M}")
+    window.goto_boom.setCurrentIndex(window.goto_boom.findData(1))
+    window._on_inspect_goto()
+    qtbot.waitUntil(lambda: bool(window.inspectors) and window.inspectors[-1].bundle is not None, timeout=60_000)
+    assert (window.inspectors[-1].slot, window.inspectors[-1].boom) == (k, 1)
+    window.inspectors[-1].close()
+
+
+def test_long_category_labels_fit_and_axes_stay_aligned(window, qtbot):
+    window.panels[1].select("slot_boom|status", "none", (1,))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[1] is not None
+                    and window.datas[1].quantity.key == "slot_boom|status", timeout=60_000)
+    labels = window.datas[1].categories
+    axis = window.plots[1].plot_item.getAxis("left")
+    from PySide6.QtGui import QFontMetrics
+    widest = max(QFontMetrics(axis.font()).horizontalAdvance(c) for c in labels)
+    assert axis.width() >= widest + 20
+    widths = {window.plots[0].plot_item.getAxis("left").width(), axis.width(),
+              window.stability_band.plot.getPlotItem().getAxis("left").width(),
+              window.overview.getPlotItem().getAxis("left").width()}
+    assert len(widths) == 1

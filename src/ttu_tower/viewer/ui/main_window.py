@@ -10,18 +10,19 @@ from PySide6.QtWidgets import (
     QTabWidget, QToolBar, QVBoxLayout, QWidget,
 )
 
+from ttu_tower.constants import HEIGHTS
 from ttu_tower.timegrid import time_to_slot
 from ttu_tower.viewer import timeline
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
-from ttu_tower.viewer.provenance import drill_target, ordered_variables
+from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_variables
 from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.run import RunHandle, list_registered
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix
 from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.overview import OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
-from ttu_tower.viewer.ui.series_view import SeriesWindow
+from ttu_tower.viewer.ui.inspector.inspector import InspectorWindow
 from ttu_tower.viewer.ui.timeline_plot import TimelinePlot
 from ttu_tower.viewer.ui.worker import JobRunner
 
@@ -46,7 +47,7 @@ class MainWindow(QMainWindow):
         self.specs = [PanelSpec(), PanelSpec()]
         self.datas = [None, None]
         self.night = None
-        self.series_windows: list[SeriesWindow] = []
+        self.inspectors: list[InspectorWindow] = []
         self._have_range = False
 
         self._build_toolbar()
@@ -115,7 +116,9 @@ class MainWindow(QMainWindow):
         self._dist_timer.timeout.connect(self._refresh_distributions)
         self.plots[0].vb.sigXRangeChanged.connect(self._on_x_range)
         for i, p in enumerate(self.plots):
-            p.pointClicked.connect(lambda slot, member, i=i: self._on_point(i, slot, member))
+            # queued: open the inspector once the click has finished, or Windows can hand focus back to
+            # this window and leave the new one hidden behind it
+            p.pointClicked.connect(lambda slot, member, i=i: QTimer.singleShot(0, lambda: self._on_point(i, slot, member)))
             p.vb.fitXRequested.connect(self.zoom_all)
             p.hovered.connect(self._on_hover)
             p.legend.toggled.connect(lambda i=i: self._dist_timer.start())
@@ -165,6 +168,15 @@ class MainWindow(QMainWindow):
         self.goto.setMaximumWidth(180)
         self.goto.returnPressed.connect(self._on_goto)
         bar.addWidget(self.goto)
+        self.goto_boom = QComboBox()
+        self.goto_boom.setToolTip("the boom 'Inspect' opens")
+        for b in sorted(HEIGHTS):
+            self.goto_boom.addItem(f"b{b}", b)
+        bar.addWidget(self.goto_boom)
+        inspect = QAction("Inspect", self)
+        inspect.setToolTip("open the Slot Inspector at the go-to time, for the chosen boom")
+        inspect.triggered.connect(self._on_inspect_goto)
+        bar.addAction(inspect)
         for label, width in _ZOOMS:
             act = QAction(label, self)
             act.setToolTip(f"zoom to {label}")
@@ -305,10 +317,21 @@ class MainWindow(QMainWindow):
             return
         self.datas[i] = data
         self.plots[i].set_data(data, spec)
+        self._sync_axis_widths()
         self._apply_night()
         if not self._have_range:
             self.zoom_all()
         self._refresh_distributions()
+
+    def _sync_axis_widths(self) -> None:
+        """One left-axis width for everything stacked in the middle, wide enough
+        for the longest category label, so their x axes stay lined up.
+        """
+        width = max(p.axis_width_needed() for p in self.plots)
+        for p in self.plots:
+            p.plot_item.getAxis("left").setWidth(width)
+        self.stability_band.set_axis_width(width)
+        self.overview.set_axis_width(width)
 
     def _show_all_members(self) -> None:
         for p in self.plots:
@@ -359,15 +382,25 @@ class MainWindow(QMainWindow):
                 p.set_timezone(tz)
             self.overview.set_timezone(tz)
 
-    def _on_goto(self) -> None:
+    def _goto_slot(self) -> int | None:
         if self.run is None:
-            return
+            return None
         try:
             t = parse_time(self.goto.text(), self.tz_box.currentData() or self.run.timezone)
         except (ValueError, TypeError) as exc:
             self.statusBar().showMessage(f"can't read that time: {exc}", 8000)
+            return None
+        return int(time_to_slot(t.tz_convert("UTC")))
+
+    def _on_inspect_goto(self) -> None:
+        k = self._goto_slot()
+        if k is not None:
+            self.inspect(self.goto_boom.currentData(), k)
+
+    def _on_goto(self) -> None:
+        k = self._goto_slot()
+        if k is None:
             return
-        k = int(time_to_slot(t.tz_convert("UTC")))
         x = slot_to_unix(k) + SLOT_SECONDS / 2
         self.set_x_range(x - _DAY / 2, x + _DAY / 2)
         for p in self.plots:
@@ -396,26 +429,42 @@ class MainWindow(QMainWindow):
             return
         target = drill_target(q)
         if q.kind != "boom" or target.kind in ("profile", "none"):
-            self.statusBar().showMessage(f"{q.label} has no single-boom raw series to show (a profile view "
+            self.statusBar().showMessage(f"{q.label} has no single-boom slot to inspect (a profile view "
                                          "isn't built yet).", 8000)
             return
-        if self.reprocessor is None or not self.run.can_reprocess:
-            self.statusBar().showMessage("Reprocessing is disabled for this run (see the banner).", 8000)
-            return
-        window = next((w for w in self.series_windows if not w.pin.isChecked()), None)
+        self.inspect(member, slot, q, self.specs[i].variant)
+
+    def inspect(self, boom: int, slot: int, q=None, variant: str = "mrd") -> "InspectorWindow":
+        """Open (or reuse an unpinned) Slot Inspector on the tab that explains `q`."""
+        window = next((w for w in self.inspectors if not w.pin.isChecked()), None)
         if window is None:
-            window = SeriesWindow(self.reprocessor, self.runner, self.run, self.index)
-            window.closed.connect(lambda w: self.series_windows.remove(w) if w in self.series_windows else None)
-            self.series_windows.append(window)
-        context = f"from {q.title}" + ("" if self.specs[i].variant == "none" else f" ({self.specs[i].variant})")
-        window.show_slot(member, slot, "unexcised", ordered_variables(target, _HF_VARIABLES), context)
+            reprocessor = self.reprocessor if self.run.can_reprocess else None
+            window = InspectorWindow(self.run, self.index, reprocessor, self.runner)
+            window.closed.connect(lambda w: self.inspectors.remove(w) if w in self.inspectors else None)
+            self.inspectors.append(window)
+        tab, frame, emphasis, focus = "series", None, None, ()
+        if q is not None:
+            target = drill_target(q)
+            tab = {"flux": "spectra", "spectra": "spectra", "acf": "scales"}.get(target.kind, "series")
+            if tab == "series" and window.reprocessor is None:
+                tab = "spectra"
+            frame = "streamwise" if target.kind == "fluctuation" else None
+            emphasis = target.spectrum
+            focus = scale_variables(q)
+            context = f"from {q.title}" + ("" if variant == "none" else f" ({variant})")
+            variables = ordered_variables(target, _HF_VARIABLES)
+        else:
+            context, variables = "", list(_HF_VARIABLES)
+        window.show_slot(boom, slot, tab=tab, mode="unexcised", variables=variables, context=context, frame=frame,
+                         emphasis=emphasis, focus_vars=focus, variant=variant)
+        return window
 
     def _on_busy(self, count: int, label: str) -> None:
         self.busy.setText(f"⏳ {label}…" if count else "")
 
     def closeEvent(self, ev) -> None:
         self.settings.setValue("geometry", self.saveGeometry())
-        for w in list(self.series_windows):
+        for w in list(self.inspectors):
             w.close()
         self.runner.wait(5000)
         if self.reprocessor is not None:

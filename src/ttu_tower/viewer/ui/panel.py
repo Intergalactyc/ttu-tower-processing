@@ -23,7 +23,7 @@ class PanelSpec:
     variant: str = "none"
     members: tuple = ()
     log_y: bool = False
-    style: str = "lines"
+    style: str = "lines + points"
     visible: set = field(default_factory=set)  # members shown (legend toggles); empty = all
 
 
@@ -75,6 +75,7 @@ class PanelControls(QWidget):
         self.log_y.toggled.connect(lambda *_: self._emit())
         self.style = QComboBox()
         self.style.addItems(STYLES)
+        self.style.setCurrentText("lines + points")
         self.style.currentIndexChanged.connect(lambda *_: self._emit())
 
         layout = QVBoxLayout(self)

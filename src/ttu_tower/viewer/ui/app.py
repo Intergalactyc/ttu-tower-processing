@@ -1,5 +1,6 @@
 """Starting the viewer's Qt application."""
 import sys
+import warnings
 
 import pyqtgraph as pg
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -23,6 +24,8 @@ def open_initial_run(tag: str | None, run_dir: str | None, test: bool, settings_
 
 
 def main(tag: str | None = None, run_dir: str | None = None, test: bool = False) -> int:
+    # the pipeline's expected all-NaN/empty-window warnings, which primary tallies rather than prints
+    warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"numpy\..*")
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("ttu-view")
     configure_pyqtgraph()

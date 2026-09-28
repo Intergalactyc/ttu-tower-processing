@@ -1,5 +1,12 @@
 # `ttu-view`: architecture & implementation plan
 
+## Status (resume here)
+**2026-09-28:** phases 1 and 2 are built, checkpoint-tested by Elliott, and revised per his
+feedback. See "Phase 1 checkpoint revisions" and "Phase 2 as built" below.
+
+**Next: Phase 3** (QC and Profile tabs, τ what-if, QC overlays). Phases were renumbered at the
+phase-1 checkpoint: 4 = QC what-if, 5 = scatter/find/bookmarks, 6 = later. Nothing is committed.
+
 ## Context
 
 Elliott wants a local GUI to inspect `ttu-tower-processing` 2.0 outputs against the 50-Hz data
@@ -616,6 +623,70 @@ Each is small and tested. Results must stay byte-identical unless noted.
 
 **Checkpoint for Elliott:** browse slots such as the boom-9 strongly-unstable clipped cases,
 compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs.
+
+### Phase 2 as built (2026-09-28)
+- **Entry.** A click on a timeline point opens the **Slot Inspector** on the tab that explains
+  the quantity:
+
+  | Clicked quantity | Opens |
+  |---|---|
+  | means, QC quantities | Series |
+  | σ/TI/TKE | Series, streamwise frame |
+  | fluxes, τ | Spectra, with that spectrum's title highlighted |
+  | ITS/ILS/ratios | Scales, with the ACFs computed automatically and those variables drawn thicker |
+
+  - The toolbar's go-to time plus a boom picker and **Inspect** opens it directly.
+  - Unpinned inspectors are reused; pinned ones are kept.
+  - Stored-data tabs work even when reprocessing is disabled.
+- **Header:** ◀ ▶ slot (every tab follows; loaded neighbours move with the focus), boom and
+  variant pickers, pin.
+- **Summary strip:**
+  - slot status
+  - selected τ with its source and status, plus each cospectrum's status and τ
+  - family coverage
+  - ws and wd
+  - Ri_b → stability class
+  - filter-log failures
+- **Series tab:** the phase-1 slot viewer as a panel, plus τ blocks (the selected τ or any rung
+  ≤ 600 s, tiling each slot from its start as the ladder does) and "fluctuations" (each block's
+  usable-sample mean subtracted).
+  - Fluctuations are taken in the displayed frame; streamwise is rotated per slot, not per block
+    as the ladder does.
+- **Spectra tab** (stored `mrd` only; no raw data):
+  - all 8 spectra on a log10 scale axis, with ±SE bars
+  - variances on a log y axis (toggle); cospectra linear, since pyqtgraph has no symlog
+  - detection rerun with its trace on the heat/momentum cospectra: smoothed curve, ±k·SE
+    band, searched range, peak ▲, reversal ✕ with its type
+  - stored heat, momentum and selected τ lines; min/max τ dotted
+  - toggles for the unexcised overlay, all booms, slots ±3, and a value/ogive mode
+  - a red note appears wherever the rerun disagrees with the stored τ (code/config drift)
+- **Scales tab:**
+  - ITS and ILS vs rung (log–log), with the τ lines and the ITS = τ/`min_tau_its_ratio` guide
+  - a per-rung table with the its/its_vpts block counts
+  - "Show ACFs": pooled ACF per variable at any rung, 1/e line, ITS markers. Per-block ACFs
+    aren't drawn.
+- **Numbers tab:**
+  - every stored row of the slot, per table: filterable, sortable, copyable as TSV
+  - **Verify against raw**: recomputes `file_products` for the slot and diffs means, coverage,
+    slot_qc, mrd_frame, mrd, ladder and ladder_coverage by key (flags are not compared, since
+    their intervals are split and merged differently per unit)
+- **Checked on `oneyear`** (boom 8 slot 728857; boom 5 slot 728893):
+  - Verify is exact in every table
+  - the detection rerun matches the stored τ
+  - the ACFs reproduce the stored ITS exactly
+  - timings: inspector 1.6 s, ACF 0.8 s, Verify 3.2 s, slot step 1.3 s
+
+**Post-phase-2 fixes (Elliott's feedback, 2026-09-28):**
+- The inspector opens via `QTimer.singleShot(0)` after the click and is activated. Otherwise
+  Windows could leave it behind the main window.
+- Timeline left axes widen to the longest category label, and the band and overview follow, so x
+  stays aligned. Unused categories are dropped.
+- Point picking uses `decimate.nearest_on_curve`:
+  - every sample within 8 px counts, plus the drawn line segments, snapping to the nearer end
+  - segments across the 0/360 seam don't count for directions
+  - the hit rate along drawn curves is now 100% at every zoom (it was 63–80% at year and 6-h
+    zoom)
+- Timeline markers are 5 px, and the default style is lines + points.
 
 ### Phase 3 — QC and Profile tabs, τ what-if, QC overlays
 - **QC tab:** the coverage layer ladder per variable, flag fractions per test over the slot and

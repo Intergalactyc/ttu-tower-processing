@@ -54,3 +54,40 @@ def break_wraps(x: np.ndarray, y: np.ndarray, period: float = 360.0) -> tuple[np
         return x, y
     x_mid = (x[jumps - 1] + x[jumps]) / 2
     return np.insert(x, jumps, x_mid), np.insert(y.astype(np.float64), jumps, np.nan)
+
+
+def nearest_on_curve(x: np.ndarray, y: np.ndarray, vx: float, vy: float, px: float, py: float, radius_px: float,
+                     lines: bool = True, wrap: float | None = None) -> tuple[float, int] | None:
+    """(pixel distance, sample index) of the curve sample nearest a clicked view
+    position, or None beyond `radius_px`. Every sample within the radius counts,
+    however many share a pixel column; with `lines`, a click on the segment
+    joining two consecutive finite samples also counts and picks the nearer end
+    (a segment spanning more than half of `wrap`, e.g. 360 for directions, is
+    not drawn, so it doesn't count).
+    """
+    lo = max(int(np.searchsorted(x, vx - radius_px * px, side="left")) - 1, 0)
+    hi = min(int(np.searchsorted(x, vx + radius_px * px, side="right")) + 1, x.size)
+    if hi <= lo:
+        return None
+    sx, sy = (x[lo:hi] - vx) / px, (y[lo:hi] - vy) / py  # pixels from the click
+    d = np.hypot(sx, sy)
+    best_d, best_i = np.inf, -1
+    if np.isfinite(d).any():
+        j = int(np.nanargmin(d))
+        best_d, best_i = float(d[j]), lo + j
+    if lines and hi - lo >= 2:
+        ax, ay, bx, by = sx[:-1], sy[:-1], sx[1:], sy[1:]
+        ok = np.isfinite(ay) & np.isfinite(by)
+        if wrap is not None:
+            ok &= np.abs(y[lo + 1:hi] - y[lo:hi - 1]) <= wrap / 2
+        seg_x, seg_y = bx - ax, by - ay
+        length2 = seg_x**2 + seg_y**2
+        with np.errstate(invalid="ignore", divide="ignore"):
+            t = np.clip(-(ax * seg_x + ay * seg_y) / length2, 0.0, 1.0)
+        t = np.where(length2 > 0, t, 0.0)
+        ds = np.hypot(ax + t * seg_x, ay + t * seg_y)
+        ds = np.where(ok, ds, np.inf)
+        k = int(np.argmin(ds))
+        if ds[k] < best_d:
+            best_d, best_i = float(ds[k]), lo + k + (1 if t[k] >= 0.5 else 0)
+    return (best_d, best_i) if best_d <= radius_px else None

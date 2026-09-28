@@ -64,3 +64,18 @@ def ordered_variables(target: DrillTarget, available) -> list[str]:
     """
     first = [v for v in target.variables if v in available]
     return first + [v for v in available if v not in first]
+
+
+def scale_variables(q: Quantity) -> tuple[str, ...]:
+    """The ladder ITS variables (u, v, w, vpts) a scale quantity is about."""
+    v = q.variable
+    if q.stat == "its" and v in ("u", "v", "w", "vpts"):
+        return (v,)
+    if v.startswith(("ils_", "its_ratio_")):
+        suffix = v.split("_")[-1]
+        if suffix in ("u", "v", "w", "vpts"):
+            return (suffix,)
+        return ("u", "v", "w")  # ils_ratio_vu and the like
+    if v.startswith("its_short"):
+        return ("vpts",) if v.endswith("vpts") else ("u", "v", "w")
+    return ()

@@ -131,7 +131,8 @@ def _split_and_classify(x: np.ndarray, m: np.ndarray, outlier: np.ndarray, max_s
     return spike, excursion
 
 
-def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, z_threshold: float, c: float) -> Despiked:
+def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, z_threshold: float, c: float,
+            trace: dict | None = None) -> Despiked:
     """A 5-min median/MAD reference (VM97), evaluated every `stride_s` and
     linearly interpolated between reference centers. Per sample: if both
     bracketing centers are valid (finite coverage >= c), interpolate; if
@@ -145,6 +146,8 @@ def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, z_threshold: fl
     a longer one is an excursion (kept). `min_mad` and `z_threshold` are the
     caller's resolved values for this variable (both are per-variable in
     config); everything else needed comes off `cfg_despike` directly.
+
+    `trace`, if given, receives the per-sample reference ("m", "mad").
     """
     x = np.asarray(x, dtype=np.float64)
     n = x.size
@@ -154,6 +157,8 @@ def despike(x: np.ndarray, g0: int, cfg_despike, min_mad: float, z_threshold: fl
     centers, m_c, mad_c, valid_c = _reference_centers(x, g0, stride, half_window, min_mad, c)
     g = g0 + np.arange(n, dtype=np.int64)
     m, mad, unchecked = _interpolated_reference(g, centers, m_c, mad_c, valid_c, half_window)
+    if trace is not None:
+        trace["m"], trace["mad"] = m, mad
 
     z = _MAD_TO_SIGMA * np.abs(x - m) / mad  # NaN (unchecked, or x is NaN) is never > threshold
     outlier = z > z_threshold

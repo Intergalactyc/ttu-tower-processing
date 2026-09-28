@@ -42,17 +42,12 @@ def _candidate_sort_key(name: str) -> int:
     return int(suffix) if suffix else -1  # ".ttu-tower" (no suffix) sorts first
 
 
-def find_home(user_home: Path | None = None) -> Path:
-    """Find or create the ttu-tower home."""
+def locate_home(user_home: Path | None = None) -> Path | None:
+    """The existing ttu-tower home, or None; never creates anything."""
     env = os.environ.get("TTU_TOWER_HOME")
     if env:
         path = Path(env)
-        if _is_ttu_tower_home(path):
-            return path
-        if not path.exists() or (path.is_dir() and not any(path.iterdir())):
-            _write_signature(path)
-            return path
-        raise RuntimeError(f"TTU_TOWER_HOME={path} exists and is not a ttu-tower home")
+        return path if _is_ttu_tower_home(path) else None
 
     base = user_home if user_home is not None else Path.home()
     candidates = [e.name for e in base.iterdir() if _CANDIDATE_RE.match(e.name)] if base.is_dir() else []
@@ -60,7 +55,24 @@ def find_home(user_home: Path | None = None) -> Path:
         path = base / name
         if _is_ttu_tower_home(path):
             return path
+    return None
 
+
+def find_home(user_home: Path | None = None) -> Path:
+    """Find or create the ttu-tower home."""
+    existing = locate_home(user_home)
+    if existing is not None:
+        return existing
+
+    env = os.environ.get("TTU_TOWER_HOME")
+    if env:
+        path = Path(env)
+        if not path.exists() or (path.is_dir() and not any(path.iterdir())):
+            _write_signature(path)
+            return path
+        raise RuntimeError(f"TTU_TOWER_HOME={path} exists and is not a ttu-tower home")
+
+    base = user_home if user_home is not None else Path.home()
     n = None
     while True:
         name = ".ttu-tower" if n is None else f".ttu-tower{n}"

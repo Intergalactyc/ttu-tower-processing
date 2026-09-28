@@ -19,8 +19,13 @@ dependencies = [
 mesonet = [
     "wtxmeso @ git+https://github.com/Intergalactyc/wtxmesonet@main",
 ]
+viewer = [
+    "PySide6>=6.8",
+    "pyqtgraph>=0.13.7",
+]
 dev = [
     "pytest",
+    "pytest-qt",
     "scipy",
 ]
 
@@ -34,12 +39,14 @@ ttu-report = "ttu_tower.cli.report:main"
 ttu-validate = "ttu_tower.cli.validate:main"
 ttu-runs = "ttu_tower.cli.runs:main"
 ttu-convert-parquet = "ttu_tower.cli.convert_parquet:main"
+ttu-view = "ttu_tower.cli.view:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+qt_api = "pyside6"
 markers = [
     "integration: exercises real data or multiple pipeline stages together; skipped unless --integration is passed",
     "slow: statistically or computationally expensive acceptance validation (many realizations, or a full synthetic pipeline run); skipped unless --slow is passed",

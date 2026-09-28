@@ -147,3 +147,26 @@ def test_te_pools_across_blocks_matches_analytic_3_to_1():
     te_uw, _ = _te_momentum_heat(ue, vn, w, theta, mask, heat_mask, block_idx, n_blocks=2, nominal_len=n_per_block, c=0.5)
     # pooled: S_all = 300 - 100 = 200, S_pos = 300 (S_all > 0) -> TE = 200/300
     assert te_uw == pytest.approx(2.0 / 3.0, abs=1e-9)
+
+
+def test_trace_acf_reproduces_its_exactly():
+    from ttu_tower.constants import SAMPLE_HZ
+    from ttu_tower.math.stats import efolding_integral
+
+    rng = np.random.default_rng(21)
+    series = _window_series(rng)
+    masks = {fam: np.ones(60000, dtype=bool) for fam in ("momentum", "heat", "ts")}
+    k = 1000
+    g0 = 30000 * k - 15000
+    plain, _ = rung_its_te(series, masks, g0, k, _cfg_ladder(), 0.75)
+    trace = {}
+    traced, _ = rung_its_te(series, masks, g0, k, _cfg_ladder(), 0.75, trace=trace)
+    assert traced == plain
+
+    for rung_s, variable, stat, value in plain:
+        if stat != "its":
+            continue
+        rho = trace["acf"][rung_s][variable]
+        assert rho is not None and rho[0] == 1.0
+        recomputed = (1.0 / SAMPLE_HZ) * efolding_integral(rho)
+        assert recomputed == value or (np.isnan(recomputed) and np.isnan(value))

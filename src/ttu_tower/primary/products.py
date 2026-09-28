@@ -25,8 +25,18 @@ _FINEST_FAMILIES = ("momentum", "heat", "ts", "direction")
 _SERIES_VARS = ("ue", "vn", "w", "vpts")
 
 
-def _half_hours_overlapping(g0: int, n: int) -> list[int]:
+def half_hours_overlapping(g0: int, n: int) -> list[int]:
     return list(range(g0 // SAMPLES_PER_HALF_HOUR, (g0 + n - 1) // SAMPLES_PER_HALF_HOUR + 1))
+
+
+def detection_window(k: int) -> tuple[int, int]:
+    """(g0, n) of slot k's 80-min MRD detection window."""
+    return SAMPLES_PER_SLOT * k - _DETECTION_MARGIN_SAMPLES, _DETECTION_WINDOW_SAMPLES
+
+
+def ladder_window(k: int) -> tuple[int, int]:
+    """(g0, n) of slot k's 20-min ladder window (the slot plus 5 min before, 5 min after)."""
+    return SAMPLES_PER_SLOT * k - _LADDER_MARGIN_SAMPLES, _LADDER_WINDOW_SAMPLES
 
 
 def _floor_blocks_per_half_hour(floor_level: int) -> int:
@@ -66,7 +76,7 @@ def _assemble_block_window(B: dict[int, StageBOut], half_hours: list[int], attr:
     return out
 
 
-def _assemble_samples(per_hh: dict[int, np.ndarray | None], target_g0: int, target_n: int, is_mask: bool) -> np.ndarray:
+def assemble_samples(per_hh: dict[int, np.ndarray | None], target_g0: int, target_n: int, is_mask: bool) -> np.ndarray:
     out = np.zeros(target_n, dtype=bool) if is_mask else np.full(target_n, np.nan)
     for hh, arr in per_hh.items():
         if arr is None:
@@ -91,7 +101,7 @@ def _assemble_series_window(B: dict[int, StageBOut], half_hours: list[int], vari
             sb = B.get(hh)
             store = getattr(sb, series_attr) if sb is not None and not sb.is_placeholder else None
             per_hh[hh] = store[var] if store is not None else None
-        series[var] = _assemble_samples(per_hh, target_g0, target_n, is_mask=False)
+        series[var] = assemble_samples(per_hh, target_g0, target_n, is_mask=False)
 
     masks = {}
     for fam in ("momentum", "heat", "ts"):
@@ -100,9 +110,24 @@ def _assemble_series_window(B: dict[int, StageBOut], half_hours: list[int], vari
             sb = B.get(hh)
             store = getattr(sb, masks_attr) if sb is not None and not sb.is_placeholder else None
             per_hh[hh] = store[fam] if store is not None else None
-        masks[fam] = _assemble_samples(per_hh, target_g0, target_n, is_mask=True)
+        masks[fam] = assemble_samples(per_hh, target_g0, target_n, is_mask=True)
 
     return series, masks
+
+
+def assemble_series_window(B: dict[int, StageBOut], variant: str, g0: int, n: int
+                            ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """The ue/vn/w/vpts series and family masks over samples [g0, g0+n) for
+    `variant` ("mrd" and "naive" read the excised series, "mrd_unexcised" the
+    unexcised one), stitched from whichever half-hours of B the window covers.
+    """
+    if variant in ("mrd", "naive"):
+        source = "mrd"
+    elif variant == "mrd_unexcised":
+        source = "mrd_unexcised"
+    else:
+        raise ValueError(f"unknown variant '{variant}'")
+    return _assemble_series_window(B, half_hours_overlapping(g0, n), source, g0, n)
 
 
 def _mrd_rows(k: int, boom: int, variant: str, floor: dict[str, FamilySums], floor_level: int, c: float,
@@ -151,13 +176,13 @@ def _compute_variant(k: int, boom: int, variant: str, B: dict[int, StageBOut], c
     det_g0 = SAMPLES_PER_SLOT * k - _DETECTION_MARGIN_SAMPLES
     floor_attr = "floor" if variant == "mrd" else "floor_unexcised"
     floor = _assemble_block_window(
-        B, _half_hours_overlapping(det_g0, _DETECTION_WINDOW_SAMPLES), floor_attr, _FLOOR_FAMILIES,
+        B, half_hours_overlapping(det_g0, _DETECTION_WINDOW_SAMPLES), floor_attr, _FLOOR_FAMILIES,
         _floor_blocks_per_half_hour(floor_level), BlockGrid.floor(floor_level), det_g0, 2 ** floor_level,
     )
     mrd_df, frame_df = _mrd_rows(k, boom, variant, floor, floor_level, c, timings)
 
     lad_g0 = SAMPLES_PER_SLOT * k - _LADDER_MARGIN_SAMPLES
-    lad_half_hours = _half_hours_overlapping(lad_g0, _LADDER_WINDOW_SAMPLES)
+    lad_half_hours = half_hours_overlapping(lad_g0, _LADDER_WINDOW_SAMPLES)
     finest_attr = "finest" if variant == "mrd" else "finest_unexcised"
     finest = _assemble_block_window(B, lad_half_hours, finest_attr, _FINEST_FAMILIES, 192, BlockGrid.FINEST, lad_g0, _N_FINEST_WINDOW)
     series, masks = _assemble_series_window(B, lad_half_hours, variant, lad_g0, _LADDER_WINDOW_SAMPLES)

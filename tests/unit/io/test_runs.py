@@ -195,3 +195,24 @@ def test_register_run_test_flag_uses_separate_namespace(tmp_path, monkeypatch):
     assert normal_dir != test_dir
     assert (home / "runs" / "myrun.json").is_file()
     assert (home / "runs" / "testing" / "myrun.json").is_file()
+
+
+# --- read-only home lookup ----------------------------------------------------
+
+def test_locate_home_returns_none_and_creates_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("TTU_TOWER_HOME", raising=False)
+    assert runs.locate_home(user_home=tmp_path) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_locate_home_env_pointing_nowhere_creates_nothing(tmp_path, monkeypatch):
+    target = tmp_path / "nowhere"
+    monkeypatch.setenv("TTU_TOWER_HOME", str(target))
+    assert runs.locate_home() is None
+    assert not target.exists()
+
+
+def test_locate_home_finds_what_find_home_created(tmp_path, monkeypatch):
+    monkeypatch.delenv("TTU_TOWER_HOME", raising=False)
+    created = runs.find_home(user_home=tmp_path)
+    assert runs.locate_home(user_home=tmp_path) == created

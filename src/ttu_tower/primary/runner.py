@@ -16,7 +16,7 @@ from ttu_tower.config.hashing import primary_hash
 from ttu_tower.io import store
 from ttu_tower.io.rawfiles import build_file_table, check_raw_allowed, resolve_period_slots
 from ttu_tower.io.runs import register_run
-from ttu_tower.io.stage import check_hash_guard, write_run_meta, write_run_summary
+from ttu_tower.io.stage import check_hash_guard, write_config_copies, write_run_meta, write_run_summary
 from ttu_tower.logs import configure_worker, log_listener
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.primary.stream import run_unit
@@ -85,6 +85,7 @@ def run_primary(cfg, args) -> dict:
 
     write_run_meta(stage_dir, stage="primary", tag=cfg.tag, config_hash=config_hash, upstream_hash=None,
                     package_version=__version__, timezone=cfg.output.timezone, unusable_tests=cfg.qc.unusable_tests)
+    write_config_copies(stage_dir, cfg, args.config)
 
     file_table = build_file_table(cfg.paths.raw_dirs, cfg.files)
     check_raw_allowed(file_table, args.allow_non_parquet)

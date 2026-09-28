@@ -15,7 +15,7 @@ from ttu_tower.flags import FlagStore
 from ttu_tower.io import store
 from ttu_tower.io.rawfiles import period_slots_from_table
 from ttu_tower.io.runs import register_run
-from ttu_tower.io.stage import check_hash_guard, write_run_meta, write_run_summary
+from ttu_tower.io.stage import check_hash_guard, write_config_copies, write_run_meta, write_run_summary
 from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.tertiary import filtering, mesonet, multiboom, profiles, wide
@@ -144,6 +144,7 @@ def run_tertiary(cfg, args) -> dict:
     write_run_meta(stage_dir, stage="tertiary", tag=cfg.tag, config_hash=config_hash,
                     upstream_hash=secondary_hash(cfg, __version__), package_version=__version__,
                     timezone=cfg.output.timezone, unusable_tests=cfg.qc.unusable_tests)
+    write_config_copies(stage_dir, cfg, args.config)
 
     file_table = pd.read_parquet(primary_dir / "files.parquet")
     slots_all = pd.read_parquet(primary_dir / "slots.parquet")

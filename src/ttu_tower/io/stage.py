@@ -7,20 +7,34 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from ttu_tower.config.load import to_resolved_dict
 from ttu_tower.io.store import write_json_atomic
 from ttu_tower.timegrid import EPOCH
+
+_PACKAGE_DIR = Path(__file__).resolve().parent.parent
 
 
 class StageHashMismatch(Exception):
     """A stage's config hash differs from the run directory's recorded one."""
 
 
-def git_commit() -> str | None:
+def _git(args: list[str], cwd) -> str | None:
     try:
-        result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git_commit(cwd=_PACKAGE_DIR) -> str | None:
+    """HEAD of the repository holding `cwd` (default: this package's source)."""
+    return _git(["rev-parse", "HEAD"], cwd)
+
+
+def git_dirty(cwd=_PACKAGE_DIR) -> bool | None:
+    """Whether the package source has uncommitted changes; None outside a git checkout."""
+    out = _git(["status", "--porcelain", "--", "."], cwd)
+    return None if out is None else bool(out)
 
 
 def read_run_meta(stage_dir) -> dict | None:
@@ -67,13 +81,24 @@ def write_run_meta(stage_dir, *, stage: str, tag: str, config_hash: str, upstrea
                     package_version: str, timezone: str, unusable_tests=None) -> None:
     meta = {
         "stage": stage, "tag": tag, "config_hash": config_hash, "upstream_hash": upstream_hash,
-        "package_version": package_version, "git_commit": git_commit(),
+        "package_version": package_version, "git_commit": git_commit(), "git_dirty": git_dirty(),
         "created": datetime.now().astimezone().isoformat(timespec="seconds"),
         "epoch": EPOCH.isoformat(), "timezone": timezone,
     }
     if unusable_tests is not None:
         meta["unusable_tests"] = list(unusable_tests)
     write_json_atomic(Path(stage_dir) / "run_meta.json", meta)
+
+
+def write_config_copies(stage_dir, cfg, config_path) -> None:
+    """The config file as given (when it exists) and every resolved key, so a
+    stage directory records exactly how it was configured.
+    """
+    stage_dir = Path(stage_dir)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    if config_path is not None and Path(config_path).is_file():
+        shutil.copyfile(config_path, stage_dir / "config.toml")
+    write_json_atomic(stage_dir / "config.resolved.json", to_resolved_dict(cfg))
 
 
 def write_run_summary(stage_dir, *, stage: str, config_hash: str, package_version: str, started: str,

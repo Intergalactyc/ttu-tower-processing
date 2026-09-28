@@ -27,19 +27,30 @@ def _fully_usable_blocks(block_idx: np.ndarray, mask: np.ndarray, n_blocks: int)
     return usable
 
 
-def _pooled_its(fluctuations: list[np.ndarray], max_lag: int) -> float:
+def pooled_acf(fluctuations: list[np.ndarray], max_lag: int) -> np.ndarray | None:
+    """Autocorrelation at lags 0..max_lag of the autocovariance summed over
+    every block's fluctuations; None if there are none, or zero variance.
+    """
     if not fluctuations:
-        return np.nan
+        return None
     pooled = np.zeros(max_lag + 1)
     for x in fluctuations:
         pooled += autocovariance(x, max_lag)
     if pooled[0] == 0:
+        return None
+    return pooled / pooled[0]
+
+
+def _pooled_its(fluctuations: list[np.ndarray], max_lag: int, trace: dict | None = None, key: str | None = None) -> float:
+    rho = pooled_acf(fluctuations, max_lag)
+    if trace is not None:
+        trace[key] = rho
+    if rho is None:
         return np.nan
-    rho = pooled / pooled[0]
     return (1.0 / SAMPLE_HZ) * efolding_integral(rho)
 
 
-def _its_momentum(ue, vn, w, mask, block_idx, n_blocks, max_lag):
+def _its_momentum(ue, vn, w, mask, block_idx, n_blocks, max_lag, trace=None):
     usable = _fully_usable_blocks(block_idx, mask, n_blocks)
     u_fluct, v_fluct, w_fluct = [], [], []
     for b in np.flatnonzero(usable):
@@ -50,16 +61,16 @@ def _its_momentum(ue, vn, w, mask, block_idx, n_blocks, max_lag):
         u_fluct.append(u_p)
         v_fluct.append(v_p)
         w_fluct.append(w[sel] - mean_w)
-    its_u = _pooled_its(u_fluct, max_lag)
-    its_v = _pooled_its(v_fluct, max_lag)
-    its_w = _pooled_its(w_fluct, max_lag)
+    its_u = _pooled_its(u_fluct, max_lag, trace, "u")
+    its_v = _pooled_its(v_fluct, max_lag, trace, "v")
+    its_w = _pooled_its(w_fluct, max_lag, trace, "w")
     return its_u, its_v, its_w, int(usable.sum())
 
 
-def _its_vpts(vpts, mask, block_idx, n_blocks, max_lag):
+def _its_vpts(vpts, mask, block_idx, n_blocks, max_lag, trace=None):
     usable = _fully_usable_blocks(block_idx, mask, n_blocks)
     fluct = [vpts[block_idx == b] - vpts[block_idx == b].mean() for b in np.flatnonzero(usable)]
-    return _pooled_its(fluct, max_lag), int(usable.sum())
+    return _pooled_its(fluct, max_lag, trace, "vpts"), int(usable.sum())
 
 
 def _te_momentum_heat(ue, vn, w, theta, momentum_mask, heat_mask, block_idx, n_blocks, nominal_len, c):
@@ -91,11 +102,14 @@ def _te_momentum_heat(ue, vn, w, theta, momentum_mask, heat_mask, block_idx, n_b
     return te_uw, te_wt
 
 
-def rung_its_te(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, k: int, cfg_ladder, c: float):
+def rung_its_te(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, k: int, cfg_ladder, c: float,
+                trace: dict | None = None):
     """ITS (u, v, w, vpts) and TE (uw, wvpts) at every rung, for slot k.
     `series`/`masks` must cover samples [30000k-15000, 30000k+45000). Returns
     (values, coverage): values rows (rung_s, variable, stat, value); coverage
     rows (rung_s, family, blocks_used, blocks_total, coverage=blocks_used/blocks_total).
+    `trace`, if given, receives the pooled autocorrelation behind each ITS as
+    trace["acf"][rung_s][variable] (None where no block was fully usable).
     """
     slot_start_g = _SLOT_SAMPLES * k
     slot_first_finest = 64 * k
@@ -129,8 +143,9 @@ def rung_its_te(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0:
         else:
             block_idx = np.zeros(span_n, dtype=np.int64)
 
-        its_u, its_v, its_w, blocks_its = _its_momentum(ue_l, vn_l, w_l, mom_l, block_idx, n_blocks, max_lag)
-        its_vpts, blocks_its_vpts = _its_vpts(vpts_l, ts_l, block_idx, n_blocks, max_lag)
+        rung_trace = trace.setdefault("acf", {}).setdefault(rung_s, {}) if trace is not None else None
+        its_u, its_v, its_w, blocks_its = _its_momentum(ue_l, vn_l, w_l, mom_l, block_idx, n_blocks, max_lag, rung_trace)
+        its_vpts, blocks_its_vpts = _its_vpts(vpts_l, ts_l, block_idx, n_blocks, max_lag, rung_trace)
 
         values.append((rung_s, "u", "its", its_u))
         values.append((rung_s, "v", "its", its_v))

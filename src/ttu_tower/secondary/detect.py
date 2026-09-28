@@ -29,12 +29,20 @@ def _result(status: str, *, tau_s=np.nan, tau_lb_s=np.nan, sign: int = 0, peak_s
                       float(reversal_scale_s), reversal_type)
 
 
-def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, cfg_det) -> Detection:
+def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, cfg_det,
+           trace: dict | None = None) -> Detection:
     """One cospectrum's status, tau (or its lower bound), sign and peak/reversal
     scales. `D`, `SE`, `N` are the mode 1..K rows of the `mrd` table for this
     (slot, boom, variant, spectrum), ordered by ascending scale. Mode scales
     are rederived from K = len(D), so the caller need not pass them.
+
+    `trace`, if given, is filled as detection proceeds (so an early return
+    leaves later keys absent): "scales", "i_lo", "i_top", "u", "lo", "hi"
+    (1-indexed modes), "d_smooth"/"se_smooth" (dicts keyed by mode), "k_se",
+    "peak" and "reversal" ((mode, type)).
     """
+    if trace is None:
+        trace = {}
     if not family_has_data:
         return _result("no_data")
 
@@ -57,6 +65,7 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
             break
 
     lo, hi = i_lo, u - 1  # R = [lo, hi], inclusive; empty if hi < lo
+    trace.update(scales=scales, i_lo=i_lo, i_top=i_top, u=u, lo=lo, hi=hi, k_se=cfg_det.peak_significance_se)
 
     d_smooth: dict[int, float] = {}
     se_smooth: dict[int, float] = {}
@@ -65,6 +74,8 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
         wsum = sum(w for w, _ in members)
         d_smooth[i] = sum(w * D[j - 1] for w, j in members) / wsum
         se_smooth[i] = np.sqrt(sum((w * SE[j - 1]) ** 2 for w, j in members)) / wsum
+
+    trace.update(d_smooth=d_smooth, se_smooth=se_smooth)
 
     def significant(i: int) -> bool:
         return d_smooth[i] != 0 and abs(d_smooth[i]) >= cfg_det.peak_significance_se * se_smooth[i]
@@ -85,6 +96,7 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
             return _result("weak")
 
     sigma = int(np.sign(d_smooth[p]))
+    trace["peak"] = p
 
     # A reversal is accepted on sight almost everywhere - deliberately, so
     # contamination sharing the turbulent flux's sign gets cut off as soon as
@@ -110,6 +122,7 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
             reversal = (r, "increase")
             break
 
+    trace["reversal"] = reversal
     if reversal is not None:
         r, reversal_type = reversal
         tau_s = max(scale(r - 1), cfg_det.min_tau_s)

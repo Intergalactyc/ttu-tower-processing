@@ -70,3 +70,46 @@ def test_write_run_summary(tmp_path):
     data = json.loads((tmp_path / "run_summary.json").read_text())
     assert data["status_counts"] == {"success": 3}
     assert data["totals"]["files_loaded"] == 10
+
+
+def test_write_run_meta_records_git_dirty(tmp_path):
+    write_run_meta(tmp_path, stage="primary", tag="t", config_hash="abc", upstream_hash=None,
+                    package_version="2.0.0", timezone="Etc/GMT+6")
+    meta = read_run_meta(tmp_path)
+    assert "git_dirty" in meta
+    assert meta["git_dirty"] in (True, False, None)
+
+
+def test_git_helpers_outside_a_checkout_return_none(tmp_path):
+    from ttu_tower.io.stage import git_commit, git_dirty
+
+    assert git_commit(cwd=tmp_path) is None
+    assert git_dirty(cwd=tmp_path) is None
+
+
+def test_write_config_copies_copies_toml_and_resolves(tmp_path):
+    import json
+
+    from ttu_tower.config import config_from_dict
+    from ttu_tower.io.stage import write_config_copies
+
+    cfg = config_from_dict({"tag": "t", "paths": {"raw_dirs": ["/data"]}, "files": {"bad_records": []}})
+    toml_path = tmp_path / "t.toml"
+    toml_path.write_text("tag = \"t\"\n# a comment kept verbatim\n")
+    stage_dir = tmp_path / "run" / "primary"
+
+    write_config_copies(stage_dir, cfg, toml_path)
+
+    assert (stage_dir / "config.toml").read_text() == toml_path.read_text()
+    resolved = json.loads((stage_dir / "config.resolved.json").read_text())
+    assert config_from_dict(resolved) == cfg
+
+
+def test_write_config_copies_without_a_config_file_writes_only_resolved(tmp_path):
+    from ttu_tower.config import config_from_dict
+    from ttu_tower.io.stage import write_config_copies
+
+    cfg = config_from_dict({"tag": "t", "paths": {"raw_dirs": ["/data"]}, "files": {"bad_records": []}})
+    write_config_copies(tmp_path, cfg, tmp_path / "missing.toml")
+    assert not (tmp_path / "config.toml").exists()
+    assert (tmp_path / "config.resolved.json").is_file()

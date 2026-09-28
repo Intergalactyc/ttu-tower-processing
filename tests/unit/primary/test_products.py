@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from ttu_tower.config import config_from_dict
 from ttu_tower.math.polar import bearing_to_vector
@@ -107,3 +108,20 @@ def test_unexcised_trigger_reaches_neighbouring_slots():
 
     assert out_202["slot_boom"]["unexcised_computed"].any()
     assert not out_205["slot_boom"]["unexcised_computed"].any()
+
+
+def test_window_helpers_match_the_documented_windows():
+    from ttu_tower.primary.products import detection_window, ladder_window
+
+    k = 1000
+    assert detection_window(k) == (30000 * k - 35 * 60 * 50, 80 * 60 * 50)
+    assert ladder_window(k) == (30000 * k - 5 * 60 * 50, 20 * 60 * 50)
+
+
+def test_assemble_series_window_rejects_unknown_variants():
+    from ttu_tower.primary.products import assemble_series_window
+
+    with pytest.raises(ValueError):
+        assemble_series_window({}, "none", 0, 10)
+    series, masks = assemble_series_window({}, "naive", 0, 10)
+    assert np.isnan(series["ue"]).all() and not masks["momentum"].any()

@@ -65,3 +65,14 @@ def test_manifest_write_and_read(tmp_path):
 
 def test_read_manifest_missing_directory(tmp_path):
     assert store.read_manifest(tmp_path / "missing") == {}
+
+
+def test_read_paths_reads_only_the_given_fragments(tmp_path):
+    for key, boom in (("a", 1), ("b", 2), ("c", 3)):
+        store.write_fragment(tmp_path, key, pd.DataFrame({"boom": [boom], "value": [float(boom)]}))
+    df = store.read_paths([tmp_path / "a.parquet", tmp_path / "c.parquet"])
+    assert sorted(df["boom"].tolist()) == [1, 3]
+
+
+def test_read_paths_empty_list(tmp_path):
+    assert store.read_paths([], columns=["boom"]).empty

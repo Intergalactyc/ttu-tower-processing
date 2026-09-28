@@ -35,11 +35,18 @@ def read_table(table_dir: Path, columns: list[str] | None = None, filter=None) -
     table_dir = Path(table_dir)
     if not table_dir.is_dir():
         return pd.DataFrame(columns=columns)
-    paths = sorted(table_dir.glob("*.parquet"))
+    return read_paths(sorted(table_dir.glob("*.parquet")), columns=columns, filter=filter)
+
+
+def read_paths(paths, columns: list[str] | None = None, filter=None) -> pd.DataFrame:
+    """Read the given fragment files as one table, unifying their schemas the
+    same way `read_table` does.
+    """
+    paths = [str(p) for p in paths]
     if not paths:
         return pd.DataFrame(columns=columns)
     schema = pa.unify_schemas([pq.read_schema(p) for p in paths])
-    dataset = pa_dataset.dataset(str(table_dir), format="parquet", schema=schema)
+    dataset = pa_dataset.dataset(paths, format="parquet", schema=schema)
     return dataset.to_table(columns=columns, filter=filter).to_pandas()
 
 

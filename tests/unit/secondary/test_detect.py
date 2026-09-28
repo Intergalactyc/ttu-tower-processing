@@ -183,3 +183,24 @@ def test_significant_reversal_at_the_floor_still_floors():
     assert r.reversal_scale_s == pytest.approx(P[3])
     assert r.reversal_type == "sign"
     assert r.tau_s == pytest.approx(_CFG.min_tau_s)
+
+
+def test_trace_does_not_change_the_result_and_records_peak_and_reversal():
+    d = np.asarray(_SIGN_TYPE, dtype=np.float64)
+    se, n = np.full(d.size, 0.05), _n_default()
+    trace = {}
+    traced, plain = detect(d, se, n, True, _CFG, trace=trace), detect(d, se, n, True, _CFG)
+    for name, a in vars(plain).items():
+        b = getattr(traced, name)
+        assert a == b or (isinstance(a, float) and np.isnan(a) and np.isnan(b)), name
+    p = trace["peak"]
+    assert P[p - 1] == pytest.approx(P[5])
+    assert trace["reversal"] == (10, "sign")
+    assert abs(trace["d_smooth"][p]) >= trace["k_se"] * trace["se_smooth"][p]
+    assert trace["lo"] <= p <= trace["hi"]
+
+
+def test_trace_on_no_data_is_left_empty():
+    trace = {}
+    detect(np.zeros(15), np.zeros(15), _n_default(), False, _CFG, trace=trace)
+    assert trace == {}

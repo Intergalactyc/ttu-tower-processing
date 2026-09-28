@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -61,6 +62,10 @@ def test_run_secondary_end_to_end(tmp_path, monkeypatch, raw_dir):
 
     assert summary["status_counts"]["processed"] > 0
     run_dir = find_home() / "results" / "sec_e2e"
+    for stage in ('primary', 'secondary'):
+        assert (run_dir / stage / "config.toml").read_text() == config_path.read_text()
+        with open(run_dir / stage / "config.resolved.json") as f:
+            assert config_from_dict(json.load(f)) == cfg
     tables = _read_all(run_dir)
 
     for name, df in tables.items():

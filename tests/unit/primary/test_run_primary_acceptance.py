@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -239,6 +240,9 @@ def test_statuses_cover_every_slot_boom_of_the_period(tmp_path, monkeypatch, raw
 
     run_dir = find_home() / "results" / "statuses"
     slot_boom = read_table(run_dir / "primary" / "data" / "slot_boom")
+    with open(run_dir / "primary" / "config.resolved.json") as f:
+        assert config_from_dict(json.load(f)) == cfg
+    assert not (run_dir / "primary" / "config.toml").exists()  # this test never writes its toml
 
     period_half_hours = range(_HALF_HOURS[0] + 1, _HALF_HOURS[-1])
     expected_slots = {3 * h + i for h in period_half_hours for i in range(3)}

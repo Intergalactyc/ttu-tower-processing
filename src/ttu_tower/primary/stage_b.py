@@ -20,7 +20,8 @@ from ttu_tower.primary.slow import hann_kernel, smooth, vpts as compute_vpts
 from ttu_tower.primary.stage_a import StageA, couple_triplet
 from ttu_tower.timegrid import BlockGrid, SAMPLES_PER_HALF_HOUR, SAMPLES_PER_SLOT
 
-_SONIC_TS = ("ue", "vn", "w", "ts")  # despiked and gap-filled; QC windows applied
+_SONIC = ("ue", "vn", "w")
+_SONIC_TS = _SONIC + ("ts",)  # despiked and gap-filled; QC windows applied
 _SLOW = ("t", "rh", "p")  # despiked, then smoothed
 _ALL_DESPIKED = _SONIC_TS + _SLOW
 _MASK_VARS = ("ue", "vn", "w", "ts", "vpts")  # participate in first/second-layer masking
@@ -115,11 +116,30 @@ def _slot_flag_intervals(flag: np.ndarray, slots: list[int]) -> tuple[np.ndarray
     return starts, starts + SAMPLES_PER_SLOT
 
 
-def stage_b(span: Span, h: int, boom: int, cfg) -> StageBOut:
+def _record_trace(trace, core, despiked, despike_refs, despiked_x, filled_mask, slow_smoothed, l1_masks, final_masks_var):
+    trace["spike"] = {v: d.spike[core] for v, d in despiked.items()}
+    trace["excursion"] = {v: d.excursion[core] for v, d in despiked.items()}
+    trace["unchecked"] = {v: d.unchecked[core] for v, d in despiked.items()}
+    trace["coupled"] = {v: (np.isnan(despiked_x[v]) & ~np.isnan(despiked[v].x))[core] for v in _SONIC}
+    trace["despike_ref"] = {
+        v: (r["m"][core].astype(np.float32), r["mad"][core].astype(np.float32)) for v, r in despike_refs.items()
+    }
+    trace["filled_mask"] = {v: m[core] for v, m in filled_mask.items()}
+    trace["slow_smoothed"] = {v: (x[core], ok[core]) for v, (x, ok) in slow_smoothed.items()}
+    trace["l1_masks"] = {v: m[core] for v, m in l1_masks.items()}
+    trace["final_masks_var"] = dict(final_masks_var)
+
+
+def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> StageBOut:
     """The Stage B chain for half-hour `h`'s core, given its span. `cfg` is
     the full run Config. The core's position is derived from `span.g0` and
     `h` directly, not assumed to be centered - `span` need not be symmetric
     (a whole-file-run span, used to prove seam invariance, generally isn't).
+
+    `trace`, if given, receives core-sliced intermediates for inspection:
+    per-variable spike/excursion/unchecked/coupled/filled masks, the despike
+    reference (float32), the smoothed slow series, and the first-layer and
+    final per-variable masks. It changes nothing that is returned.
     """
     core_g0 = SAMPLES_PER_HALF_HOUR * h
     core_lo = core_g0 - span.g0
@@ -143,9 +163,13 @@ def stage_b(span: Span, h: int, boom: int, cfg) -> StageBOut:
         clip_add("bounds", var, *mask_to_intervals(mask, g0=core_g0))
 
     # 1. despike every variable; couple the ue/vn/w triplet's spike removals
-    despiked = {}
+    despiked, despike_refs = {}, {}
     for var in _ALL_DESPIKED:
-        despiked[var] = despike(span.series[var], span.g0, qc.despike, qc.despike.min_mad[var], qc.despike.z_threshold[var], c)
+        extra = {}
+        if trace is not None:
+            despike_refs[var] = extra["trace"] = {}
+        despiked[var] = despike(span.series[var], span.g0, qc.despike, qc.despike.min_mad[var], qc.despike.z_threshold[var], c,
+                                **extra)
         clip_add("spike", var, *mask_to_intervals(despiked[var].spike, g0=span.g0))
         clip_add("excursion", var, *mask_to_intervals(despiked[var].excursion, g0=span.g0))
         clip_add("unchecked", var, *mask_to_intervals(despiked[var].unchecked, g0=span.g0))
@@ -296,6 +320,9 @@ def stage_b(span: Span, h: int, boom: int, cfg) -> StageBOut:
         for var, stat, value in slot_means(final_series, masks_for_means, slow_for_means, core_g0, k, cfg.ladder, c):
             means_rows.append((k, boom, var, stat, value))
     means_df = schema.cast("means", pd.DataFrame(means_rows, columns=["slot", "boom", "variable", "stat", "value"]))
+
+    if trace is not None:
+        _record_trace(trace, core, despiked, despike_refs, despiked_x, filled_mask, slow_smoothed, l1_masks, final_masks_var)
 
     return StageBOut(
         coverage=coverage_df, means=means_df, slot_qc=slot_qc_df, flags=flag_rows.frame(), mask_differs=mask_differs,

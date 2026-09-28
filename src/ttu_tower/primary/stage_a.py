@@ -89,6 +89,9 @@ def rotate_to_earth(u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarra
     return v, -u
 
 
+_EARTH_NAMES = {"u": "ue", "v": "vn"}
+
+
 @dataclass
 class StageA:
     ue: np.ndarray
@@ -108,4 +111,6 @@ def stage_a(raw: dict[str, np.ndarray], boom: int, cfg) -> StageA:
     u, v, w = couple_triplet(si["u"], si["v"], si["w"])
     u, v, w = tilt_correct(u, v, w, boom)
     ue, vn = rotate_to_earth(u, v)
+    # the triplet's bounds mask is shared, so it transfers to the rotated components as-is
+    removed = {_EARTH_NAMES.get(var, var): mask for var, mask in removed.items()}
     return StageA(ue=ue, vn=vn, w=w, ts=si["ts"], t=si["t"], rh=si["rh"], p=si["p"], bounds_removed=removed)

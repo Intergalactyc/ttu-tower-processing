@@ -209,3 +209,65 @@ def test_flags_are_clipped_to_the_core():
     core_g0 = SAMPLES_PER_HALF_HOUR * 100
     assert (out.flags["start"] >= core_g0).all()
     assert (out.flags["end"] <= core_g0 + SAMPLES_PER_HALF_HOUR).all()
+
+
+# --- trace ---------------------------------------------------------------------------
+
+def _spiky_span():
+    def inject(values):
+        values["ue"][20_000] += 30.0  # a lone ue spike: vn and w lose that sample by coupling
+        values["ts"][40_000] += 20.0
+        return values
+
+    a99, a100, a101 = _stage_a(seed=0), _stage_a(seed=100, mutate=inject), _stage_a(seed=200)
+    return build_span({99: a99, 100: a100, 101: a101}, h=100, margin=30_000)
+
+
+def test_trace_does_not_change_the_output():
+    cfg = _cfg()
+    span = _spiky_span()
+    plain = stage_b(span, h=100, boom=1, cfg=cfg)
+    trace = {}
+    traced = stage_b(span, h=100, boom=1, cfg=cfg, trace=trace)
+
+    for attr in ("coverage", "means", "slot_qc", "flags"):
+        assert getattr(traced, attr).equals(getattr(plain, attr)), attr
+    for var in plain.final_series:
+        np.testing.assert_array_equal(traced.final_series[var], plain.final_series[var])
+    for fam in plain.final_masks:
+        np.testing.assert_array_equal(traced.final_masks[fam], plain.final_masks[fam])
+
+
+def test_trace_contents_are_core_sliced_and_consistent():
+    cfg = _cfg()
+    trace = {}
+    out = stage_b(_spiky_span(), h=100, boom=1, cfg=cfg, trace=trace)
+
+    assert trace["spike"]["ue"].size == N
+    assert trace["spike"]["ue"][20_000] and trace["spike"]["ts"][40_000]
+    assert trace["coupled"]["vn"][20_000] and trace["coupled"]["w"][20_000]
+    assert not trace["coupled"]["ue"][20_000]  # ue lost it to its own despike, not to coupling
+    assert trace["filled_mask"]["ue"][20_000]  # a lone removed sample is refilled by fill_short
+    assert trace["despike_ref"]["ue"][0].dtype == np.float32
+
+    fm = trace["final_masks_var"]
+    np.testing.assert_array_equal(fm["ue"] & fm["vn"] & fm["w"], out.final_masks["momentum"])
+    np.testing.assert_array_equal(fm["ts"], out.final_masks["ts"])
+    np.testing.assert_array_equal(fm["w"] & fm["vpts"], out.final_masks["heat"])
+
+
+def test_sonic_bounds_flags_use_earth_frame_names():
+    from ttu_tower.primary.stage_a import stage_a
+
+    cfg = _cfg()
+    rng = np.random.default_rng(5)
+    raw = {"u": rng.normal(10, 1, N), "v": rng.normal(0, 1, N), "w": rng.normal(0, 0.2, N),
+           "ts": rng.normal(60, 0.5, N), "t": rng.normal(60, 0.1, N), "rh": rng.normal(50, 1, N),
+           "p": rng.normal(26.6, 0.01, N)}
+    raw["u"][500] = 500.0  # far outside the sonic bounds, in source units
+    a = stage_a(raw, 1, cfg.qc)
+    assert set(a.bounds_removed) == set(_VARS)
+
+    out = stage_b(build_span({100: a}, h=100, margin=30_000), h=100, boom=1, cfg=cfg)
+    bounds = out.flags[out.flags["test"] == "bounds"]
+    assert set(bounds["variable"].astype(str)) == {"ue", "vn", "w"}

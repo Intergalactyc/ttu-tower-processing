@@ -117,3 +117,19 @@ def test_translation_invariance_margin_vs_wider_margin():
     assert np.array_equal(small.spike[sl], large.spike[ll])
     assert np.array_equal(small.excursion[sl], large.excursion[ll])
     assert np.array_equal(small.unchecked[sl], large.unchecked[ll])
+
+
+def test_trace_records_reference_without_changing_the_result():
+    rng = np.random.default_rng(3)
+    x = rng.normal(0, 1, 30000)
+    x[12000] = 40.0
+    plain = despike(x, 0, _cfg(), min_mad=0.0, z_threshold=3.5, c=0.75)
+    trace = {}
+    traced = despike(x, 0, _cfg(), min_mad=0.0, z_threshold=3.5, c=0.75, trace=trace)
+
+    np.testing.assert_array_equal(traced.x, plain.x)
+    np.testing.assert_array_equal(traced.spike, plain.spike)
+    assert trace["m"].shape == x.shape and trace["mad"].shape == x.shape
+    # the recorded reference is the one the outlier test used
+    z = 0.6745 * np.abs(x - trace["m"]) / trace["mad"]
+    assert z[12000] > 3.5

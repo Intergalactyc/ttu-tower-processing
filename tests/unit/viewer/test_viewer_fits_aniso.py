@@ -137,3 +137,20 @@ def test_unfiltered_tower_wind_is_the_first_layer_means(full_run):
     assert windrose.parse_bearings("105, 170; 400") == [105.0, 170.0, 40.0]
     with pytest.raises(ValueError):
         windrose.parse_bearings("north")
+
+
+def test_alpha_ri_fit_recovers_its_branches_and_honours_its_settings():
+    alpha0, (a_s, b_s), (a_u, b_u), ri_c = 0.15, (5.0, 0.6), (-2.0, -0.3), 0.25
+    x = np.concatenate([np.zeros(5), np.linspace(0.06, 0.24, 60), np.linspace(-2.0, -0.06, 60), np.linspace(0.3, 1, 10)])
+    crit = alpha0 * (1 + a_s * ri_c) ** b_s
+    y = np.where(x >= ri_c, crit, np.where(x > 0, alpha0 * (1 + a_s * x) ** b_s, alpha0 * (1 + a_u * x) ** b_u))
+    y[x == 0] = alpha0
+    result = curvefits.fit(curvefits.ALPHA_RI, x, y)
+    for key, value in (("alpha0", alpha0), ("a_stable", a_s), ("b_stable", b_s), ("a_unstable", a_u),
+                       ("b_unstable", b_u), ("alpha_critical", crit)):
+        assert result.params[key] == pytest.approx(value, rel=1e-4), key
+    assert result.params["mean_high_ri"] == pytest.approx(crit)
+    shifted = curvefits.fit(curvefits.ALPHA_RI, x, y, ri_critical=0.2)
+    assert shifted.func(np.array([0.22]))[0] == pytest.approx(shifted.params["alpha_critical"])  # held above Ri_c
+    with pytest.raises(ValueError, match="stable"):
+        curvefits.fit(curvefits.ALPHA_RI, x[x <= 0], y[x <= 0])

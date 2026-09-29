@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.primary.rawrung import RUNG_SECONDS
 from ttu_tower.viewer.slotdata import rung_scales, stored_selection
+from ttu_tower.viewer.ui import tables
 from ttu_tower.viewer.ui.axes import Log10Axis
 
 _VARS = (("u", "#1f4e9c"), ("v", "#b3123f"), ("w", "#2a8a4a"), ("vpts", "#8a5a00"))
@@ -80,6 +81,8 @@ class ScalesTab(QWidget):
             or variant != self.variant
         self.bundle, self.variant, self.cfg = bundle, variant, cfg
         self.reprocessor, self.runner, self.focus_vars = reprocessor, runner, tuple(focus_vars)
+        self.acf_button.setEnabled(reprocessor is not None)
+        self.acf_button.setToolTip("" if reprocessor is not None else "reprocessing is disabled for this run")
         if changed:
             self.acf_trace = None
             self.acf_plot.clear()
@@ -153,7 +156,7 @@ class ScalesTab(QWidget):
         self.table.setVerticalHeaderLabels([f"{r:g} s" for r in scales.index])
         for i, (_, row) in enumerate(scales.iterrows()):
             for j, v in enumerate(row):
-                text = v if isinstance(v, str) else ("" if v is None or np.isnan(v) else f"{v:.4g}")
+                text = v if isinstance(v, str) else ("" if v is None or np.isnan(v) else tables.number(v))
                 self.table.setItem(i, j, QTableWidgetItem(text))
 
     # --- ACFs ------------------------------------------------------------------------------------

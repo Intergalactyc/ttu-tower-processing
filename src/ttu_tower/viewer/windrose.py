@@ -72,7 +72,7 @@ def in_range(wind: Wind, x_range) -> Wind:
     return Wind(wind.slots[keep], wind.ws[keep], wind.wd[keep])
 
 
-def rose(ws: np.ndarray, wd: np.ndarray, sectors: int = 16, speed_edges=SPEED_EDGES) -> np.ndarray:
+def rose(ws: np.ndarray, wd: np.ndarray, sectors: int = 36, speed_edges=SPEED_EDGES) -> np.ndarray:
     """sectors x speed-bins percentages of all values; sector 0 is centred on
     north, then clockwise.
     """

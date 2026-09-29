@@ -18,6 +18,16 @@ _VARIANT_LABELS = {"none": "—", "mrd": "mrd (selected τ)", "naive": "naive (1
 STYLES = ("lines", "points", "lines + points")
 
 
+def default_pairs(q: Quantity) -> list:
+    """The pairs a pair quantity starts with: veer against its reference boom
+    for every other boom, Ri_b and the lapse rate over 2-4.
+    """
+    if q.variable == "veer":
+        refs = {b2 for _, b2 in q.pairs}
+        return [p for p in q.pairs if p[0] != p[1]] if len(refs) == 1 else list(q.pairs[:1])
+    return [p for p in q.pairs if p == (2, 4)] or list(q.pairs[:1])
+
+
 @dataclass
 class PanelSpec:
     quantity: Quantity | None = None
@@ -38,6 +48,7 @@ class PanelControls(QWidget):
         self.catalog: Catalog | None = None
         self.booms: list[int] = []
         self._quiet = False
+        self._pairs_chosen: dict[str, list] = {}  # quantity key -> the pairs last checked for it
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("search quantities…")
@@ -68,7 +79,7 @@ class PanelControls(QWidget):
         grid.addLayout(buttons, 5, 0, 1, 2)
 
         self.pair_list = QListWidget()
-        self.pair_list.itemChanged.connect(lambda *_: self._emit())
+        self.pair_list.itemChanged.connect(lambda *_: self._on_pairs_changed())
         self.members = QStackedWidget()
         self.members.addWidget(boom_page)
         self.members.addWidget(self.pair_list)
@@ -113,6 +124,7 @@ class PanelControls(QWidget):
     def set_catalog(self, catalog: Catalog, booms: list[int]) -> None:
         self._quiet = True
         self.catalog, self.booms = catalog, list(booms)
+        self._pairs_chosen = {}
         self.tree.clear()
         for group, quantities in catalog.grouped().items():
             parent = QTreeWidgetItem([group])
@@ -125,6 +137,7 @@ class PanelControls(QWidget):
             self.tree.addTopLevelItem(parent)
         for b, box in self.boom_boxes.items():
             box.setEnabled(b in self.booms)
+            box.setChecked(b in self.booms)
         self._quiet = False
 
     def select(self, key: str, variant: str | None = None, members=None) -> None:
@@ -192,18 +205,25 @@ class PanelControls(QWidget):
 
         self.members.setCurrentIndex({"boom": 0, "pair": 1, "slot": 2}[q.kind])
         if q.kind == "pair":
-            checked = set(self._checked_pairs())
+            checked = set(self._pairs_chosen.get(q.key) or default_pairs(q))
             self.pair_list.blockSignals(True)
             self.pair_list.clear()
             for pair in q.pairs:
                 item = QListWidgetItem(f"b{pair[0]} – b{pair[1]}")
                 item.setData(Qt.ItemDataRole.UserRole, pair)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                on = pair in checked or (not checked and pair == q.pairs[0])
-                item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+                item.setCheckState(Qt.CheckState.Checked if pair in checked else Qt.CheckState.Unchecked)
                 self.pair_list.addItem(item)
             self.pair_list.blockSignals(False)
         self.log_y.setEnabled(not q.categorical)
+        self.style.setEnabled(not q.categorical)
+        self.style.setToolTip("categories are drawn as points" if q.categorical else "how the curves are drawn")
+
+    def _on_pairs_changed(self) -> None:
+        q = self.current_quantity()
+        if q is not None and q.kind == "pair":
+            self._pairs_chosen[q.key] = self._checked_pairs()
+        self._emit()
 
     def _checked_pairs(self) -> list:
         out = []

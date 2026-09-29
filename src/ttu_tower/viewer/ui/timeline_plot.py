@@ -5,13 +5,13 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor, QFontMetrics
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QToolButton, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QVBoxLayout, QWidget
 
 from ttu_tower.viewer.decimate import break_wraps, nearest_on_curve
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, unix_to_slot
-from ttu_tower.viewer.timeline import Curve, FilteredOverlay, TimelineData
-from ttu_tower.viewer.ui import style
-from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator
+from ttu_tower.viewer.timeline import Curve, FilteredOverlay, TimelineData, values_at as _values_at
+from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator, pass_clicks
 
 PICK_RADIUS_PX = 8.0
 MIN_AXIS_WIDTH = 60
@@ -65,8 +65,11 @@ class LegendBar(QWidget):
             btn.setToolTip((tips[i] + " · " if tips and tips[i] else "") + "click: show/hide · right-click: only this")
             btn.setCheckable(True)
             btn.setChecked(True)
-            btn.setStyleSheet(f"QToolButton {{ color: {color.name()}; font-weight: bold; }}"
-                              "QToolButton:!checked { color: #bbbbbb; font-weight: normal; }")
+            # shown: a dark outline around a pale fill (a dark fill would hide the dark booms' colors)
+            btn.setStyleSheet(f"QToolButton {{ color: {color.name()}; font-weight: bold; background: #f7f7f7;"
+                              " border: 1.5px solid #444444; border-radius: 3px; padding: 1px 4px; }"
+                              "QToolButton:!checked { color: #bbbbbb; font-weight: normal; background: transparent;"
+                              " border: 1px solid #dddddd; }")
             btn.toggled.connect(lambda *_: self.toggled.emit())
             btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             btn.customContextMenuRequested.connect(lambda _pos, m=member: self.solo(m))
@@ -96,6 +99,7 @@ class TimelinePlot(QWidget):
     pointClicked = Signal(int, object)  # slot, member
     filteredClicked = Signal(int, object)  # slot, member of a value tertiary filtered
     hovered = Signal(int, str)  # slot, values of the visible curves there
+    alsoHere = Signal(str)  # the other curves a click landed on, when several coincide
 
     def __init__(self, tz: str = "Etc/GMT+6", parent=None):
         super().__init__(parent)
@@ -180,6 +184,7 @@ class TimelinePlot(QWidget):
             item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.2) if pen_on else None,
                                    symbol=symbol or ("o" if q.categorical else None), symbolSize=MARKER_SIZE,
                                    symbolBrush=color, symbolPen=None, connect="finite")
+            pass_clicks(item)
             self.plot_item.addItem(item)
             self.items[member] = item
             self.curves[member] = curve
@@ -253,6 +258,7 @@ class TimelinePlot(QWidget):
             cross = pg.PlotDataItem(curve.x[ok], y[ok], pen=None, symbol="x", symbolSize=MARKER_SIZE + 1,
                                     symbolPen=None, symbolBrush=style.member_color(member, i))
             for z, it in ((-5, ring), (-4, cross)):
+                pass_clicks(it)
                 it.setZValue(z)
                 it.setVisible(member in visible)
                 self.plot_item.addItem(it)
@@ -281,6 +287,7 @@ class TimelinePlot(QWidget):
                       "pen": pg.mkPen(TAU_MARKS[st][1]), "size": MARKER_SIZE + 4}
                      for xi, yi, st in zip(x, y, statuses)]
             item = pg.ScatterPlotItem(spots=spots)
+            pass_clicks(item)
             item.setZValue(5)
             item.setVisible(member in visible)
             self.plot_item.addItem(item)
@@ -291,7 +298,7 @@ class TimelinePlot(QWidget):
     def _update_key(self) -> None:
         parts = []
         if self.filtered_items:
-            parts.append(f"<span style='color:{FILTERED_COLOR}'>⊗ filtered (value before; x in the boom's color)</span>")
+            parts.append(f"<span style='color:{FILTERED_COLOR}'>⊗ filtered</span>")
         if self.tau_items:
             parts.append("τ " + " ".join(f"<span style='color:{TAU_MARKS[s][1]}'>{g} {s}</span>"
                                          for s, g in _TAU_GLYPHS.items()))
@@ -331,9 +338,9 @@ class TimelinePlot(QWidget):
         point (or drawn line) within the pick radius of a view position, nearest
         first; kind is "value", or "filtered" for a ghosted pre-filter value.
         """
-        px, py = self.vb.viewPixelSize()
-        if not px or not py or self.data is None:
+        if self.data is None:
             return []
+        px, py = self._pixel_size()
         circular = self.data.quantity.circular
         hits = []
         for member in self.visible_members():
@@ -362,16 +369,27 @@ class TimelinePlot(QWidget):
     def _emit(self, slot: int, member, kind: str) -> None:
         (self.filteredClicked if kind == "filtered" else self.pointClicked).emit(slot, member)
 
+    def _pixel_size(self) -> tuple[float, float]:
+        """View units per pixel; a flat (zero-height) view still picks points exactly on it."""
+        px, py = self.vb.viewPixelSize()
+        (x0, x1), (y0, y1) = self.vb.viewRange()
+        tiny = 1e-12
+        px = px if px and np.isfinite(px) else max(abs(x0), abs(x1), 1.0) * tiny
+        py = py if py and np.isfinite(py) else max(abs(y0), abs(y1), 1.0) * tiny
+        return px, py
+
     def _resolve(self, hits, screen_pos) -> None:
+        """Open the nearest point; where several curves coincide there, the one
+        drawn on top (the others are named, and are a boom switch away in the
+        inspector).
+        """
         near = [h for h in hits if h[0] - hits[0][0] <= AMBIGUOUS_PX]
-        if len(near) == 1:
-            self._emit(*near[0][1:])
-            return
-        menu = QMenu(self)
-        for _, slot, member, kind in near:
-            act = menu.addAction((style.member_label(member) or "value") + (" (filtered)" if kind == "filtered" else ""))
-            act.triggered.connect(lambda _=False, s=slot, m=member, k=kind: self._emit(s, m, k))
-        menu.popup(screen_pos.toPoint())
+        order = {m: i for i, m in enumerate(self.visible_members())}
+        chosen = max(near, key=lambda h: (h[3] == "value", order.get(h[2], -1)))
+        others = [style.member_label(h[2]) for h in near if h is not chosen and h[2] != chosen[2]]
+        if others:
+            self.alsoHere.emit(f"also at this point: {', '.join(others)} (switch boom in the inspector)")
+        self._emit(*chosen[1:])
 
     def _on_mouse_moved(self, scene_pos) -> None:
         if not self.vb.sceneBoundingRect().contains(scene_pos) or not self.curves:
@@ -385,7 +403,7 @@ class TimelinePlot(QWidget):
             i = int(np.searchsorted(curve.slots, slot))
             if i < curve.slots.size and curve.slots[i] == slot and np.isfinite(curve.y[i]):
                 v = curve.y[i]
-                text = cats[int(v)] if cats else f"{v:.4g}"
+                text = cats[int(v)] if cats else tables.number(v)
                 parts.append(f"{style.member_label(member) or 'value'}: {text}")
             note = self._overlay_note(slot, member)
             if note:
@@ -412,7 +430,7 @@ class TimelinePlot(QWidget):
         """A tooltip naming why a ghosted value was filtered, or its tau status."""
         best = None
         if self.filtered_items or self.tau_items:
-            px, py = self.vb.viewPixelSize()
+            px, py = self._pixel_size()
             for member in self.visible_members():
                 layers = []
                 if member in self.filtered_items:
@@ -435,12 +453,3 @@ class TimelinePlot(QWidget):
             QToolTip.hideText()
             self._tip_shown = False
 
-
-def _values_at(curve: Curve, slots: np.ndarray) -> np.ndarray:
-    """The curve's value at each slot (NaN where it has none)."""
-    y = np.full(slots.size, np.nan)
-    if curve.slots.size:
-        i = np.clip(np.searchsorted(curve.slots, slots), 0, curve.slots.size - 1)
-        hit = curve.slots[i] == slots
-        y[hit] = curve.y[i[hit]]
-    return y

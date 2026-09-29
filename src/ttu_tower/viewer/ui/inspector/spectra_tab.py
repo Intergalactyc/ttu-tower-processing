@@ -62,6 +62,15 @@ class SpectraTab(QWidget):
         self.bundle, self.variant, self.cfg, self.emphasis = bundle, variant, cfg, emphasis
         self.redraw()
 
+    def _enable_controls(self, mrd_variant: str) -> None:
+        """Grey out what the current view can't show."""
+        ogive = self.mode.currentData() == "ogive"
+        for key in ("se", "detection"):
+            self.boxes[key].setEnabled(not ogive)
+            self.boxes[key].setToolTip("drawn on the per-mode values only" if ogive else "")
+        self.boxes["unexcised"].setEnabled(mrd_variant == "mrd")
+        self.boxes["unexcised"].setToolTip("" if mrd_variant == "mrd" else "these already are the unexcised spectra")
+
     # --- drawing -------------------------------------------------------------------------------
 
     def redraw(self) -> None:
@@ -72,6 +81,7 @@ class SpectraTab(QWidget):
             self.info.setText("no spectra for this slot")
             return
         mrd_variant = spectrum_variant(b, self.variant)
+        self._enable_controls(mrd_variant)
         views, rerun_sel = rerun_detection(b, self.variant, self.cfg.secondary)
         stored_sel = stored_selection(b, self.variant)
         self._describe(views, rerun_sel, stored_sel, mrd_variant)

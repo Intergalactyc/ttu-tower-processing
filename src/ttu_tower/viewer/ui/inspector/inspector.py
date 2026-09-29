@@ -34,6 +34,7 @@ def _num(df, **eq):
 
 class InspectorWindow(QWidget):
     closed = Signal(object)
+    loaded = Signal(bool)  # the slot's stored rows arrived (True) or couldn't be read (False)
 
     def __init__(self, run, index, reprocessor, runner, parent=None):
         super().__init__(parent)
@@ -109,14 +110,15 @@ class InspectorWindow(QWidget):
 
     def show_slot(self, boom: int, slot: int, tab: str = "series", mode: str | None = None, variables=None,
                   context: str = "", frame: str | None = None, emphasis: str | None = None, focus_vars=(),
-                  variant: str | None = None) -> None:
+                  variant: str | None = None, show=()) -> None:
         self.boom, self.slot = boom, slot
         self.emphasis, self.focus_vars, self._auto_acf = emphasis, tuple(focus_vars), tab == "scales"
         self._set_combo(self.boom_box, boom)
         if variant is not None:
             self._set_combo(self.variant_box, variant if variant != "none" else "mrd")
         if self.reprocessor is not None:
-            self.series.set_focus(boom, slot, mode=mode, variables=variables, context=context, frame=frame)
+            self.series.set_focus(boom, slot, mode=mode, variables=variables, context=context, frame=frame,
+                                  show=show)
         self.tabs.setCurrentIndex(TABS.index(tab))
         self._load()
         self.bring_to_front()
@@ -171,13 +173,17 @@ class InspectorWindow(QWidget):
                            f"{format_slot(self.slot, self.run.timezone)} (k = {self.slot})")
         self.summary.setText("loading…")
         self.runner.submit(load_slot, self.index, self.slot, self.boom, self.run.booms, key=f"inspect-{id(self)}",
-                           label="reading the slot", on_done=self._loaded,
-                           on_error=lambda exc, tb: self.summary.setText(f"could not read the slot: {exc}"))
+                           label="reading the slot", on_done=self._loaded, on_error=self._load_failed, priority=10)
+
+    def _load_failed(self, exc, tb) -> None:
+        self.summary.setText(f"could not read the slot: {exc}")
+        self.loaded.emit(False)
 
     def _loaded(self, bundle) -> None:
         if self._closed or (bundle.slot, bundle.boom) != (self.slot, self.boom):
             return
         self.bundle = bundle
+        self.loaded.emit(True)
         self._refresh_tabs()
         self._ensure_across()
 
@@ -195,7 +201,7 @@ class InspectorWindow(QWidget):
         self.anisotropy.clear("reading every boom's rows…")
         self.runner.submit(load_across, self.index, self.slot, self.run.booms, key=f"across-{id(self)}",
                            label="reading the slot's booms", on_done=self._across_loaded,
-                           on_error=self._across_failed)
+                           on_error=self._across_failed, priority=10)
 
     def _across_failed(self, exc, tb) -> None:
         self._across_pending = None

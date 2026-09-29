@@ -91,6 +91,20 @@ def test_a_left_click_on_a_point_emits_it_at_once(window, qtbot):
     qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
 
 
+def test_a_mouse_click_right_on_a_drawn_marker_reaches_the_picker(window, qtbot):
+    plot = window.plots[0]
+    assert "points" in window.specs[0].style
+    member, slot, x, y = _a_point(plot)
+    _zoom_to(window, x)
+    emitted = []
+    plot.pointClicked.disconnect()
+    plot.pointClicked.connect(lambda s, m: emitted.append((s, m)))
+    pos = plot.widget.mapFromScene(plot.vb.mapViewToScene(QPointF(x, y)))
+    qtbot.mouseClick(plot.widget.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    qtbot.waitUntil(lambda: bool(emitted), timeout=5_000)
+    assert emitted == [(slot, member)]
+
+
 def test_log_toggle_and_boom_changes_keep_the_viewed_interval(window, qtbot):
     _, _, x, _ = _a_point(window.plots[0])
     window.set_x_range(x - 7200, x + 7200)
@@ -280,4 +294,37 @@ def test_qc_whatif_panel_reprocesses_and_marks_what_changed(window, qtbot):
     panel.reset()
     qtbot.waitUntil(lambda: series.whatif_rp is None and series.result.get("whatif") is None and _idle(window),
                     timeout=60_000)
+    inspector.close()
+
+
+def test_series_start_with_the_wind_and_sonic_theta_and_show_what_was_clicked(window, qtbot):
+    k = 3 * FAULT_HALF_HOUR + 1
+    inspector = window.inspect(1, k)
+    series = inspector.series
+    qtbot.waitUntil(lambda: series.result is not None and series.slot == k and _idle(window), timeout=60_000)
+    assert set(series.plots) == {"ue", "vn", "w", "vpts"}
+    assert not series.series_boxes["t"].isChecked() and series.series_boxes["vpts"].isChecked()
+    window.inspect(1, k, window.catalog["flags|spike|t"], "none")  # a value computed from T
+    qtbot.waitUntil(lambda: "t" in series.plots and _idle(window), timeout=60_000)
+    assert series.series_boxes["t"].isChecked()
+    inspector.close()
+
+
+def test_the_step_arrows_move_by_a_whole_or_half_interval(window):
+    _, _, x, _ = _a_point(window.plots[0])
+    window.set_x_range(x - 3600, x + 3600)
+    window.step(1.0)
+    assert window.x_range() == pytest.approx((x + 3600, x + 3 * 3600))
+    window.step(-0.5)
+    assert window.x_range() == pytest.approx((x, x + 2 * 3600))
+
+
+def test_opening_an_inspector_shows_a_busy_cursor_until_its_slot_is_read(window, qtbot):
+    from PySide6.QtWidgets import QApplication
+    inspector = window.inspect(1, 3 * FAULT_HALF_HOUR + 1)
+    assert QApplication.overrideCursor() is not None
+    assert "opening the Slot Inspector" in window.statusBar().currentMessage()
+    qtbot.waitUntil(lambda: inspector.bundle is not None, timeout=60_000)
+    assert QApplication.overrideCursor() is None and window.statusBar().currentMessage() == ""
+    qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
     inspector.close()

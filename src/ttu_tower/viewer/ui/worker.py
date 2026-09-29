@@ -1,7 +1,8 @@
 """Background jobs: run a function on a thread pool and deliver its result
 (or error) back on the GUI thread. A newer job under the same key supersedes
-an older one, whose result is then dropped - that's how navigating away
-"cancels" work.
+an older one: still queued, it's dropped; already running, its result is -
+that's how navigating away "cancels" work. Jobs someone is waiting on (an
+inspector opening) can jump the queue with a priority.
 """
 import itertools
 import logging
@@ -42,21 +43,35 @@ class JobRunner(QObject):
         self._ids = itertools.count(1)
         self._callbacks: dict[int, tuple] = {}
         self._latest: dict[str, int] = {}
+        self._jobs: dict[int, _Job] = {}  # kept alive until delivered, so a queued one can be taken back
 
-    def submit(self, fn, *args, on_done=None, on_error=None, key: str | None = None, label: str = "", **kwargs) -> int:
+    def submit(self, fn, *args, on_done=None, on_error=None, key: str | None = None, label: str = "",
+               priority: int = 0, **kwargs) -> int:
         job_id = next(self._ids)
         self._callbacks[job_id] = (on_done, on_error, key, label)
         if key is not None:
+            self._withdraw(self._latest.get(key))
             self._latest[key] = job_id
-        self.pool.start(_Job(job_id, fn, args, kwargs, self._signals))
+        job = _Job(job_id, fn, args, kwargs, self._signals)
+        job.setAutoDelete(False)
+        self._jobs[job_id] = job
+        self.pool.start(job, priority)
         self._report()
         return job_id
+
+    def _withdraw(self, job_id: int | None) -> None:
+        """Drop a superseded job that hasn't started yet."""
+        job = self._jobs.get(job_id)
+        if job is not None and self.pool.tryTake(job):
+            self._jobs.pop(job_id, None)
+            self._callbacks.pop(job_id, None)
 
     def wait(self, msecs: int = 30_000) -> bool:
         return self.pool.waitForDone(msecs)
 
     @Slot(int, bool, object)
     def _deliver(self, job_id: int, ok: bool, payload):
+        self._jobs.pop(job_id, None)
         on_done, on_error, key, _ = self._callbacks.pop(job_id, (None, None, None, ""))
         superseded = key is not None and self._latest.get(key) != job_id
         if key is not None and self._latest.get(key) == job_id:

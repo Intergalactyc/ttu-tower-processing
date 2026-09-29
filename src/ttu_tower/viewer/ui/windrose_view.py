@@ -143,7 +143,7 @@ class WindRoseView(QWidget):
         self.sectors = QComboBox()
         for n in (8, 16, 36):
             self.sectors.addItem(f"{n} sectors", n)
-        self.sectors.setCurrentIndex(1)
+        self.sectors.setCurrentIndex(2)
         self.sectors.currentIndexChanged.connect(lambda *_: self.redraw())
         self.info = QLabel()
         self.info.setWordWrap(True)
@@ -233,6 +233,9 @@ class WindRoseView(QWidget):
         outer = max(RosePlot.outer(tower_table), RosePlot.outer(meso_table))  # one scale for both
         self.tower_plot.draw(tower_table, f"b{b} ({HEIGHTS[b]:g} m), {which} — {tower.ws.size} slots", outer, bearings)
         parts = [f"{scope}: b{b} mean {tower.ws.mean():.2f} m/s" if tower.ws.size else f"{scope}: no b{b} wind"]
+        self.same_slots.setEnabled(meso is not None)
+        self.same_slots.setToolTip("draw the mesonet rose from only the slots the tower rose has" if meso is not None
+                                   else "this run has no mesonet data")
         if meso is None:
             self.meso_plot.draw(None, "mesonet: not merged into this run")
         else:

@@ -928,6 +928,101 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
     both.
   - The status bar shows "N warnings logged" as a link to the log.
   - After the fixes, a scripted session over every tab on `oneyear` logged none.
+- **Scatter α(Ri) fit** (the port of ttu-windprofiles' `curve_fits.fit_alpha_ri`, now listed as
+  "alpha-Ri: α(Ri), shear exponent vs Ri"):
+  - its neutral band and Ri_c are editable, in a settings row that appears for fits with settings
+    of their own (`curvefits.FIT_SETTINGS`)
+  - `mean_high_ri` is reported as in the original
+  - an empty neutral, stable or unstable range now gives a plain message instead of scipy's
+- **Clicks open the inspector for every quantity:**
+  - where several booms coincide at the click, it opens the top-drawn one and names the others in
+    the status bar (there's no chooser menu any more)
+  - points on a flat view (zero-height y range) are picked too
+  - a slow test clicks a real point of every catalog quantity and checks the inspector opens at
+    that slot
+- **Series defaults:** ue, vn, w and sonic θv are checked, the rest unchecked. The series behind a
+  clicked value are checked too, e.g. T for a T mean.
+- **τ what-if plots:**
+  - ± SE bars on the stored spectra
+  - dotted min/max τ, at the what-if's values
+  - a key line explaining each marking
+  - where a family is `no_data` (no usable samples in the slot, so detection stops before
+    smoothing), the smoothed curve, band and peak it would see are drawn in grey with a note
+  - an empty spectrum says so
+
+### Review fixes, second round (Elliott, 2026-09-28)
+- **Right dock** is titled "Summary". Its tabs are Distributions, Scatter, Profiles, Wind rose
+  and QC; each uses the viewed interval unless "whole period" is checked.
+- **Distributions:**
+  - a stability-class subset (all, or one class of the configured Ri_b pair)
+  - one table per panel: the summary statistics, with the fit's parameters, KS and AIC appended
+    as columns. It replaces the old fixed-height stats and fit tables, whose empty space grew with
+    the dock.
+  - The table sits under a splitter handle and scrolls. By default it takes at most 30 %
+    (`TABLE_SHARE`) of the height it shares with its histogram, and never more than its rows
+    need. Once its handle is dragged, the user's height is kept.
+- **Profile error bars** have caps. By stability, each class is drawn a few pixels
+  (`OFFSET_PX`) above or below the others at a height, so the bars don't overlap. The offsets
+  are recomputed in view units on zoom or resize, with the height range fixed so they can't feed
+  back into it; the fitted curves aren't offset.
+- **Profiles tab** (`viewer/profiles.py`, `ui/profiles_view.py`):
+  - Panels A and B side by side, for per-boom quantities; pairs, slot-level values and
+    categories say they have no profile.
+  - Each boom's mean (± σ) or median (± MAD), over the interval. Directions use the vector mean
+    and Yamartino σ, and median is greyed for them.
+  - Points by default; lines, spread bars and log height are toggles.
+  - "by stability" draws one profile per class in class colours, with a key above the plots.
+  - A fit per panel: power law, log law, linear or logarithmic, fitted against height to each
+    profile. Wind speed and TI (`ti`, `ti_u/v/w`) default to power law, others to no fit.
+    α (or u*, z0, …), booms used and RMSE per profile go in a table.
+- **QC tab** (`viewer/qcsummary.py`, `ui/qc_summary.py`), per boom:
+  - **availability:** % of slots computed, no data, no file or missing, plus the momentum and
+    heat usable fractions
+  - **samples left at each coverage layer**, for a chosen variable
+  - **% of samples flagged by each test**, for a chosen variable; boom-level tests count toward
+    ue/vn/w/ts
+  - **% of computed slots tertiary filtered**, per group, for a chosen variant; hover a cell for
+    the split by criterion
+  - **how τ was chosen**, by source status
+  - Loading: coverage, filter_log and tau_selected take about 4 s. Flags take about 25 s for 10
+    booms, counted per slot by one weighted `bincount` per fragment (FlagStore took 9 s a boom).
+    Both are read once per run.
+- **Boom defaults:**
+  - every boom is checked in both panels
+  - pair quantities remember their own checked pairs
+  - Ri_b and dθv/dz start on 2–4
+  - veer starts on every X–4 pair except 4–4 (`panel.default_pairs`)
+- **◀◀ ◀ ▶ ▶▶:** ◀◀ ▶▶ step by the whole viewed interval (the old arrows stepped by 80 %),
+  ◀ ▶ by half of it.
+- **QC tab, τ:** found, capped and unresolved are each split by the cospectrum the τ came from
+  ("found · momentum", "found · heat", …); fallback, fixed and none stay whole.
+- **Whole numbers print in full** (10123, not 1.01e+04) wherever a count is held as a float, e.g.
+  beside NaNs: `tables.number` is used by every table fill, the Numbers and Scales tabs and the
+  timeline hover.
+- **Legend buttons:** a shown boom has a dark outline around a pale fill instead of a dark fill.
+- **Overlay key** reads "⊗ filtered".
+- **Greyed controls:**
+  - Distributions: log bins for categories, directions or non-positive values
+  - Panels: line style for categories
+  - Scatter:
+    - colour-by in density mode, and its stability option without a stability scheme
+    - the binned-line settings unless "binned" is on
+    - the fit-bin settings without bins
+    - Fit with no curve chosen; choosing "none" clears a fit
+  - Wind rose: "mesonet: same slots" without mesonet data
+  - Profiles: median for directions, and "by stability" without a scheme
+  - Series: the despike band when as measured, fluctuations without τ blocks
+  - Spectra: ± SE and detection details in ogive mode, the unexcised overlay when already unexcised
+  - Scales: Show ACFs without reprocessing
+  - Inspector Profile: fits without a config
+- **Clicks that didn't open the inspector:** a click that landed exactly on a drawn marker was
+  taken by pyqtgraph's ScatterPlotItem, so the plot never saw it; near-misses worked. The
+  timeline's marker items now pass clicks through (`curves.pass_clicks`). A test clicks a marker
+  through Qt's real mouse events.
+- **Opening feedback:** from the click until the inspector has read its slot, the app shows a
+  busy cursor and "opening the Slot Inspector: boom b, time…". Its reads jump the job queue
+  (`JobRunner` priorities), and a superseded job that hasn't started yet is dropped from the
+  queue instead of run.
 
 ### Phase 5 — Brushing, find, bookmarks
 - (The scatter tab was built in phase 3.) Linked brushing: a lasso on the scatter highlights

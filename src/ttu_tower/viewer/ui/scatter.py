@@ -12,8 +12,8 @@ import pyqtgraph as pg
 import shiboken6
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.viewer import curvefits
@@ -26,11 +26,11 @@ _FIT = "#2ca02c"
 _STALE = "#8fbf8f"
 
 
-def _fit_job(name, x, y, opts):
+def _fit_job(name, x, y, opts, settings=()):
     """Runs on a worker thread."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return curvefits.fit(name, x, y, opts)
+        return curvefits.fit(name, x, y, opts, **dict(settings))
 
 
 class ScatterView(QWidget):
@@ -46,6 +46,7 @@ class ScatterView(QWidget):
         self.x = self.y = np.empty(0)
         self.fit_result = None
         self.fit_inputs = None  # what fit_result was fitted to
+        self._fitting = False
 
         self.source = [QComboBox(), QComboBox()]
         self.member = [QComboBox(), QComboBox()]
@@ -97,9 +98,9 @@ class ScatterView(QWidget):
         self.fit_min_count = QSpinBox()
         self.fit_min_count.setRange(1, 10_000)
         for w in (self.fit_name, self.fit_bin_method):
-            w.currentIndexChanged.connect(lambda *_: self._show_stats())
+            w.currentIndexChanged.connect(lambda *_: (self._show_stats(), self._enable_controls()))
         for w in (*self.pct, self.fit_bins, self.fit_min_count):
-            w.valueChanged.connect(lambda *_: self._show_stats())
+            w.valueChanged.connect(lambda *_: (self._show_stats(), self._enable_controls()))
         self.fit_button = QPushButton("Fit")
         self.fit_button.setToolTip("fit the chosen curve to the points shown now (the fit stays put when the "
                                    "interval or settings change, until pressed again)")
@@ -107,6 +108,10 @@ class ScatterView(QWidget):
         self.fit_status = QLabel()
         self.fit_status.setTextFormat(Qt.TextFormat.RichText)
         self.fit_status.setWordWrap(True)
+        self.fit_settings: dict[str, QLineEdit] = {}  # the chosen fit's own settings
+        self.fit_settings_row = QHBoxLayout()
+        self.fit_name.currentIndexChanged.connect(lambda *_: self._build_fit_settings())
+        self.fit_name.currentIndexChanged.connect(self._on_fit_choice)
 
         self.stats = QLabel()
         self.stats.setTextFormat(Qt.TextFormat.RichText)
@@ -149,6 +154,7 @@ class ScatterView(QWidget):
         bin_row.addWidget(QLabel("min per bin"))
         bin_row.addWidget(self.fit_min_count)
         form.addRow("bins", bin_row)
+        form.addRow(self.fit_settings_row)
         form.addRow(self.fit_status)
 
         layout = QVBoxLayout(self)
@@ -241,7 +247,25 @@ class ScatterView(QWidget):
         with np.errstate(divide="ignore", invalid="ignore"):
             return (np.log10(x) if self.log_x.isChecked() else x), (np.log10(y) if self.log_y.isChecked() else y)
 
+    def _enable_controls(self) -> None:
+        """Grey out what can't apply to what's shown."""
+        points = self.display.currentData() == "points"
+        self.color_by.setEnabled(points)
+        self.color_by.setToolTip("density maps aren't colored by class" if not points else "color the points")
+        self.color_by.model().item(1).setEnabled(self.stability is not None)
+        self.mid_method.setEnabled(self.mid.isChecked())
+        self.mid_bins.setEnabled(self.mid.isChecked())
+        for box, values in ((self.log_x, self.x), (self.log_y, self.y)):
+            box.setEnabled(bool((values > 0).any()) or box.isChecked())
+            box.setToolTip("no positive values to show on a log axis" if not box.isEnabled()
+                           else "a log axis (values ≤ 0 are left out)")
+        binned = self.fit_bins.value() > 0
+        self.fit_bin_method.setEnabled(binned)
+        self.fit_min_count.setEnabled(binned)
+        self.fit_button.setEnabled(self.fit_name.currentData() is not None and self.x.size > 1 and not self._fitting)
+
     def redraw(self) -> None:
+        self._enable_controls()
         self.plot.clear()
         self.legend.clear()
         dx, dy = self._data(0), self._data(1)
@@ -337,12 +361,45 @@ class ScatterView(QWidget):
                                     bin_method=self.fit_bin_method.currentText(),
                                     bin_min_count=self.fit_min_count.value())
 
+    def _build_fit_settings(self) -> None:
+        while self.fit_settings_row.count():
+            item = self.fit_settings_row.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.fit_settings = {}
+        for arg, (label, default) in curvefits.FIT_SETTINGS.get(self.fit_name.currentData(), {}).items():
+            edit = QLineEdit(f"{default:g}")
+            edit.setMaximumWidth(70)
+            edit.textChanged.connect(lambda *_: self._show_stats())
+            self.fit_settings[arg] = edit
+            self.fit_settings_row.addWidget(QLabel(label))
+            self.fit_settings_row.addWidget(edit)
+        self.fit_settings_row.addStretch(1)
+
+    def _settings(self) -> tuple:
+        """The chosen fit's own settings as (argument, value) pairs (ValueError if unreadable)."""
+        out = []
+        for arg, edit in self.fit_settings.items():
+            try:
+                out.append((arg, float(edit.text())))
+            except ValueError:
+                raise ValueError(f"{arg}: not a number") from None
+        return tuple(out)
+
     def _inputs(self) -> tuple:
         """What a fit depends on: the curve, its settings, the axes and the points."""
         span = (int(self.slots[0]), int(self.slots[-1])) if self.slots.size else None
+        try:
+            settings = self._settings()
+        except ValueError:
+            settings = None
         return (self.fit_name.currentData() or "", self._options(), self.source[0].currentData(),
                 self.member[0].currentData(), self.source[1].currentData(), self.member[1].currentData(),
-                int(self.slots.size), span, self.log_x.isChecked(), self.log_y.isChecked())
+                int(self.slots.size), span, self.log_x.isChecked(), self.log_y.isChecked(), settings)
+
+    def _on_fit_choice(self, *_) -> None:
+        if self.fit_name.currentData() is None and self.fit_result is not None:  # "none" takes the fit away
+            self.run_fit()
 
     def run_fit(self) -> None:
         name = self.fit_name.currentData()
@@ -352,28 +409,34 @@ class ScatterView(QWidget):
             return
         _, x, y = self._shown()
         inputs = self._inputs()
+        if inputs[-1] is None:
+            self.fit_status.setText("<span style='color:#b00'>a fit setting isn't a number</span>")
+            return
         self.fit_status.setText(f"fitting {name} to {x.size} points…")
+        self._fitting = True
         self.fit_button.setEnabled(False)
         if self.runner is None:
             try:
-                self._fitted(inputs, _fit_job(name, x, y, inputs[1]))
+                self._fitted(inputs, _fit_job(name, x, y, inputs[1], inputs[-1]))
             except (ValueError, RuntimeError, TypeError) as exc:
                 self._fit_failed(name, exc)
             return
-        self.runner.submit(_fit_job, name, x, y, inputs[1], key=f"scatterfit-{id(self)}", label=f"fitting {name}",
+        self.runner.submit(_fit_job, name, x, y, inputs[1], inputs[-1], key=f"scatterfit-{id(self)}",
+                           label=f"fitting {name}",
                            on_done=lambda res: self._fitted(inputs, res),
                            on_error=lambda exc, tb: self._fit_failed(name, exc))
 
     def _fitted(self, inputs, result) -> None:
         if not shiboken6.isValid(self):
             return
-        self.fit_button.setEnabled(True)
+        self._fitting = False
         self.fit_result, self.fit_inputs = result, inputs
         self.redraw()
 
     def _fit_failed(self, name, exc) -> None:
         if shiboken6.isValid(self):
-            self.fit_button.setEnabled(True)
+            self._fitting = False
+            self._enable_controls()
             self.fit_status.setText(f"<span style='color:#b00'>{name} fit failed: {exc}</span>")
 
     def _show_stats(self) -> None:

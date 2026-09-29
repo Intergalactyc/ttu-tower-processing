@@ -8,6 +8,18 @@ from PySide6.QtCore import QTimer, Signal
 from ttu_tower.viewer.decimate import minmax_decimate
 
 
+def _ignore(ev) -> None:
+    ev.ignore()
+
+
+def pass_clicks(item) -> None:
+    """Let clicks on an item's markers through to its ViewBox (a
+    ScatterPlotItem takes a click that lands on a marker for itself).
+    """
+    scatter = item.scatter if isinstance(item, pg.PlotDataItem) else item
+    scatter.mouseClickEvent = _ignore
+
+
 class FixedXViewBox(pg.ViewBox):
     """A ViewBox whose x range only ever changes when asked. Continuous x
     autorange would feed back through decimation (the drawn points reach one

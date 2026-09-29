@@ -33,6 +33,7 @@ _RUG_GROUPS = (("sonic", ("ue", "vn", "w", "u", "v")), ("ts", ("ts", "vpts")), (
                ("p", ("p",)))
 _RUG_ROW_PX = 16
 _EARTH_TO_STREAM = {"ue": "u", "vn": "v"}
+SHOWN_BY_DEFAULT = ("ue", "vn", "w", "vpts")  # the other series start unchecked
 WHATIF_ADDED = "#e7298a"  # flagged only with the what-if settings
 WHATIF_DROPPED = "#1b9e77"  # flagged only with the run's
 
@@ -82,7 +83,8 @@ class SeriesPanel(QWidget):
         self.boom = self.slot = None
         self.lo = self.hi = None  # the loaded slots, inclusive
         self.variables: list[str] = []
-        self.hidden: set[str] = set()
+        self.hidden: set[str] = set()  # filled with the non-default series when the variables are first set
+        self._defaults_applied = False
         self.context = ""
         self.result = None
         self.selected_tau: float | None = None
@@ -111,7 +113,6 @@ class SeriesPanel(QWidget):
         self.blocks.setToolTip("the ladder's τ blocks, which tile each slot from its start")
         self.blocks.currentIndexChanged.connect(lambda *_: self.redraw())
         self.fluct = QCheckBox("fluctuations")
-        self.fluct.setToolTip("subtract each τ block's mean (usable samples): what the ladder's variances see")
         self.fluct.toggled.connect(lambda *_: self.redraw())
         self.rug = QCheckBox("flag rug")
         self.rug.setToolTip("a row under the series for each test's flagged samples (and the what-if's differences)")
@@ -179,7 +180,8 @@ class SeriesPanel(QWidget):
     # --- what is shown ------------------------------------------------------------------------
 
     def set_focus(self, boom: int, slot: int, mode: str | None = None, variables: list[str] | None = None,
-                  context: str | None = None, frame: str | None = None) -> None:
+                  context: str | None = None, frame: str | None = None, show=()) -> None:
+        """`show`: series to check whatever else is hidden (those behind a clicked value)."""
         """Show `slot` (keeping any neighbours loaded alongside, shifted with it)."""
         if self.slot is not None and self.boom == boom:
             span_lo, span_hi = self.slot - self.lo, self.hi - self.slot
@@ -193,7 +195,12 @@ class SeriesPanel(QWidget):
                 combo.blockSignals(True)
                 combo.setCurrentIndex([k for _, k in items].index(value))
                 combo.blockSignals(False)
-        if variables is not None and list(variables) != self.variables:
+        if variables is not None and not self._defaults_applied:
+            self.hidden = {v for v in variables if v not in SHOWN_BY_DEFAULT}
+            self._defaults_applied = True
+        if show:
+            self.hidden -= set(show)
+        if variables is not None and (list(variables) != self.variables or show):
             self.variables = list(variables)
             self._build_series_boxes()
         self.reload()
@@ -285,7 +292,8 @@ class SeriesPanel(QWidget):
         self.status.setText("reprocessing from the raw files…" + (" (and with the what-if QC)" if self.whatif_rp else ""))
         self.runner.submit(compute_series, self.reprocessor, self.index, self.boom, g0, n, mode,
                            self.frame.currentData(), self.whatif_rp, key=self.key,
-                           label=f"reprocessing boom {self.boom}", on_done=self._loaded, on_error=self._failed)
+                           label=f"reprocessing boom {self.boom}", on_done=self._loaded, on_error=self._failed,
+                           priority=10)
 
     def _compare_slots(self) -> None:
         rp, boom, slots = self.whatif_rp, self.boom, range(self.lo, self.hi + 1)
@@ -344,7 +352,19 @@ class SeriesPanel(QWidget):
 
     # --- drawing -------------------------------------------------------------------------------
 
+    def _enable_controls(self) -> None:
+        """Grey out what the current view can't show."""
+        as_measured = self.current_mode() == "as_measured"
+        self.band.setEnabled(not as_measured)
+        self.band.setToolTip("as measured has no despiking" if as_measured
+                             else "the despike test's bounds: the running median ± z·MAD/0.6745")
+        no_blocks = self.blocks.currentData() is None
+        self.fluct.setEnabled(not no_blocks)
+        self.fluct.setToolTip("choose τ blocks first" if no_blocks
+                              else "subtract each τ block's mean (usable samples): what the ladder's variances see")
+
     def redraw(self) -> None:
+        self._enable_controls()
         self.graphics.clear()
         self._decimators, self.plots = [], {}
         if self.result is None:

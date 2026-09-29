@@ -10,12 +10,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from ttu_tower.secondary.detect import detect
 from ttu_tower.viewer import whatif
 from ttu_tower.viewer.slotdata import DETECTED, SPECTRUM_LABELS, rerun_detection, spectrum, spectrum_variant
 from ttu_tower.viewer.ui import tables
 from ttu_tower.viewer.ui.axes import Log10Axis
 
 _STORED = "#000000"
+_UNUSED = "#8c8c8c"  # the smoothing detection would use, where it didn't run
 _WHATIF = "#c2185b"
 _PRIORITIES = (("heat", "momentum"), ("momentum", "heat"))
 _COLUMNS = {"boom": "boom", "variant": "variant", "heat_stored": "heat (run)", "heat_new": "heat (what-if)",
@@ -111,7 +113,17 @@ class WhatIfTab(QWidget):
         table_layout.addLayout(top)
         table_layout.addWidget(self.table, stretch=1)
         right.addWidget(table_box)
-        right.addWidget(self.graphics)
+        plots_box = QWidget()
+        plots_layout = QVBoxLayout(plots_box)
+        plots_layout.setContentsMargins(0, 0, 0, 0)
+        key = QLabel("blue: the stored (co)spectrum ± SE · <span style='color:#c2185b'>dashed: the 1-2-1 smoothed "
+                     "cospectrum over the searched range · band: ± k·SE of it (a peak counts where the band excludes "
+                     "0) · ▲ peak · ✕ reversal</span> · dotted grey: min/max τ · τ lines: solid = run, dashed = what-if")
+        key.setTextFormat(Qt.TextFormat.RichText)
+        key.setWordWrap(True)
+        plots_layout.addWidget(key)
+        plots_layout.addWidget(self.graphics, stretch=1)
+        right.addWidget(plots_box)
         layout = QHBoxLayout(self)
         layout.addWidget(form_box)
         layout.addWidget(right, stretch=1)
@@ -212,15 +224,38 @@ class WhatIfTab(QWidget):
             plot.addItem(pg.InfiniteLine(0, angle=0, pen=pg.mkPen("#999999")))
             self.plots[family] = plot
             spec = spectrum(self.across.mrd, self.across.slot, self.boom, mrd_variant, name)
-            if spec is None:
+            if spec is None or not np.isfinite(spec.value).any():
+                note = pg.TextItem(f"no {SPECTRUM_LABELS[name]} values in this slot's detection window "
+                                   f"({family}: no usable samples), so there is nothing to detect on",
+                                   color=_UNUSED, anchor=(0.5, 0.5))
+                plot.addItem(note)
+                plot.setRange(xRange=(0, 3), yRange=(-1, 1))
+                note.setPos(1.5, 0.3)
                 continue
             x = np.log10(spec.scale_s)
+            ok = np.isfinite(spec.value) & np.isfinite(spec.se)
+            if ok.any():
+                plot.addItem(pg.ErrorBarItem(x=x[ok], y=spec.value[ok], top=spec.se[ok], bottom=spec.se[ok],
+                                             beam=0.03, pen=pg.mkPen((31, 78, 156, 140))))
             if np.isfinite(spec.value).any():
                 plot.plot(x, spec.value, pen=pg.mkPen("#1f4e9c", width=1.4), symbol="o", symbolSize=4,
                           symbolBrush="#1f4e9c", symbolPen=None)
+            for bound in (cfg.detection.min_tau_s, cfg.detection.max_tau_s):
+                plot.addItem(pg.InfiniteLine(np.log10(bound), pen=pg.mkPen("#aaaaaa", width=1, style=Qt.PenStyle.DotLine)))
             view = views[family]
-            self._draw_trace(plot, view.trace, x)
             det, stored = view.detection, view.stored
+            if det.status == "no_data" and np.isfinite(spec.value).any():
+                # the slot has no usable samples of this family, so detection stops before smoothing; show
+                # what it would have seen, greyed, since it plays no part in tau
+                trace: dict = {}
+                detect(spec.value, spec.se, spec.n_pairs, True, cfg.detection, trace=trace)
+                self._draw_trace(plot, trace, x, color=_UNUSED)
+                note = pg.TextItem(f"{family}: no_data (no usable {family} samples in the slot) - detection didn't "
+                                   "run; grey: what it would see", color=_UNUSED, anchor=(0, 0))
+                note.setPos(x[0], np.nanmax(spec.value + np.nan_to_num(spec.se)))
+                plot.addItem(note)
+            else:
+                self._draw_trace(plot, view.trace, x)
             family_taus = [(det.status, det.tau_s, det.tau_lb_s, _WHATIF, "what-if", Qt.PenStyle.DashLine, 0.8)]
             if stored is not None:
                 family_taus.insert(0, (stored["status"], stored["tau_s"], stored["tau_lb_s"], _STORED, "run",
@@ -238,9 +273,14 @@ class WhatIfTab(QWidget):
                                                  labelOpts={"position": 0.12 if label == "run" else 0.04, "color": color}))
 
     @staticmethod
-    def _draw_trace(plot, t, x) -> None:
+    def _draw_trace(plot, t, x, color: str = _WHATIF) -> None:
+        """The smoothed cospectrum over the searched range, its ±k·SE significance
+        band, the peak (▲) and the reversal (✕).
+        """
         if not t.get("d_smooth"):
             return
+        fill = pg.mkColor(color)
+        fill.setAlpha(35)
         modes = sorted(t["d_smooth"])
         xs = np.array([x[i - 1] for i in modes])
         ds = np.array([t["d_smooth"][i] for i in modes])
@@ -249,13 +289,13 @@ class WhatIfTab(QWidget):
         lower = pg.PlotCurveItem(xs, ds - half, pen=pg.mkPen(None))
         plot.addItem(upper)
         plot.addItem(lower)
-        plot.addItem(pg.FillBetweenItem(upper, lower, brush=pg.mkBrush(194, 24, 91, 35)))
-        plot.plot(xs, ds, pen=pg.mkPen(_WHATIF, width=1.2, style=Qt.PenStyle.DashLine))
+        plot.addItem(pg.FillBetweenItem(upper, lower, brush=pg.mkBrush(fill)))
+        plot.plot(xs, ds, pen=pg.mkPen(color, width=1.2, style=Qt.PenStyle.DashLine))
         if t.get("peak") is not None:
             p = t["peak"]
             plot.addItem(pg.ScatterPlotItem([x[p - 1]], [t["d_smooth"][p]], symbol="t1", size=12,
-                                            brush=pg.mkBrush(_WHATIF), pen=pg.mkPen("k")))
+                                            brush=pg.mkBrush(color), pen=pg.mkPen("k")))
         if t.get("reversal"):
             r, _ = t["reversal"]
             plot.addItem(pg.ScatterPlotItem([x[r - 1]], [t["d_smooth"][r]], symbol="x", size=13,
-                                            brush=pg.mkBrush(_WHATIF), pen=pg.mkPen(_WHATIF, width=2)))
+                                            brush=pg.mkBrush(color), pen=pg.mkPen(color, width=2)))

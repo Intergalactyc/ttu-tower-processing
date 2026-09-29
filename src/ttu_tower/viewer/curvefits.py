@@ -132,9 +132,20 @@ def _sparam_ri(x, y):
     return lambda v: model(np.asarray(v, dtype=float), K, B), {"K": K, "B": B}, f"x<0: y = {K:.4g}x; x≥0: y = {K:.4g}x/(1+{B:.4g}x)"
 
 
-def _alpha_ri(x, y, cutoffs=(-0.05, 0.05), critical=0.25):
-    """α against Ri: α0(1 + a·Ri)^b either side of neutral, constant above Ri_c."""
-    alpha0 = float(y[(x > cutoffs[0]) & (x < cutoffs[1])].mean())
+ALPHA_RI = "alpha-Ri: α(Ri), shear exponent vs Ri"
+
+
+def _alpha_ri(x, y, ri_neutral_lo=-0.05, ri_neutral_hi=0.05, ri_critical=0.25):
+    """ttu-windprofiles' fit_alpha_ri: α0 (the mean α over the neutral band)
+    times (1 + a·Ri)^b, fitted separately for 0 < Ri < Ri_c and Ri < 0, and
+    held at its Ri_c value above Ri_c.
+    """
+    neutral = (x > ri_neutral_lo) & (x < ri_neutral_hi)
+    stable, unstable = (x > 0) & (x < ri_critical), x < 0
+    for name, mask in (("neutral", neutral), ("stable (0 < Ri < Ri_c)", stable), ("unstable (Ri < 0)", unstable)):
+        if mask.sum() < 3:
+            raise ValueError(f"only {int(mask.sum())} points (or bins) in the {name} range; widen it, or bin less finely")
+    alpha0 = float(y[neutral].mean())
 
     def model(ri, a, b):
         return alpha0 * (1 + a * ri) ** b
@@ -143,17 +154,20 @@ def _alpha_ri(x, y, cutoffs=(-0.05, 0.05), critical=0.25):
         params, *_ = curve_fit(model, x[mask], y[mask], p0=guess, maxfev=2000, bounds=([-50.0, -1.0], [50.0, 1.0]))
         return params
 
-    a_s, b_s = fit((x > 0) & (x < critical), [1.0, 1.0])
-    a_u, b_u = fit(x < 0, [-0.5, -0.5])
-    crit = alpha0 * (1 + a_s * critical) ** b_s
+    a_s, b_s = fit(stable, [1.0, 1.0])
+    a_u, b_u = fit(unstable, [-0.5, -0.5])
+    crit = alpha0 * (1 + a_s * ri_critical) ** b_s
+    high = x >= ri_critical
+    mean_high = float(y[high].mean()) if high.any() else np.nan
 
     def func(ri):
         ri = np.asarray(ri, dtype=float)
-        return np.where(ri >= critical, crit, np.where(ri > 0, model(ri, a_s, b_s), model(ri, a_u, b_u)))
+        return np.where(ri >= ri_critical, crit, np.where(ri > 0, model(ri, a_s, b_s), model(ri, a_u, b_u)))
 
     return (func, {"alpha0": alpha0, "a_stable": a_s, "b_stable": b_s, "a_unstable": a_u, "b_unstable": b_u,
-                   "alpha_critical": crit},
-            f"α0 {alpha0:.3g}; stable ({a_s:.3g}, {b_s:.3g}); unstable ({a_u:.3g}, {b_u:.3g}); Ri ≥ {critical:g}: {crit:.3g}")
+                   "alpha_critical": crit, "mean_high_ri": mean_high},
+            f"α0 {alpha0:.3g}; 0<Ri<{ri_critical:g}: α0(1+{a_s:.3g}Ri)^{b_s:.3g}; Ri≥{ri_critical:g}: {crit:.3g}; "
+            f"Ri≤0: α0(1{a_u:+.3g}Ri)^{b_u:.3g}")
 
 
 FITS: dict[str, Callable] = {
@@ -166,15 +180,21 @@ FITS: dict[str, Callable] = {
     "double linear": _double_linear,
     "double linear through origin": lambda x, y: _double_linear(x, y, intercept=0.0),
     "ζ(Ri) (stability parameter)": _sparam_ri,
-    "α(Ri) (shear exponent)": _alpha_ri,
+    ALPHA_RI: _alpha_ri,
+}
+
+# fits with settings of their own: name -> {argument: (label, default)}
+FIT_SETTINGS: dict[str, dict[str, tuple[str, float]]] = {
+    ALPHA_RI: {"ri_neutral_lo": ("neutral band from Ri", -0.05), "ri_neutral_hi": ("to Ri", 0.05),
+               "ri_critical": ("Ri_c (α held above)", 0.25)},
 }
 
 
-def fit(name: str, x, y, opts: FitOptions = FitOptions()) -> FitResult:
+def fit(name: str, x, y, opts: FitOptions = FitOptions(), **settings) -> FitResult:
     xf, yf = prepare(x, y, opts)
     if xf.size < 2:
         raise ValueError("fewer than two points to fit")
-    func, params, label = FITS[name](xf, yf)
+    func, params, label = FITS[name](xf, yf, **settings)
     with np.errstate(all="ignore"):
         resid = yf - func(xf)
     rmse = float(np.sqrt(np.nanmean(resid ** 2))) if resid.size else np.nan

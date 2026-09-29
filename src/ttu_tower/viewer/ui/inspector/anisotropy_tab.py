@@ -50,7 +50,7 @@ class AnisotropyTab(QWidget):
         self.regions.toggled.connect(lambda *_: self.redraw())
         self.span = QSpinBox()
         self.span.setRange(0, 72)
-        self.span.setValue(6)
+        self.span.setValue(1)
         self.span.setPrefix("track ±")
         self.span.setSuffix(" slots")
         self.span.setToolTip("the inspected boom's states in the slots around this one (click one to go there)")

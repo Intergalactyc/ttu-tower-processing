@@ -59,6 +59,8 @@ class ProfileTab(QWidget):
 
     def set_across(self, across, variant: str, boom: int, cfg) -> None:
         self.across, self.variant, self.boom, self.cfg = across, variant, boom, cfg
+        self.fits_box.setEnabled(cfg is not None)
+        self.fits_box.setToolTip("" if cfg is not None else "the run's config is unavailable")
         self.redraw()
 
     def clear(self, message: str = "") -> None:

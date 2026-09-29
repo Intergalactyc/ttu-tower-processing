@@ -289,6 +289,26 @@ def availability(run, index: FragmentIndex, booms) -> tuple[np.ndarray, np.ndarr
     return slots, image
 
 
+def values_at(curve: Curve, slots: np.ndarray) -> np.ndarray:
+    """The curve's value at each slot (NaN where it has none)."""
+    y = np.full(slots.size, np.nan)
+    if curve.slots.size:
+        i = np.clip(np.searchsorted(curve.slots, slots), 0, curve.slots.size - 1)
+        hit = curve.slots[i] == slots
+        y[hit] = curve.y[i[hit]]
+    return y
+
+
+def in_class(stability: tuple[Curve, list[str]] | None, slots: np.ndarray, name: str | None) -> np.ndarray:
+    """Which of `slots` fall in stability class `name` (all of them for None)."""
+    if name is None:
+        return np.ones(slots.size, dtype=bool)
+    if stability is None:
+        return np.zeros(slots.size, dtype=bool)
+    curve, names = stability
+    return values_at(curve, slots) == names.index(name) if name in names else np.zeros(slots.size, dtype=bool)
+
+
 def joined(a: Curve, b: Curve) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(slots, a values, b values) at the slots both curves have."""
     slots, ia, ib = np.intersect1d(a.slots, b.slots, assume_unique=True, return_indices=True)

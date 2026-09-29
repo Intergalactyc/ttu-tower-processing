@@ -10,8 +10,8 @@ import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDockWidget, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QSplitter,
-    QTabWidget, QToolBar, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDockWidget, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QSplitter, QTabWidget, QToolBar, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -26,6 +26,8 @@ from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slo
 from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
+from ttu_tower.viewer.ui.profiles_view import ProfilesView
+from ttu_tower.viewer.ui.qc_summary import QCSummaryView
 from ttu_tower.viewer.ui.inspector.inspector import InspectorWindow
 from ttu_tower.viewer.ui.scatter import ScatterView
 from ttu_tower.viewer.ui.windrose_view import WindRoseView
@@ -35,8 +37,9 @@ from ttu_tower.viewer.ui.worker import JobRunner
 _DAY = 86_400.0
 _ZOOMS = (("Y", 366 * _DAY), ("M", 31 * _DAY), ("W", 7 * _DAY), ("D", _DAY), ("6h", _DAY / 4))
 _HF_VARIABLES = ["ue", "vn", "w", "ts", "vpts", "t", "rh", "p"]
-_DEFAULTS = (("boom_final|ws|mean", "none", (1, 5, 10)), ("boom_final|ustar|", "mrd", (1, 5, 10)))
-_FALLBACKS = (("coverage|momentum|usable", "none", (1,)), ("slot_qc|ts|skew", "none", (1,)))
+_ALL = tuple(sorted(HEIGHTS))
+_DEFAULTS = (("boom_final|ws|mean", "none", _ALL), ("boom_final|ustar|", "mrd", _ALL))
+_FALLBACKS = (("coverage|momentum|usable", "none", _ALL), ("slot_qc|ts|skew", "none", _ALL))
 _TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "profile": "profile", "none": "numbers"}
 
 
@@ -57,6 +60,12 @@ class MainWindow(QMainWindow):
         self.stability = None
         self.inspectors: list[InspectorWindow] = []
         self._have_range = False
+        self._opening: InspectorWindow | None = None  # the inspector the busy cursor waits on
+        self._also_here = ""  # the other curves at the clicked point, said again once the inspector opens
+        self._opening_timer = QTimer(self)
+        self._opening_timer.setSingleShot(True)
+        self._opening_timer.setInterval(60_000)  # never leave the cursor busy for good
+        self._opening_timer.timeout.connect(lambda: self._opened(self._opening, True))
 
         self._build_toolbar()
         self.banner = QLabel()
@@ -114,7 +123,7 @@ class MainWindow(QMainWindow):
 
         self.dists = [DistributionView(self.runner), DistributionView(self.runner)]
         self.full_period = QCheckBox("whole period (not just the visible range)")
-        self.full_period.setToolTip("distributions, scatter and wind roses use the viewed interval unless this is checked")
+        self.full_period.setToolTip("the summary tabs use the viewed interval unless this is checked")
         self.full_period.toggled.connect(lambda *_: self._refresh_distributions())
         dist_split = QSplitter(Qt.Orientation.Vertical)
         for d in self.dists:
@@ -122,17 +131,21 @@ class MainWindow(QMainWindow):
         self.scatter = ScatterView(self.runner)
         self.scatter.pointClicked.connect(lambda slot, member: QTimer.singleShot(0, lambda: self._on_scatter_point(slot, member)))
         self.windrose = WindRoseView(self.runner)
+        self.qc_summary = QCSummaryView(self.runner)
+        self.profiles = ProfilesView()
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(dist_split, "Distributions")
         self.right_tabs.addTab(self.scatter, "Scatter")
+        self.right_tabs.addTab(self.profiles, "Profiles")
         self.right_tabs.addTab(self.windrose, "Wind rose")
+        self.right_tabs.addTab(self.qc_summary, "QC")
         self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(2, 2, 2, 2)
         right_layout.addWidget(self.full_period)
         right_layout.addWidget(self.right_tabs, stretch=1)
-        self._dock("Distributions", right, Qt.DockWidgetArea.RightDockWidgetArea)
+        self._dock("Summary", right, Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.hover = QLabel()
         self.busy = QLabel()
@@ -162,6 +175,7 @@ class MainWindow(QMainWindow):
                 lambda slot, member, i=i: QTimer.singleShot(0, lambda: self._on_point(i, slot, member, filtered=True)))
             p.vb.fitXRequested.connect(self.zoom_all)
             p.hovered.connect(self._on_hover)
+            p.alsoHere.connect(self._on_also_here)
             p.legend.toggled.connect(lambda i=i: self._dist_timer.start())
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._show_all_members)
 
@@ -226,8 +240,9 @@ class MainWindow(QMainWindow):
         act = QAction("all", self)
         act.triggered.connect(self.zoom_all)
         bar.addAction(act)
-        for label, step in (("◀", -1), ("▶", 1)):
+        for label, step in (("◀◀", -1.0), ("◀", -0.5), ("▶", 0.5), ("▶▶", 1.0)):
             act = QAction(label, self)
+            act.setToolTip(f"{'back' if step < 0 else 'forward'} {'a whole' if abs(step) == 1 else 'half an'} interval")
             act.triggered.connect(lambda _=False, s=step: self.step(s))
             bar.addAction(act)
         self.range_label = QLabel()
@@ -316,6 +331,7 @@ class MainWindow(QMainWindow):
                            on_done=lambda result: self._overlays_ready(result, booms), on_error=self._report_error)
         self.aniso_band.set_booms(booms)
         self.windrose.set_run(run, self.index, booms)
+        self.qc_summary.set_run(run, self.index, booms)
         self._load_aniso_band()
 
     def _load_aniso_band(self) -> None:
@@ -341,6 +357,8 @@ class MainWindow(QMainWindow):
         slots, image, stability, night = result
         self.night, self.stability = night, stability
         self.overview.set_availability(slots, image, booms)
+        self.qc_summary.set_availability(slots, image)
+        self._refresh_distributions()  # the stability classes arrived
         self.stability_band.set_classes(slots, stability)
         self._apply_night()
         if not self._have_range:
@@ -443,9 +461,10 @@ class MainWindow(QMainWindow):
         a, b = self.run.period
         self.set_x_range(slot_to_unix(a), slot_to_unix(b))
 
-    def step(self, direction: int) -> None:
+    def step(self, fraction: float) -> None:
+        """Shift the view by `fraction` of its width (negative: back in time)."""
         x0, x1 = self.x_range()
-        shift = direction * (x1 - x0) * 0.8
+        shift = fraction * (x1 - x0)
         self.set_x_range(x0 + shift, x1 + shift)
 
     def _on_x_range(self, *_):
@@ -498,12 +517,17 @@ class MainWindow(QMainWindow):
             self.scatter.set_sources(self.datas, x_range, self.stability)
         elif shown is self.windrose:
             self.windrose.set_range(x_range)
+        elif shown is self.qc_summary:
+            self.qc_summary.set_range(x_range)
+        elif shown is self.profiles:
+            self.profiles.set_sources([(data, plot.visible_members()) if data is not None else None
+                                       for data, plot in zip(self.datas, self.plots)], x_range, self.stability)
         else:
             for data, plot, dist in zip(self.datas, self.plots, self.dists):
                 if data is None:
                     dist.set_data(None, [], None)
                 else:
-                    dist.set_data(data, plot.visible_members(), x_range)
+                    dist.set_data(data, plot.visible_members(), x_range, self.stability)
 
     def _on_scatter_point(self, slot: int, member) -> None:
         data = self.scatter._data(0)
@@ -540,13 +564,17 @@ class MainWindow(QMainWindow):
         """Open (or reuse an unpinned) Slot Inspector on the tab that explains `q`
         (or on `tab`).
         """
+        self._opening_feedback(boom, slot)
         window = next((w for w in self.inspectors if not w.pin.isChecked()), None)
         if window is None:
             reprocessor = self.reprocessor if self.run.can_reprocess else None
             window = InspectorWindow(self.run, self.index, reprocessor, self.runner)
             window.closed.connect(lambda w: self.inspectors.remove(w) if w in self.inspectors else None)
+            window.closed.connect(lambda w: self._opened(w, False))
+            window.loaded.connect(lambda ok, w=window: self._opened(w, ok))
             self.inspectors.append(window)
-        explains, frame, emphasis, focus = "series", None, None, ()
+        self._opening = window
+        explains, frame, emphasis, focus, show = "series", None, None, (), ()
         if q is not None:
             target = drill_target(q)
             explains = _TAB_FOR_TARGET.get(target.kind, "series")
@@ -559,17 +587,47 @@ class MainWindow(QMainWindow):
             focus = scale_variables(q)
             context = f"from {q.title}" + ("" if variant == "none" else f" ({variant})")
             variables = ordered_variables(target, _HF_VARIABLES)
+            show = target.variables  # a clicked T mean shows T even though it starts unchecked
         else:
             context, variables = "", list(_HF_VARIABLES)
         window.show_slot(boom, slot, tab=tab or explains, mode="unexcised", variables=variables, context=context,
-                         frame=frame, emphasis=emphasis, focus_vars=focus, variant=variant)
+                         frame=frame, emphasis=emphasis, focus_vars=focus, variant=variant, show=show)
         return window
+
+    def _opening_feedback(self, boom: int, slot: int) -> None:
+        """A busy cursor and a status line from the click until the inspector has the slot."""
+        if self._opening is None:
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        self._opening = self  # a placeholder until the window exists
+        self._opening_timer.start()
+        when = format_slot(slot, self.tz_box.currentData() or self.run.timezone)
+        self.statusBar().showMessage(f"opening the Slot Inspector: boom {boom}, {when}…")
+        self.statusBar().repaint()
+
+    def _on_also_here(self, text: str) -> None:
+        self._also_here = text
+        self.statusBar().showMessage(text, 8000)
+
+    def _opened(self, window, ok: bool) -> None:
+        if self._opening is None or window is not self._opening:
+            return
+        self._opening = None
+        self._opening_timer.stop()
+        QApplication.restoreOverrideCursor()
+        also, self._also_here = self._also_here, ""
+        if ok and also:
+            self.statusBar().showMessage(also, 8000)
+        elif ok:
+            self.statusBar().clearMessage()
+        else:
+            self.statusBar().showMessage("the Slot Inspector couldn't read that slot (see its summary line)", 8000)
 
     def _on_busy(self, count: int, label: str) -> None:
         self.busy.setText(f"⏳ {label}…" if count else "")
 
     def closeEvent(self, ev) -> None:
         self.settings.setValue("geometry", self.saveGeometry())
+        self._opened(self._opening, True)
         for w in list(self.inspectors):
             w.close()
         self.runner.wait(5000)

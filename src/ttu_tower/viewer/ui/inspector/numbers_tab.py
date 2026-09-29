@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from ttu_tower.viewer.ui import tables
+
 
 def _text(v) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return ""
     if isinstance(v, float):
-        return f"{v:.6g}"
+        return tables.number(v, 6)
     return str(v)
 
 

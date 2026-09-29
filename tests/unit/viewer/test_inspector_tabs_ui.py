@@ -195,4 +195,168 @@ def test_histograms_take_a_distribution_fit(window, qtbot):
     dist.fit_box.setCurrentIndex(dist.fit_box.findData("Weibull"))
     qtbot.waitUntil(lambda: bool(dist.fits) and _idle(window), timeout=60_000)
     assert all(f is not None and f.params["k"] > 0 for f in dist.fits.values())
-    assert dist.fit_table.rowCount() == len(FULL_BOOMS)
+    headers = [dist.table.horizontalHeaderItem(j).text() for j in range(dist.table.columnCount())]
+    assert dist.table.rowCount() == len(FULL_BOOMS) and {"N", "k", "KS", "AIC"} <= set(headers)
+
+
+def test_histograms_take_one_stability_class(window, qtbot):
+    from ttu_tower.viewer.timeline import Curve
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    data = window.datas[0]
+    slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
+    names = ["unstable", "neutral", "stable"]
+    stability = (Curve(slots=slots, y=(slots % 3).astype(float)), names)  # the fixture's booms make no Ri_b pair
+    dist = window.dists[0]
+    dist.set_data(data, list(data.curves), None, stability)
+    everything = sum(np.isfinite(v).sum() for v in dist.values_by_member().values())
+    parts = []
+    for name in names:
+        dist.stability_box.setCurrentIndex(dist.stability_box.findData(name))
+        parts.append(sum(np.isfinite(v).sum() for v in dist.values_by_member().values()))
+        assert name in dist.title.text()
+    assert dist.stability_box.isEnabled() and dist.stability_box.count() == len(names) + 1
+    assert all(n > 0 for n in parts) and sum(parts) == everything
+
+def test_scatter_alpha_ri_fit_takes_its_own_settings(window, qtbot):
+    from ttu_tower.viewer import curvefits
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData(curvefits.ALPHA_RI))
+    assert set(scatter.fit_settings) == {"ri_neutral_lo", "ri_neutral_hi", "ri_critical"}
+    scatter.fit_settings["ri_critical"].setText("0.3")
+    assert dict(scatter._settings())["ri_critical"] == 0.3
+    scatter.fit_settings["ri_critical"].setText("x")
+    scatter.run_fit()
+    assert "isn't a number" in scatter.fit_status.text()
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    assert scatter.fit_settings == {}
+
+
+class _Click:
+    def __init__(self, scene_pos):
+        self._pos = scene_pos
+
+    def button(self):
+        from PySide6.QtCore import Qt
+        return Qt.MouseButton.LeftButton
+
+    def double(self):
+        return False
+
+    def scenePos(self):
+        return self._pos
+
+    def screenPos(self):
+        from PySide6.QtCore import QPointF
+        return QPointF(10, 10)
+
+
+def test_a_click_on_any_quantity_opens_its_slot(window, qtbot):
+    from PySide6.QtCore import QPointF
+    failures = []
+    for q in list(window.catalog):
+        members = q.pairs[:1] if q.kind == "pair" else ((None,) if q.kind == "slot" else tuple(FULL_BOOMS))
+        window.panels[0].select(q.key, q.variants[0], members)
+        qtbot.waitUntil(lambda: _idle(window) and window.datas[0] is not None
+                        and window.datas[0].quantity.key == q.key, timeout=60_000)
+        plot = window.plots[0]
+        target = None
+        for member in plot.visible_members():
+            c = plot.curves[member]
+            ok = np.flatnonzero(np.isfinite(c.y) & ((c.y > 0) if plot.log_y else True))
+            if ok.size:
+                i = ok[ok.size // 2]
+                target = (int(c.slots[i]), float(c.x[i]), float(c.y[i]))
+                break
+        if target is None:
+            continue  # nothing plotted for this quantity in the fixture
+        slot, x, y = target
+        window.set_x_range(x - 3 * 3600, x + 3 * 3600)
+        plot.decimator.redraw()
+        for w in list(window.inspectors):
+            w.close()
+        qtbot.waitUntil(lambda: not window.inspectors, timeout=10_000)
+        hits = plot.pick(x, y)
+        clicked = plot._on_click(_Click(plot.vb.mapViewToScene(QPointF(x, y))))
+        qtbot.wait(20)
+        if not clicked or not window.inspectors:
+            failures.append(f"{q.key}: clicked={clicked}, hits={hits[:3]}")
+            continue
+        inspector = window.inspectors[-1]
+        qtbot.waitUntil(lambda: inspector.bundle is not None and _idle(window), timeout=60_000)
+        if inspector.slot != slot:
+            failures.append(f"{q.key}: slot {inspector.slot} != {slot}")
+    assert not failures, failures
+
+
+def test_qc_summary_tab_fills_a_row_per_boom(window, qtbot):
+    window.right_tabs.setCurrentWidget(window.qc_summary)
+    qc = window.qc_summary
+    qtbot.waitUntil(lambda: qc.flags is not None and _idle(window), timeout=60_000)
+    for table in qc._tables():
+        assert table.rowCount() == len(FULL_BOOMS), table.toolTip()
+    headers = [qc.flag_table.horizontalHeaderItem(j).text() for j in range(qc.flag_table.columnCount())]
+    assert "spike" in headers
+    spike = headers.index("spike")
+    values = {qc.flag_table.verticalHeaderItem(i).text(): qc.flag_table.item(i, spike).text() for i in range(2)}
+    assert float(values[f"b{SPIKY_BOOM} (2.4 m)"]) > 0  # the spiky boom's w spikes
+
+
+def test_profiles_tab_draws_each_panel_with_its_default_fit(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.profiles)
+    view = window.profiles
+    plot_a = view.plots[0]
+    assert plot_a.fit_box.currentData() == "power law"
+    assert list(plot_a.stats["boom"]) == FULL_BOOMS and plot_a.stats["centre"].notna().all()
+    assert plot_a.table.rowCount() == 1  # two booms are too few to fit: the row says so
+    view.method.setCurrentIndex(1)
+    assert view.error_bars.text() == "± MAD"
+
+
+def test_controls_that_cant_apply_are_greyed(window, qtbot):
+    key = next(q.key for q in window.catalog if q.categorical and q.kind == "boom")
+    window.panels[0].select(key, None, tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == key, timeout=60_000)
+    dist = window.dists[0]
+    assert not dist.log_bins.isEnabled() and not dist.fit_box.isEnabled()
+    assert not window.panels[0].style.isEnabled() and not window.panels[0].log_y.isEnabled()
+
+
+def test_distribution_tables_scroll_and_leave_the_histogram_most_of_the_height(window, qtbot):
+    from ttu_tower.viewer.ui.distribution import TABLE_SHARE
+    dist = window.dists[0]
+    qtbot.waitUntil(lambda: dist.table.rowCount() > 0, timeout=60_000)
+    qtbot.wait(50)
+    plot_height, table_height = dist.split.sizes()
+    assert table_height <= dist.table.maximumHeight()  # never blank rows below the last boom
+    assert table_height <= max(TABLE_SHARE * (plot_height + table_height) + 1, dist.table.minimumHeight())
+    dist.split.moveSplitter(plot_height // 2, 1)  # dragged: the user's height sticks through refreshes
+    dist.split.splitterMoved.emit(plot_height // 2, 1)
+    dragged = dist.split.sizes()
+    dist.refresh()
+    assert dist.split.sizes() == dragged
+
+
+def test_profile_classes_sit_a_few_pixels_apart_with_capped_bars(window, qtbot):
+    from ttu_tower.viewer.timeline import Curve
+    from ttu_tower.viewer.ui.profiles_view import OFFSET_PX
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.profiles)
+    view = window.profiles
+    data = window.datas[0]
+    slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
+    stability = (Curve(slots=slots, y=(slots % 2).astype(float)), ["unstable", "stable"])
+    view.grouping.setCurrentIndex(1)
+    view.error_bars.setChecked(True)
+    view.set_sources([(data, list(data.curves)), None], None, stability)
+    plot = view.plots[0]
+    (first, bars, _, z, _, _, _), (second, _, _, _, _, _, _) = plot._marks
+    py = plot.plot.getViewBox().viewPixelSize()[1]
+    gap = second.getData()[1] - first.getData()[1]
+    assert np.allclose(gap, OFFSET_PX * py) and np.allclose(first.getData()[1], z - OFFSET_PX * py / 2)
+    assert bars is not None and bars.opts["beam"] > 0

@@ -1,7 +1,7 @@
 """The main window: two x-linked timelines of any quantities, their
 distributions, a scatter of one against the other and wind roses, stability
 and anisotropy bands, a whole-period overview, and click-through to the raw
-data.
+data; linked brushing across them, a find over any quantities, and bookmarks.
 """
 import logging
 
@@ -11,19 +11,22 @@ from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QSplitter, QTabWidget, QToolBar, QVBoxLayout, QWidget,
+    QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.timegrid import time_to_slot
-from ttu_tower.viewer import anisotropy, timeline
+from ttu_tower.viewer import anisotropy, brush, timeline
+from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
 from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_variables
 from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.run import RunHandle, list_registered
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix
+from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix, unix_to_slot
+from ttu_tower.viewer.ui.bookmarks_panel import BookmarkDialog, BookmarksPanel
 from ttu_tower.viewer.ui.distribution import DistributionView
+from ttu_tower.viewer.ui.find_panel import FindPanel
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
 from ttu_tower.viewer.ui.profiles_view import ProfilesView
@@ -60,6 +63,8 @@ class MainWindow(QMainWindow):
         self.stability = None
         self.inspectors: list[InspectorWindow] = []
         self._have_range = False
+        self.selection = brush.EMPTY  # the brushed slots, shared by every view
+        self.bookmarks = BookmarkStore()
         self._opening: InspectorWindow | None = None  # the inspector the busy cursor waits on
         self._also_here = ""  # the other curves at the clicked point, said again once the inspector opens
         self._opening_timer = QTimer(self)
@@ -104,6 +109,18 @@ class MainWindow(QMainWindow):
         for i, panel in enumerate(self.panels):
             tabs.addTab(panel, "Panel A" if i == 0 else "Panel B")
             panel.specChanged.connect(lambda spec, i=i: self._on_spec(i, spec))
+        self.find = FindPanel(self.runner, self._find_context)
+        self.find.inspectRequested.connect(
+            lambda items, start, label: self.inspect_sequence(items, start, label))
+        self.find.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
+        self.find.saveRequested.connect(self._save_found)
+        self.bookmark_panel = BookmarksPanel(self.bookmarks)
+        self.bookmark_panel.inspectRequested.connect(
+            lambda items, start, label, variant: self.inspect_sequence(items, start, label, variant))
+        self.bookmark_panel.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
+        tabs.addTab(self.find, "Find")
+        tabs.addTab(self.bookmark_panel, "Bookmarks")
+        self.left_tabs = tabs
         self.night_box = QCheckBox("shade night")
         self.night_box.setChecked(True)
         self.night_box.toggled.connect(self._apply_night)
@@ -154,6 +171,19 @@ class MainWindow(QMainWindow):
         self.warn_label.linkActivated.connect(self._open_log)
         self.warn_label.setToolTip("warnings and Qt messages go to the viewer's log file, not the console")
         self.statusBar().addWidget(self.hover, 1)
+        self.selection_label = QLabel()
+        self.selection_label.setToolTip("brushed slots: Shift-drag on a timeline or scatter (or any drag with Brush "
+                                        "on); Ctrl adds, Alt removes; Esc clears")
+        self.selection_inspect = QToolButton()
+        self.selection_inspect.setText("Step through")
+        self.selection_inspect.setToolTip("open the Slot Inspector on the selected slots, for the go-to boom")
+        self.selection_inspect.clicked.connect(self._inspect_selection)
+        self.selection_clear = QToolButton()
+        self.selection_clear.setText("Clear")
+        self.selection_clear.clicked.connect(lambda: self.set_selection(brush.EMPTY, "replace"))
+        for w in (self.selection_label, self.selection_inspect, self.selection_clear):
+            self.statusBar().addPermanentWidget(w)
+        self._show_selection()
         self.statusBar().addPermanentWidget(self.warn_label)
         self.statusBar().addPermanentWidget(self.busy)
         from ttu_tower.viewer.ui import logs
@@ -176,8 +206,11 @@ class MainWindow(QMainWindow):
             p.vb.fitXRequested.connect(self.zoom_all)
             p.hovered.connect(self._on_hover)
             p.alsoHere.connect(self._on_also_here)
+            p.brushed.connect(lambda x0, x1, mode: self.set_selection(brush.slots_in_span(x0, x1), mode))
             p.legend.toggled.connect(lambda i=i: self._dist_timer.start())
+        self.scatter.brushed.connect(self.set_selection)
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._show_all_members)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_selection(brush.EMPTY, "replace"))
 
         self.setWindowTitle("ttu-view")
         self.resize(1600, 950)
@@ -245,6 +278,13 @@ class MainWindow(QMainWindow):
             act.setToolTip(f"{'back' if step < 0 else 'forward'} {'a whole' if abs(step) == 1 else 'half an'} interval")
             act.triggered.connect(lambda _=False, s=step: self.step(s))
             bar.addAction(act)
+        self.brush_action = QAction("Brush", self)
+        self.brush_action.setCheckable(True)
+        self.brush_action.setShortcut(QKeySequence("B"))
+        self.brush_action.setToolTip("brush mode (B): dragging on a timeline selects a time span, on the scatter a "
+                                     "lasso; without it, Shift-drag does the same. Ctrl adds, Alt removes, Esc clears")
+        self.brush_action.toggled.connect(self._set_brush_mode)
+        bar.addAction(self.brush_action)
         self.range_label = QLabel()
         bar.addWidget(self.range_label)
         self._refresh_run_list()
@@ -330,6 +370,8 @@ class MainWindow(QMainWindow):
         self.runner.submit(_overlays, run, self.index, booms, key="overlays", label="loading overlays",
                            on_done=lambda result: self._overlays_ready(result, booms), on_error=self._report_error)
         self.aniso_band.set_booms(booms)
+        self.bookmark_panel.set_run(run.tag, run.timezone)
+        self.set_selection(brush.EMPTY, "replace")
         self.windrose.set_run(run, self.index, booms)
         self.qc_summary.set_run(run, self.index, booms)
         self._load_aniso_band()
@@ -560,9 +602,10 @@ class MainWindow(QMainWindow):
             boom = member
         self.inspect(boom, slot, q, self.specs[i].variant, tab="qc" if filtered else None)
 
-    def inspect(self, boom: int, slot: int, q=None, variant: str = "mrd", tab: str | None = None) -> "InspectorWindow":
+    def inspect(self, boom: int, slot: int, q=None, variant: str = "mrd", tab: str | None = None,
+                sequence=None, label: str = "") -> "InspectorWindow":
         """Open (or reuse an unpinned) Slot Inspector on the tab that explains `q`
-        (or on `tab`).
+        (or on `tab`); `sequence`: (slot, boom) pairs its match buttons step through.
         """
         self._opening_feedback(boom, slot)
         window = next((w for w in self.inspectors if not w.pin.isChecked()), None)
@@ -572,7 +615,9 @@ class MainWindow(QMainWindow):
             window.closed.connect(lambda w: self.inspectors.remove(w) if w in self.inspectors else None)
             window.closed.connect(lambda w: self._opened(w, False))
             window.loaded.connect(lambda ok, w=window: self._opened(w, ok))
+            window.bookmarkRequested.connect(self._add_bookmark)
             self.inspectors.append(window)
+        window.set_sequence(sequence, label)
         self._opening = window
         explains, frame, emphasis, focus, show = "series", None, None, (), ()
         if q is not None:
@@ -593,6 +638,77 @@ class MainWindow(QMainWindow):
         window.show_slot(boom, slot, tab=tab or explains, mode="unexcised", variables=variables, context=context,
                          frame=frame, emphasis=emphasis, focus_vars=focus, variant=variant, show=show)
         return window
+
+    def inspect_sequence(self, items, start: int, label: str, variant: str = "mrd") -> None:
+        slot, boom = items[start]
+        self.inspect(boom, slot, variant=variant, sequence=items, label=label)
+
+    # --- linked brushing ------------------------------------------------------------------------
+
+    def set_selection(self, slots, mode: str = "replace") -> None:
+        """Combine brushed slots into the shared selection and show it everywhere."""
+        self.selection = brush.combine(self.selection, slots, mode)
+        for p in self.plots:
+            p.set_selection(self.selection)
+        self.overview.set_selection(self.selection)
+        for d in self.dists:
+            d.set_selection(self.selection)
+        self.scatter.set_selection(self.selection)
+        self.profiles.set_selection(self.selection)
+        self._show_selection()
+
+    def _show_selection(self) -> None:
+        has = self.selection.size > 0
+        self.selection_label.setText(f"selection: {brush.describe(self.selection)}" if has else "")
+        self.selection_inspect.setVisible(has)
+        self.selection_clear.setVisible(has)
+
+    def _set_brush_mode(self, on: bool) -> None:
+        for p in self.plots:
+            p.vb.brush_always = on
+        self.scatter.vb.brush_always = on
+        self.statusBar().showMessage("brush mode: drag to select; Ctrl adds, Alt removes, Esc clears" if on
+                                     else "brush mode off: Shift-drag still selects", 6000)
+
+    def _inspect_selection(self) -> None:
+        if self.selection.size == 0:
+            return
+        boom = self.inspectors[-1].boom if self.inspectors else self.goto_boom.currentData()
+        self.inspect_sequence([(int(k), boom) for k in self.selection], 0, f"selection, b{boom}")
+
+    # --- find and bookmarks ---------------------------------------------------------------------
+
+    def _find_context(self) -> dict | None:
+        if self.run is None:
+            return None
+        x0, x1 = self.x_range()
+        return {"run": self.run, "index": self.index, "catalog": self.catalog, "stability": self.stability,
+                "tz": self.tz_box.currentData() or self.run.timezone, "booms": self.run.booms,
+                "slot_range": (int(unix_to_slot(x0)), int(unix_to_slot(x1)) + 1)}
+
+    def _add_bookmark(self, slot: int, boom: int, variant: str) -> None:
+        dialog = BookmarkDialog("Bookmark this slot", self.bookmarks.lists(self.run.tag), parent=self.sender())
+        if dialog.exec():
+            note, name = dialog.values()
+            self._store_bookmarks([Bookmark(self.run.tag, slot, boom, variant, note, name)])
+
+    def _save_found(self, items, query: str) -> None:
+        dialog = BookmarkDialog(f"Save {len(items)} matches as a list", self.bookmarks.lists(self.run.tag),
+                                list_name="find", note=query, parent=self)
+        if dialog.exec():
+            note, name = dialog.values()
+            variant = self.find.variant.currentData()
+            self._store_bookmarks([Bookmark(self.run.tag, k, b, variant, note, name) for k, b in items])
+
+    def _store_bookmarks(self, marks) -> None:
+        try:
+            self.bookmarks.add(*marks)
+        except OSError as exc:
+            QMessageBox.warning(self, "ttu-view", f"couldn't save the bookmarks: {exc}")
+            return
+        self.bookmark_panel.refresh()
+        plural = "s" if len(marks) != 1 else ""
+        self.statusBar().showMessage(f"saved {len(marks)} bookmark{plural} to '{marks[0].list}'", 6000)
 
     def _opening_feedback(self, boom: int, slot: int) -> None:
         """A busy cursor and a status line from the click until the inspector has the slot."""

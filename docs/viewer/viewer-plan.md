@@ -4,14 +4,12 @@
 **2026-09-28:** phases 1 and 2 are built, checkpoint-tested by Elliott, and revised per his
 feedback. See "Phase 1 checkpoint revisions" and "Phase 2 as built" below.
 
-**Phases 3 and 4 are built; Elliott hasn't reviewed either yet.**
-- Phase 3 includes the anisotropy band/map, the scatter tab and distribution fits, plus his
-  same-day revisions (scatter interval + Fit button, the wind rose tab). See "Phase 3 as built".
-- Phase 4 (QC what-if) was started at his request before his phase-3 review. See "Phase 4 as
-  built".
+**Phases 3 and 4 are built and have been through two rounds of Elliott's review fixes** (see
+"Phase 3 as built", "Phase 4 as built" and the two "Review fixes" sections).
 
-**Next: Elliott reviews phases 3 and 4.** Then phase 5 (linked brushing, find, bookmarks);
-phase 6 is the rest. Neither phase 3 nor phase 4 is committed.
+**Phase 5 (linked brushing, find, bookmarks) is built and awaits Elliott's checkpoint.** See
+"Phase 5 as built". Phase 6 is the rest. Nothing since phase 2 is committed by me (Elliott
+commits).
 
 ## Context
 
@@ -1030,6 +1028,65 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
 - A find bar: a pandas `query` over a frame assembled from catalog quantities, plus a "random
   sample of slots flagged by test X on boom b" preset. The result list drives inspector ◀ ▶.
 - Bookmarks as JSON under `<home>/viewer/bookmarks.json`, created on first save, with export.
+
+### Phase 5 as built (2026-09-28)
+- **Linked brushing** (`viewer/brush.py`):
+  - Shift-drag on a timeline selects the slots of the dragged time span.
+  - Shift-drag on the scatter draws a lasso around points (`brush.in_polygon`, in view
+    coordinates, so log axes work).
+  - The toolbar's **Brush** toggle (B) makes plain drags brush.
+  - Ctrl adds to the selection, Alt removes from it, Esc clears it.
+  - The selection is one set of slots shared by every view (`MainWindow.set_selection`):
+    - magenta rings on each visible curve's value at those slots
+    - a "sel" row in the whole-period overview, showing where in the year they fall
+    - each histogram's selected share, filled in the boom's colour under the full histogram
+    - ringed points on the scatter
+    - a "selection vs rest" grouping in Profiles, chosen automatically when a selection first
+      appears
+  - The status bar shows the count ("N slots (h) in M stretches") with **Step through**, which
+    opens the inspector on the selected slots for the go-to (or last inspected) boom, and
+    **Clear**.
+- **Find** (`viewer/find.py`, `ui/find_panel.py`; the left dock's Find tab):
+  - A pandas query (`DataFrame.eval`, python engine) over one row per (slot, boom).
+  - Every catalog quantity has a name, e.g. `ws_mean`, `ustar`, `rib_2_4` (one per pair),
+    `tau_status`, `heat_tau_s`, `flag_spike_w`, `coverage_momentum_usable`, `qc_w_kurt`,
+    `status`.
+  - Built-ins: `slot`, `boom`, `height`, `time` (wall clock in the run's zone, so
+    `time > '2014-01-05'` works), `hour`, `month`, `doy`, `stability` (class name), and
+    `filtered` / `filtered_<group>` (from filter_log, for the chosen variant or the means).
+  - Only the names a query uses are read, and a top-level `and boom == N` / `boom in [...]`
+    limits the reads to those booms (`find.pinned_booms`).
+  - Unknown names get "did you mean …"; a non-condition says so.
+  - Options: a variant (for variant-specific quantities and filtering), "viewed interval only",
+    and a random sample of N.
+  - Presets fill in templates, among them "slots a test flagged, 30 at random". **Names…**
+    lists every column, searchable, and inserts one on double-click.
+  - Results are listed (time, boom and the named columns). **Step through**, or a
+    double-click, opens the inspector at that match; **Select on plots** makes the matches the
+    brushed selection; **Save as list…** keeps them as bookmarks.
+- **Inspector sequences:** "◀ match / match ▶" with "3 / 30 label" step through a list of
+  (slot, boom): find results, a bookmark list or the brushed selection. Outside the list they go
+  to the nearest match in time. An ordinary click-through clears the sequence.
+- **Bookmarks** (`viewer/bookmarks.py`, `ui/bookmarks_panel.py`; the left dock's Bookmarks
+  tab):
+  - The inspector's **☆ Bookmark** saves the run, slot, boom and variant with a note, to a
+    named list (pick one or type a new name).
+  - They're kept in `<home>/viewer/bookmarks.json`, which is created on the first save and
+    written through on every change.
+  - The tab lists this run's bookmarks (or every run's) by list. Notes and list names are
+    edited in place.
+  - Buttons: **Open** (steps through the listed bookmarks, each in its own variant), **Select
+    on plots**, **Delete** (confirmed) and **Export…** (CSV with a time column, or JSON).
+- **Flag counting** moved to `viewer/flagcounts.py` (the per-fragment weighted `bincount`), now
+  also behind the timelines' flag-fraction quantities and find's `flag_*` columns. They were
+  ~9 s a boom with FlagStore and are now 1–3 s a boom, still equal to FlagStore's counts.
+- **Tests:**
+  - `test_viewer_find.py`: lasso geometry, spans and combining, the bookmark store (persist,
+    edit, remove, export), query names, boom pinning, and find against the stored values,
+    built-ins and filter_log (slow)
+  - slow UI tests: a real Shift-drag on a timeline and a lasso on the scatter, find stepping
+    the inspector, and bookmarks saved, edited and opened (on a temporary store, never the real
+    file)
 
 ### Phase 6 — Later
 - Composite spectra over the visible range or a stability class.

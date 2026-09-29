@@ -8,12 +8,12 @@ import pandas as pd
 import pyarrow.dataset as pa_dataset
 
 from ttu_tower import schema
-from ttu_tower.flags import FlagStore
+from ttu_tower.flags import BOOM_LEVEL_VARIABLES
 from ttu_tower.post.classify import stability_classes
 from ttu_tower.tertiary.filtering import QUANTITY_GROUPS
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer.catalog import Quantity
-from ttu_tower.viewer.fragments import FragmentIndex, alias_bounds_variables
+from ttu_tower.viewer.fragments import FragmentIndex
 from ttu_tower.viewer.timeaxis import slot_to_unix
 
 SLOT_STATUSES = ("no_file", "no_data", "computed")
@@ -135,17 +135,22 @@ def _curve(slots: np.ndarray, y: np.ndarray) -> Curve:
 
 
 def _load_flag_fractions(run, index: FragmentIndex, q: Quantity, members: tuple) -> TimelineData:
-    """Per-slot fraction of samples a test flagged, over every slot of the period."""
+    """Per-slot fraction of samples a test flagged, over every slot of the period
+    (boom-level tests count toward the sonic series, as in FlagStore).
+    """
+    from ttu_tower.viewer import flagcounts
+
     test = dict(q.extra)["test"]
     slot_a, slot_b = run.period
     slots = np.arange(slot_a, slot_b, dtype=np.int64)
-    starts = slots * SAMPLES_PER_SLOT
-    f = pa_dataset.field
     curves = {}
     for b in members:
-        frame = index.read("flags", booms=[b], filter=(f("test") == test) & (f("boom") == b))
-        store = FlagStore(alias_bounds_variables(frame))
-        curves[b] = Curve(slots=slots, y=store.fraction(test, b, q.variable, starts, starts + SAMPLES_PER_SLOT))
+        counts = flagcounts.boom_counts(run, index, b, [test])
+        flagged = np.zeros(slots.size)
+        for var in (q.variable, None) if q.variable in BOOM_LEVEL_VARIABLES else (q.variable,):
+            if (test, var) in counts:
+                flagged += counts[(test, var)]
+        curves[b] = Curve(slots=slots, y=flagged / SAMPLES_PER_SLOT)
     return TimelineData(quantity=q, variant="none", curves=curves)
 
 

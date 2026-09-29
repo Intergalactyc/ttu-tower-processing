@@ -17,6 +17,7 @@ TEST_COLORS = {
 AVAILABILITY_COLORS = {-1: (255, 255, 255, 0), 0: (200, 200, 200, 255), 1: (240, 170, 60, 255),
                        2: (80, 160, 90, 255)}
 NIGHT_BRUSH = (40, 40, 90, 28)
+SELECTED_COLOR = "#e6007e"  # brushed slots, everywhere they're shown
 # the ttu-windprofiles figure palette, so the band reads like the paper's plots
 STABILITY_COLORS = {"strongly unstable": "#d62728", "unstable": "#ff7f0e", "neutral": "#9b5445",
                     "stable": "#2ca02c", "strongly stable": "#3b50d6"}

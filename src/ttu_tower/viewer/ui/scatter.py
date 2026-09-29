@@ -2,7 +2,8 @@
 panel B's, one boom (or pair) each, over the viewed interval or the whole
 period. Points or a density map, optionally colored by stability;
 correlation statistics; trend, binned central line, y = x; and any of the
-curve fits (with limits and binning), fitted only on request.
+curve fits (with limits and binning), fitted only on request. A lasso
+(Shift-drag, or any drag in brush mode) selects slots for linked brushing.
 """
 import warnings
 
@@ -16,14 +17,46 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from ttu_tower.viewer import curvefits
+from ttu_tower.viewer import brush, curvefits
 from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import joined
 from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui.timeline_plot import brush_mode
 
 _POINT = "#1f4e9c"
 _FIT = "#2ca02c"
 _STALE = "#8fbf8f"
+
+
+class LassoViewBox(pg.ViewBox):
+    """A brushing drag draws a lasso and hands its polygon (view coordinates)
+    to `lasso(px, py, mode)`; other drags pan and zoom as usual.
+    """
+
+    def __init__(self, lasso, **kwargs):
+        super().__init__(**kwargs)
+        self.lasso = lasso
+        self.brush_always = False
+        self._path: list = []
+        self._line = None
+
+    def mouseDragEvent(self, ev, axis=None):
+        mode = brush_mode(ev, self.brush_always) if axis is None else None
+        if mode is None:
+            super().mouseDragEvent(ev, axis)
+            return
+        ev.accept()
+        if ev.isStart() or self._line is None:
+            self._path = [self.mapToView(ev.buttonDownPos())]
+            self._line = pg.PlotCurveItem(pen=pg.mkPen(style.SELECTED_COLOR, width=1.5))
+            self.addItem(self._line, ignoreBounds=True)
+        self._path.append(self.mapToView(ev.pos()))
+        px, py = np.array([p.x() for p in self._path]), np.array([p.y() for p in self._path])
+        self._line.setData(np.append(px, px[0]), np.append(py, py[0]))
+        if ev.isFinish():
+            self.removeItem(self._line)
+            self._line = None
+            self.lasso(px, py, mode)
 
 
 def _fit_job(name, x, y, opts, settings=()):
@@ -35,6 +68,7 @@ def _fit_job(name, x, y, opts, settings=()):
 
 class ScatterView(QWidget):
     pointClicked = Signal(int, object)  # slot, the x axis's member
+    brushed = Signal(object, str)  # the lassoed slots, and "replace" / "add" / "remove"
 
     def __init__(self, runner=None, parent=None):
         super().__init__(parent)
@@ -116,7 +150,10 @@ class ScatterView(QWidget):
         self.stats = QLabel()
         self.stats.setTextFormat(Qt.TextFormat.RichText)
         self.stats.setWordWrap(True)
-        self.plot = pg.PlotWidget()
+        self.vb = LassoViewBox(self._on_lasso)
+        self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot.setToolTip("Shift-drag (or drag in brush mode) to lasso slots; Ctrl adds, Alt removes")
+        self.selection = np.empty(0, dtype=np.int64)
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         for side in ("left", "bottom"):
             self.plot.getPlotItem().getAxis(side).enableAutoSIPrefix(False)
@@ -283,6 +320,7 @@ class ScatterView(QWidget):
             self._density(vx, vy, log=mode.endswith("(log)"))
         else:
             self._points(slots, vx, vy)
+        self._highlight(slots, vx, vy)
         lo, hi = (np.percentile(x, [0.5, 99.5]) if x.size > 1 else (x.min(), x.max()))
         grid = np.geomspace(max(lo, 1e-12), hi, 200) if self.log_x.isChecked() else np.linspace(lo, hi, 200)
         stats = curvefits.correlation(x, y)
@@ -451,6 +489,29 @@ class ScatterView(QWidget):
         if self.fit_inputs != self._inputs():
             text += " — <span style='color:#a60'>fitted to earlier data or settings; press Fit to refit</span>"
         self.fit_status.setText(text)
+
+    # --- brushing ----------------------------------------------------------------------------------
+
+    def _on_lasso(self, px, py, mode: str) -> None:
+        slots, x, y = self._shown()
+        vx, vy = self._to_view(x, y)
+        self.brushed.emit(slots[brush.in_polygon(vx, vy, px, py)], mode)
+
+    def set_selection(self, slots: np.ndarray) -> None:
+        self.selection = slots
+        self.redraw()
+
+    def _highlight(self, slots, vx, vy) -> None:
+        """Ring the brushed slots' points."""
+        if self.selection.size == 0:
+            return
+        on = np.isin(slots, self.selection)
+        if on.any():
+            pen = pg.mkPen(style.SELECTED_COLOR, width=1.5)
+            item = pg.ScatterPlotItem(vx[on], vy[on], size=10, brush=None, pen=pen,
+                                      name=f"selected ({int(on.sum())})")
+            item.setZValue(10)
+            self.plot.addItem(item)
 
     def _on_click(self, _item, points, _ev) -> None:
         if len(points):

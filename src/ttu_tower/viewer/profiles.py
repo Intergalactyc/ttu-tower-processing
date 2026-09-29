@@ -14,6 +14,7 @@ from ttu_tower.viewer.decimate import visible_slice
 from ttu_tower.viewer.timeline import in_class
 
 ALL = "all"
+SELECTED, REST = "selected", "the rest"
 FITS = {"power law": "power law", "log law": "neutral log law (x = height)", "linear": "linear",
         "logarithmic": "logarithmic"}
 _SHOWN_PARAMS = {"power law": {"b": "α", "a": "a"}, "log law": {"ustar": "u*", "z0": "z0"},
@@ -44,12 +45,17 @@ def _centre(values: np.ndarray, method: str, circular: bool) -> tuple[float, flo
     return float(v.mean()), float(v.std())
 
 
-def profile_stats(data, members, x_range, stability, method: str = "mean", by_stability: bool = False) -> pd.DataFrame:
+def profile_stats(data, members, x_range, stability, method: str = "mean", by_stability: bool = False,
+                  selection: np.ndarray | None = None) -> pd.DataFrame:
     """One row per (group, boom): height, centre, spread and N, where group is
-    "all" or each stability class.
+    "all", each stability class, or (given brushed `selection` slots) the
+    selected slots and the rest.
     """
     q = data.quantity
-    groups = [ALL] if not by_stability or stability is None else list(stability[1])
+    if selection is not None:
+        groups = [SELECTED, REST]
+    else:
+        groups = [ALL] if not by_stability or stability is None else list(stability[1])
     rows = []
     for m in members:
         curve = data.curves.get(m)
@@ -57,8 +63,14 @@ def profile_stats(data, members, x_range, stability, method: str = "mean", by_st
             continue
         sl = slice(None) if x_range is None else visible_slice(curve.x, x_range[0], x_range[1], margin=0)
         y, slots = curve.y[sl], curve.slots[sl]
+        chosen = np.isin(slots, selection) if selection is not None else None
         for g in groups:
-            v = y if g == ALL else y[in_class(stability, slots, g)]
+            if g == ALL:
+                v = y
+            elif g in (SELECTED, REST):
+                v = y[chosen if g == SELECTED else ~chosen]
+            else:
+                v = y[in_class(stability, slots, g)]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 centre, spread = _centre(v, method, q.circular)

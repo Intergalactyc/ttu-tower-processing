@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLa
 from ttu_tower.viewer import profiles
 from ttu_tower.viewer.ui import style, tables
 
-_ALL_COLOR = "#1f4e99"
+_GROUP_COLORS = {profiles.ALL: "#1f4e99", profiles.SELECTED: style.SELECTED_COLOR, profiles.REST: "#7a7a7a"}
 OFFSET_PX = 3  # between stability classes' points at one height, so their bars don't overlap
 CAP_PX = 6  # error-bar cap length
 
@@ -89,7 +89,7 @@ class ProfilePlot(QWidget):
         groups = [(g, part[np.isfinite(part["centre"])]) for g, part in stats.groupby("group", sort=False)]
         groups = [(g, part) for g, part in groups if not part.empty]
         for position, (g, part) in enumerate(groups):
-            color = pg.mkColor(_ALL_COLOR) if g == profiles.ALL else style.stability_color(g, names.index(g))
+            color = pg.mkColor(_GROUP_COLORS[g]) if g in _GROUP_COLORS else style.stability_color(g, names.index(g))
             x, z = part["centre"].to_numpy(), part["height"].to_numpy()
             curve = pg.PlotDataItem(x, z, pen=pg.mkPen(color, width=1.5) if lines else None, symbol="o",
                                     symbolSize=7, symbolBrush=color, symbolPen=None)
@@ -151,10 +151,11 @@ class ProfilesView(QWidget):
         self.lines = QCheckBox("lines")
         self.log_z = QCheckBox("log height")
         self.grouping = QComboBox()
-        self.grouping.addItem("all slots", False)
-        self.grouping.addItem("by stability", True)
-        self.grouping.setToolTip("one profile over every slot, or one per stability class (Ri_b of the "
-                                 "configured pair)")
+        self.grouping.addItem("all slots", "all")
+        self.grouping.addItem("by stability", "stability")
+        self.grouping.addItem("selection vs rest", "selection")
+        self.grouping.setToolTip("one profile over every slot, one per stability class (Ri_b of the configured "
+                                 "pair), or the brushed slots' profile beside the rest's")
         for w in (self.method, self.grouping):
             w.currentIndexChanged.connect(lambda *_: self.redraw())
         for w in (self.error_bars, self.lines, self.log_z):
@@ -168,6 +169,7 @@ class ProfilesView(QWidget):
         self.sources = [None, None]  # (data, members) per panel
         self.x_range = None
         self.stability = None
+        self.selection = np.empty(0, dtype=np.int64)
 
         controls = QHBoxLayout()
         for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z):
@@ -191,6 +193,13 @@ class ProfilesView(QWidget):
         self.sources, self.x_range, self.stability = list(sources), x_range, stability
         self.redraw()
 
+    def set_selection(self, slots: np.ndarray) -> None:
+        self.selection = slots
+        if slots.size and self.grouping.currentData() == "all":
+            self.grouping.setCurrentIndex(self.grouping.findData("selection"))  # what brushing is for here
+        else:
+            self.redraw()
+
     def _quantities(self) -> list:
         return [s[0].quantity if s is not None and s[0] is not None else None for s in self.sources]
 
@@ -205,22 +214,36 @@ class ProfilesView(QWidget):
             self.method.blockSignals(False)
         self.method.setToolTip("directions: the vector mean and Yamartino σ (they have no median)" if circular_only
                                else "each boom's mean (spread: σ) or median (spread: MAD)")
-        self.grouping.setEnabled(self.stability is not None)
+        model = self.grouping.model()
+        model.item(1).setEnabled(self.stability is not None)
+        model.item(2).setEnabled(self.selection.size > 0)
+        if not model.item(self.grouping.currentIndex()).isEnabled():
+            self.grouping.blockSignals(True)
+            self.grouping.setCurrentIndex(0)
+            self.grouping.blockSignals(False)
         spread = "σ" if self.method.currentData() == "mean" else "MAD"
         self.error_bars.setText(f"± {spread}")
         what = "standard deviation" if spread == "σ" else "median absolute deviation"
         self.error_bars.setToolTip(f"horizontal bars: ± the {what}")
         for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z):
-            w.setEnabled(bool(shown) and (w is not self.grouping or self.stability is not None))
+            w.setEnabled(bool(shown))
 
     def redraw(self) -> None:
         self._enable_controls()
         scope = "whole period" if self.x_range is None else "visible range"
-        by_stability = bool(self.grouping.currentData()) and self.stability is not None
-        names = list(self.stability[1]) if by_stability else []
-        self.key.setText(" ".join(f"<span style='color:{style.stability_color(n, i).name()}'>■ {n}</span>"
-                                  for i, n in enumerate(names)))
-        self.key.setVisible(by_stability)
+        grouping = self.grouping.currentData()
+        by_stability = grouping == "stability" and self.stability is not None
+        selection = self.selection if grouping == "selection" and self.selection.size else None
+        if by_stability:
+            names = list(self.stability[1])
+            key = [(style.stability_color(n, i).name(), n) for i, n in enumerate(names)]
+        elif selection is not None:
+            key = [(_GROUP_COLORS[profiles.SELECTED], f"selected ({selection.size} slots)"),
+                   (_GROUP_COLORS[profiles.REST], "the rest")]
+        else:
+            key = []
+        self.key.setText(" ".join(f"<span style='color:{c}'>■ {n}</span>" for c, n in key))
+        self.key.setVisible(bool(key))
         for plot, source, q in zip(self.plots, self.sources, self._quantities()):
             plot.set_quantity(q)
             if q is None:
@@ -231,7 +254,8 @@ class ProfilesView(QWidget):
                 continue
             data, members = source
             method = "mean" if q.circular else self.method.currentData()
-            stats = profiles.profile_stats(data, members, self.x_range, self.stability, method, by_stability)
+            stats = profiles.profile_stats(data, members, self.x_range, self.stability, method, by_stability,
+                                           selection)
             if stats.empty or not np.isfinite(stats["centre"]).any():
                 plot.clear(f"<b>{q.title}</b>: no values in range")
                 continue

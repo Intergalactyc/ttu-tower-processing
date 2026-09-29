@@ -351,12 +351,119 @@ def test_profile_classes_sit_a_few_pixels_apart_with_capped_bars(window, qtbot):
     data = window.datas[0]
     slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
     stability = (Curve(slots=slots, y=(slots % 2).astype(float)), ["unstable", "stable"])
-    view.grouping.setCurrentIndex(1)
-    view.error_bars.setChecked(True)
     view.set_sources([(data, list(data.curves)), None], None, stability)
+    view.grouping.setCurrentIndex(view.grouping.findData("stability"))
+    view.error_bars.setChecked(True)
     plot = view.plots[0]
     (first, bars, _, z, _, _, _), (second, _, _, _, _, _, _) = plot._marks
     py = plot.plot.getViewBox().viewPixelSize()[1]
     gap = second.getData()[1] - first.getData()[1]
     assert np.allclose(gap, OFFSET_PX * py) and np.allclose(first.getData()[1], z - OFFSET_PX * py / 2)
     assert bars is not None and bars.opts["beam"] > 0
+
+
+def _drag(qtbot, widget, points, modifiers):
+    """A left-button drag through `points` (widget coordinates), as real mouse events."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    viewport = widget.viewport()
+    for i, p in enumerate(points):
+        kind = (QEvent.Type.MouseButtonPress if i == 0 else QEvent.Type.MouseButtonRelease
+                if i == len(points) - 1 else QEvent.Type.MouseMove)
+        held = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+        pos = QPointF(p)
+        QApplication.sendEvent(viewport, QMouseEvent(kind, pos, QPointF(viewport.mapToGlobal(pos.toPoint())),
+                                                     Qt.MouseButton.LeftButton, held, modifiers))
+        qtbot.wait(40)
+
+
+def test_shift_drag_on_a_timeline_brushes_its_span_everywhere(window, qtbot):
+    from PySide6.QtCore import QPointF, Qt
+    from ttu_tower.viewer import brush
+    plot = window.plots[0]
+    member = plot.visible_members()[0]
+    k = int(plot.curves[member].slots[len(plot.curves[member].slots) // 2])
+    x = slot_to_unix(k)
+    window.set_x_range(x - 4 * 3600, x + 4 * 3600)
+    qtbot.wait(50)
+    y = float(np.mean(plot.vb.viewRange()[1]))
+    span = (x - 1800 + 300, x + 1800 + 300)  # mid-slot, clear of pixel rounding at slot edges
+    ends = [plot.widget.mapFromScene(plot.vb.mapViewToScene(QPointF(v, y))) for v in (span[0], x, span[1])]
+    _drag(qtbot, plot.widget, ends, Qt.KeyboardModifier.ShiftModifier)
+    assert list(window.selection) == list(brush.slots_in_span(*span))
+    assert window.x_range() == pytest.approx((x - 4 * 3600, x + 4 * 3600))  # brushing doesn't pan
+    assert set(plot.selected_items) == set(plot.visible_members())
+    assert window.overview.selection_image.image is not None and "slots" in window.selection_label.text()
+    assert window.scatter.selection.size == window.selection.size
+    window.set_selection(np.array([k + 30]), "add")
+    assert window.selection.size == brush.slots_in_span(*span).size + 1
+    from PySide6.QtTest import QTest
+    QTest.keyClick(window, Qt.Key.Key_Escape)
+    assert window.selection.size == 0 and not plot.selected_items and not window.selection_clear.isVisible()
+
+
+def test_a_lasso_on_the_scatter_selects_the_points_inside(window, qtbot):
+    from PySide6.QtCore import QPointF, Qt
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    slots, x, y = scatter._shown()
+    vx, vy = scatter._to_view(x, y)
+    lo_x, hi_x = np.percentile(vx, [20, 80])
+    lo_y, hi_y = np.percentile(vy, [20, 80])
+    corners = [(lo_x, lo_y), (hi_x, lo_y), (hi_x, hi_y), (lo_x, hi_y), (lo_x, lo_y)]
+    points = [scatter.plot.mapFromScene(scatter.vb.mapViewToScene(QPointF(a, b))) for a, b in corners]
+    _drag(qtbot, scatter.plot, points, Qt.KeyboardModifier.ShiftModifier)
+    inside = (vx > lo_x) & (vx < hi_x) & (vy > lo_y) & (vy < hi_y)
+    assert 0 < window.selection.size and set(window.selection) <= set(slots)
+    # the lasso is drawn in screen pixels, so allow the points right on its edge
+    assert abs(window.selection.size - inside.sum()) <= max(2, 0.05 * inside.sum())
+
+
+def test_find_steps_the_inspector_through_its_matches(window, qtbot):
+    panel = window.find
+    panel.query.setText(f"ws_mean > 0 and boom == {SPIKY_BOOM}")
+    panel.run_query()
+    qtbot.waitUntil(lambda: panel.result is not None and _idle(window), timeout=60_000)
+    matches = list(zip(panel.result["slot"], panel.result["boom"]))
+    assert len(matches) > 3 and panel.table.rowCount() == len(matches)
+    panel.table.setCurrentCell(1, 0)
+    panel.step_button.click()
+    inspector = window.inspectors[-1]
+    qtbot.waitUntil(lambda: inspector.bundle is not None and _idle(window), timeout=60_000)
+    assert (inspector.slot, inspector.boom) == matches[1] and inspector.seq_info.text().startswith("2 /")
+    inspector.step_sequence(1)
+    qtbot.waitUntil(lambda: inspector.bundle.slot == matches[2][0] and _idle(window), timeout=60_000)
+    assert inspector.seq_info.text().startswith("3 /")
+    panel.select_button.click()
+    assert list(window.selection) == sorted({int(k) for k, _ in matches})
+    window.inspect(SPIKY_BOOM, matches[0][0])  # an ordinary click drops the sequence
+    assert not inspector.seq_next.isVisible()
+    qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
+
+
+def test_bookmarks_are_saved_listed_and_opened(window, qtbot, tmp_path):
+    from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
+    store = BookmarkStore(tmp_path / "bookmarks.json")
+    window.bookmarks = window.bookmark_panel.store = store
+    tag = window.run.tag
+    window._store_bookmarks([Bookmark(tag, SPIKY_SLOT, SPIKY_BOOM, "mrd", "w spikes", "checks"),
+                             Bookmark(tag, SPIKY_SLOT + 1, 1, "naive", "", "checks"),
+                             Bookmark("another run", 5, 1)])
+    panel = window.bookmark_panel
+    assert (tmp_path / "bookmarks.json").exists() and panel.table.rowCount() == 2
+    panel.all_runs.setChecked(True)
+    assert panel.table.rowCount() == 3
+    panel.all_runs.setChecked(False)
+    panel.list_filter.setCurrentIndex(panel.list_filter.findText("checks"))
+    note = panel.table.item(0, 3)
+    note.setText("w spikes, fine")
+    assert BookmarkStore(tmp_path / "bookmarks.json").items[0].note == "w spikes, fine"
+    panel.table.setCurrentCell(1, 0)
+    panel.open_button.click()
+    inspector = window.inspectors[-1]
+    qtbot.waitUntil(lambda: inspector.bundle is not None and _idle(window), timeout=60_000)
+    assert (inspector.slot, inspector.boom, inspector.variant()) == (SPIKY_SLOT + 1, 1, "naive")
+    assert inspector.seq_info.text().startswith("2 / 2")

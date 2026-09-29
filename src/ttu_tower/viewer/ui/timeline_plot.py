@@ -18,25 +18,52 @@ MIN_AXIS_WIDTH = 60
 MARKER_SIZE = 5
 AMBIGUOUS_PX = 2.0
 FILTERED_COLOR = "#7a7a7a"
+SELECTED_COLOR = style.SELECTED_COLOR
+BRUSH_FILL = (230, 0, 126, 40)
 TAU_MARKS = {"capped": ("t1", "#ff7f0e"), "unresolved": ("d", "#9467bd"), "fallback": ("s", "#555555"),
              "none": ("x", "#000000")}
 _TAU_GLYPHS = {"capped": "▲", "unresolved": "◆", "fallback": "■", "none": "✕"}
 
 
+def brush_mode(ev, always: bool) -> str | None:
+    """How a left drag brushes ("replace", "add" or "remove"), or None when it
+    should pan: Shift-drag brushes (or any drag, in brush mode); Ctrl adds to
+    the selection, Alt takes away from it.
+    """
+    mods = ev.modifiers()
+    if ev.button() != Qt.MouseButton.LeftButton or not (always or mods & Qt.KeyboardModifier.ShiftModifier):
+        return None
+    if mods & Qt.KeyboardModifier.AltModifier:
+        return "remove"
+    return "add" if mods & Qt.KeyboardModifier.ControlModifier else "replace"
+
+
 class PickViewBox(FixedXViewBox):
-    """Clicks near a data point go to `picker(ev)`; anything else (the
-    right-click menu with export, panning) behaves as usual.
+    """Clicks near a data point go to `picker(ev)`; a brushing drag goes to
+    `brusher(x0, x1, mode, finished)`; anything else (the right-click menu with
+    export, panning) behaves as usual.
     """
 
-    def __init__(self, picker=None, **kwargs):
+    def __init__(self, picker=None, brusher=None, **kwargs):
         super().__init__(**kwargs)
-        self.picker = picker
+        self.picker, self.brusher = picker, brusher
+        self.brush_always = False
 
     def mouseClickEvent(self, ev):
         if self.picker is not None and self.picker(ev):
             ev.accept()
             return
         super().mouseClickEvent(ev)
+
+    def mouseDragEvent(self, ev, axis=None):
+        mode = brush_mode(ev, self.brush_always) if self.brusher is not None and axis is None else None
+        if mode is None:
+            super().mouseDragEvent(ev, axis)
+            return
+        ev.accept()
+        x0 = self.mapToView(ev.buttonDownPos()).x()
+        x1 = self.mapToView(ev.pos()).x()
+        self.brusher(x0, x1, mode, ev.isFinish())
 
 
 class LegendBar(QWidget):
@@ -100,6 +127,7 @@ class TimelinePlot(QWidget):
     filteredClicked = Signal(int, object)  # slot, member of a value tertiary filtered
     hovered = Signal(int, str)  # slot, values of the visible curves there
     alsoHere = Signal(str)  # the other curves a click landed on, when several coincide
+    brushed = Signal(float, float, str)  # a dragged time span (unix s) and "replace" / "add" / "remove"
 
     def __init__(self, tz: str = "Etc/GMT+6", parent=None):
         super().__init__(parent)
@@ -107,7 +135,7 @@ class TimelinePlot(QWidget):
         self.title.setWordWrap(True)  # wraps rather than widening the window
         self.legend = LegendBar()
         self.legend.toggled.connect(self._apply_visibility)
-        self.vb = PickViewBox(picker=self._on_click)
+        self.vb = PickViewBox(picker=self._on_click, brusher=self._on_brush)
         self.axis = pg.DateAxisItem(orientation="bottom", utcOffset=display_offset_s(tz))
         self.widget = pg.PlotWidget(viewBox=self.vb, axisItems={"bottom": self.axis})
         self.plot_item = self.widget.getPlotItem()
@@ -140,6 +168,9 @@ class TimelinePlot(QWidget):
         self.filtered_crosses: dict = {}  # member -> PlotDataItem (the x inside it)
         self.tau_marks: dict = {}  # member -> (slots, statuses, x, y)
         self.tau_items: dict = {}  # member -> ScatterPlotItem
+        self.selection = np.empty(0, dtype=np.int64)
+        self.selected_items: dict = {}  # member -> PlotDataItem (rings on the brushed slots)
+        self._brush_region = None
         self._tip_shown = False
         self.widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
@@ -151,6 +182,8 @@ class TimelinePlot(QWidget):
         self.axis.update()
 
     def clear(self, message: str = "") -> None:
+        self._remove(self.selected_items)
+        self.selected_items = {}
         self.clear_overlays()
         for item in self.items.values():
             self.plot_item.removeItem(item)
@@ -200,6 +233,7 @@ class TimelinePlot(QWidget):
             left.setTicks(None)
         self.decimator.redraw()
         self.vb.enableAutoRange(axis=pg.ViewBox.YAxis)
+        self.set_selection(self.selection)
 
     def axis_width_needed(self) -> int:
         """Pixels the left axis needs for its widest category label (pyqtgraph
@@ -214,7 +248,7 @@ class TimelinePlot(QWidget):
 
     def _apply_visibility(self) -> None:
         visible = self.legend.visible()
-        for items in (self.items, self.filtered_items, self.filtered_crosses, self.tau_items):
+        for items in (self.items, self.filtered_items, self.filtered_crosses, self.tau_items, self.selected_items):
             for member, item in items.items():
                 item.setVisible(member in visible)
         self.decimator.redraw()
@@ -294,6 +328,43 @@ class TimelinePlot(QWidget):
             self.tau_items[member] = item
             self.tau_marks[member] = (slots, statuses, x, y)
         self._update_key()
+
+    # --- brushing ---------------------------------------------------------------------------------
+
+    def _on_brush(self, x0: float, x1: float, mode: str, finished: bool) -> None:
+        """Show the span while dragging; report it when the drag ends."""
+        if self._brush_region is None:
+            self._brush_region = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(BRUSH_FILL),
+                                                     pen=pg.mkPen(SELECTED_COLOR, width=1))
+            self._brush_region.setZValue(20)
+            self.plot_item.addItem(self._brush_region, ignoreBounds=True)
+        self._brush_region.setRegion(sorted((x0, x1)))
+        if finished:
+            self.plot_item.removeItem(self._brush_region)
+            self._brush_region = None
+            self.brushed.emit(x0, x1, mode)
+
+    def set_selection(self, slots: np.ndarray) -> None:
+        """A ring on every visible curve's value at each brushed slot."""
+        self._remove(self.selected_items)
+        self.selected_items = {}
+        self.selection = slots
+        if slots.size == 0:
+            return
+        visible = self.legend.visible()
+        for member, curve in self.curves.items():
+            y = self._positive(_values_at(curve, slots))
+            ok = np.isfinite(y)
+            if not ok.any():
+                continue
+            item = pg.PlotDataItem(Curve(slots=slots[ok], y=y[ok]).x, y[ok], pen=None, symbol="o",
+                                   symbolSize=MARKER_SIZE + 5, symbolBrush=None,
+                                   symbolPen=pg.mkPen(SELECTED_COLOR, width=1.5))
+            pass_clicks(item)
+            item.setZValue(6)
+            item.setVisible(member in visible)
+            self.plot_item.addItem(item)
+            self.selected_items[member] = item
 
     def _update_key(self) -> None:
         parts = []

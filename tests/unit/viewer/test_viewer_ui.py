@@ -251,11 +251,11 @@ def test_long_category_labels_fit_and_axes_stay_aligned(window, qtbot):
     axis = window.plots[1].plot_item.getAxis("left")
     from PySide6.QtGui import QFontMetrics
     widest = max(QFontMetrics(axis.font()).horizontalAdvance(c) for c in labels)
-    assert axis.width() >= widest + 20
-    widths = {window.plots[0].plot_item.getAxis("left").width(), axis.width(),
-              window.stability_band.plot.getPlotItem().getAxis("left").width(),
-              window.overview.getPlotItem().getAxis("left").width()}
-    assert len(widths) == 1
+    assert axis.maximumWidth() >= widest + 20  # the width asked for; the geometry follows at the next layout pass
+    qtbot.waitUntil(lambda: axis.width() >= widest + 20, timeout=5_000)
+    axes = [window.plots[0].plot_item.getAxis("left"), axis, window.stability_band.plot.getPlotItem().getAxis("left"),
+            window.overview.getPlotItem().getAxis("left")]
+    qtbot.waitUntil(lambda: len({a.width() for a in axes}) == 1, timeout=5_000)
 
 
 def test_qc_whatif_panel_reprocesses_and_marks_what_changed(window, qtbot):

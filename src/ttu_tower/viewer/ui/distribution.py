@@ -115,6 +115,7 @@ class DistributionView(QWidget):
         layout.addWidget(self.split, stretch=1)
         layout.addWidget(self.note)
         self._args = None
+        self.selection = np.empty(0, dtype=np.int64)
         self._stats: pd.DataFrame | None = None
         self._log = False
         self._edges = np.linspace(0.0, 1.0, 2)
@@ -143,7 +144,8 @@ class DistributionView(QWidget):
         self._args = (data, list(members), x_range, stability)
         self.refresh()
 
-    def values_by_member(self) -> dict:
+    def slots_and_values(self) -> dict:
+        """member -> (slots, values) in range (and in the chosen class)."""
         data, members, x_range, stability = self._args
         name = self.stability_box.currentData()
         out = {}
@@ -152,9 +154,20 @@ class DistributionView(QWidget):
             if curve is None:
                 continue
             sl = slice(None) if x_range is None else visible_slice(curve.x, x_range[0], x_range[1], margin=0)
-            y = curve.y[sl]
-            out[m] = y if name is None else y[in_class(stability, curve.slots[sl], name)]
+            slots, y = curve.slots[sl], curve.y[sl]
+            if name is not None:
+                keep = in_class(stability, slots, name)
+                slots, y = slots[keep], y[keep]
+            out[m] = (slots, y)
         return out
+
+    def values_by_member(self) -> dict:
+        return {m: y for m, (_, y) in self.slots_and_values().items()}
+
+    def set_selection(self, slots: np.ndarray) -> None:
+        """Brushed slots: each histogram shows their share of it, filled."""
+        self.selection = slots
+        self.refresh()
 
     def refresh(self) -> None:
         self.plot.clear()
@@ -178,6 +191,7 @@ class DistributionView(QWidget):
             self._bars(values, data.categories or [])
         else:
             self._histograms(values, q.unit, q.circular)
+            self._selected_share(q.circular)
         self._stats = self._summary_frame(values, q.categorical, q.circular)
         self._show_table(self._stats)
         self._start_fits(values, q)
@@ -279,6 +293,7 @@ class DistributionView(QWidget):
         pooled = np.concatenate([v[np.isfinite(v)] for v in values.values()]) if values else np.empty(0)
         self.plot.setLogMode(x=False)
         if pooled.size < 2:
+            self._edges = np.empty(0)
             return
         log = self.log_bins.isEnabled() and self.log_bins.isChecked()
         self._log = log
@@ -300,6 +315,26 @@ class DistributionView(QWidget):
             self.plot.addItem(item)
         self.plot.setLabel("bottom", ("log10 " if log else "") + (unit or "value"))
         self.plot.setLabel("left", "density")
+
+    def _selected_share(self, circular: bool) -> None:
+        """The brushed slots' part of each histogram (same density scale, so
+        it sits inside the full histogram).
+        """
+        if self.selection.size == 0 or self._edges.size < 2:
+            return
+        widths = np.diff(self._edges)
+        for i, (member, (slots, y)) in enumerate(self.slots_and_values().items()):
+            finite = np.isfinite(y)
+            chosen = finite & np.isin(slots, self.selection)
+            if not chosen.any():
+                continue
+            counts, _ = np.histogram(y[chosen], bins=self._edges)
+            share = counts / (finite.sum() * widths)
+            color = pg.mkColor(style.member_color(member, i))
+            color.setAlpha(110)
+            x = np.log10(self._edges) if self._log else self._edges
+            self.plot.addItem(pg.PlotDataItem(x, share, stepMode="center", fillLevel=0, brush=pg.mkBrush(color),
+                                              pen=pg.mkPen(style.SELECTED_COLOR, width=1)))
 
     def _bars(self, values: dict, categories: list[str]) -> None:
         n = max(len(values), 1)

@@ -35,6 +35,7 @@ def _num(df, **eq):
 class InspectorWindow(QWidget):
     closed = Signal(object)
     loaded = Signal(bool)  # the slot's stored rows arrived (True) or couldn't be read (False)
+    bookmarkRequested = Signal(int, int, str)  # slot, boom, variant
 
     def __init__(self, run, index, reprocessor, runner, parent=None):
         super().__init__(parent)
@@ -67,6 +68,16 @@ class InspectorWindow(QWidget):
         prev_btn.clicked.connect(lambda: self.step(-1))
         next_btn.clicked.connect(lambda: self.step(1))
         self.nav_buttons = {"prev": prev_btn, "next": next_btn}
+        # stepping through a list of (slot, boom): find results, a bookmark list, a brushed selection
+        self.sequence: list[tuple[int, int]] = []
+        self.sequence_label = ""
+        self.seq_prev, self.seq_next = QPushButton("◀ match"), QPushButton("match ▶")
+        self.seq_prev.clicked.connect(lambda: self.step_sequence(-1))
+        self.seq_next.clicked.connect(lambda: self.step_sequence(1))
+        self.seq_info = QLabel()
+        bookmark = QPushButton("☆ Bookmark")
+        bookmark.setToolTip("save this slot, boom and variant, with a note, to a bookmark list")
+        bookmark.clicked.connect(self._request_bookmark)
         self.summary = QLabel()
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         self.summary.setWordWrap(True)
@@ -98,8 +109,10 @@ class InspectorWindow(QWidget):
 
         header = QHBoxLayout()
         header.addWidget(self.title, stretch=1)
-        for w in (prev_btn, next_btn, self.boom_box, self.variant_box, self.pin):
+        for w in (self.seq_prev, self.seq_info, self.seq_next, prev_btn, next_btn, self.boom_box, self.variant_box,
+                  bookmark, self.pin):
             header.addWidget(w)
+        self._show_sequence()
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addWidget(self.summary)
@@ -122,6 +135,57 @@ class InspectorWindow(QWidget):
         self.tabs.setCurrentIndex(TABS.index(tab))
         self._load()
         self.bring_to_front()
+
+    def _request_bookmark(self) -> None:
+        if self.slot is not None:
+            self.bookmarkRequested.emit(self.slot, self.boom, self.variant())
+
+    def set_sequence(self, items, label: str = "") -> None:
+        """A list of (slot, boom) the match buttons step through (empty: none)."""
+        self.sequence = [(int(k), int(b)) for k, b in (items or [])]
+        self.sequence_label = label
+        self._show_sequence()
+
+    def _position(self) -> int | None:
+        try:
+            return self.sequence.index((self.slot, self.boom))
+        except ValueError:
+            return None
+
+    def _show_sequence(self) -> None:
+        shown = bool(self.sequence)
+        for w in (self.seq_prev, self.seq_info, self.seq_next):
+            w.setVisible(shown)
+        if not shown:
+            return
+        i = self._position()
+        where = f"{i + 1} / {len(self.sequence)}" if i is not None else f"– / {len(self.sequence)}"
+        label = self.sequence_label if len(self.sequence_label) <= 40 else self.sequence_label[:39] + "…"
+        self.seq_info.setText(f"{where} {label}".strip())
+        self.seq_info.setToolTip(self.sequence_label)
+        self.seq_prev.setEnabled(i is None or i > 0)
+        self.seq_next.setEnabled(i is None or i < len(self.sequence) - 1)
+
+    def step_sequence(self, delta: int) -> None:
+        """To the next (or previous) item of the sequence; from outside it, the nearest in time."""
+        if not self.sequence:
+            return
+        i = self._position()
+        if i is None:
+            later = [j for j, (k, _) in enumerate(self.sequence) if (k > self.slot if delta > 0 else k < self.slot)]
+            if not later:
+                return
+            i = later[0] if delta > 0 else later[-1]
+        else:
+            i = i + delta
+            if not 0 <= i < len(self.sequence):
+                return
+        slot, boom = self.sequence[i]
+        self.slot, self.boom = slot, boom
+        self._set_combo(self.boom_box, boom)
+        if self.reprocessor is not None:
+            self.series.set_focus(boom, slot)
+        self._load()
 
     def bring_to_front(self) -> None:
         if self.isMinimized():
@@ -169,6 +233,7 @@ class InspectorWindow(QWidget):
     # --- stored data ------------------------------------------------------------------------------
 
     def _load(self) -> None:
+        self._show_sequence()
         self.title.setText(f"<b>Boom {self.boom}</b> ({HEIGHTS[self.boom]:g} m) · slot "
                            f"{format_slot(self.slot, self.run.timezone)} (k = {self.slot})")
         self.summary.setText("loading…")

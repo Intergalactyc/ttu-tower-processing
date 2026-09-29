@@ -7,7 +7,7 @@ import pytest
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.flags import FlagStore
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
-from ttu_tower.viewer import profiles, qcsummary, timeline
+from ttu_tower.viewer import flagcounts, profiles, qcsummary, timeline
 from ttu_tower.viewer.catalog import Quantity
 from ttu_tower.viewer.fragments import FragmentIndex, alias_bounds_variables
 from ttu_tower.viewer.run import RunHandle
@@ -31,7 +31,7 @@ def test_per_slot_samples_match_a_brute_force_count():
             for k in range(n_slots):
                 s0 = (slot_a + k) * SAMPLES_PER_SLOT
                 expected[r, k] += max(0, min(e, s0 + SAMPLES_PER_SLOT) - max(s, s0))
-        assert (qcsummary.per_slot_samples(starts, ends, rows, rows_n, slot_a, n_slots) == expected).all()
+        assert (flagcounts.per_slot_samples(starts, ends, rows, rows_n, slot_a, n_slots) == expected).all()
 
 
 def test_flag_counts_match_the_flag_store(primary_run):

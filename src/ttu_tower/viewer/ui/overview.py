@@ -201,7 +201,12 @@ class OverviewStrip(pg.PlotWidget):
         self.region.setZValue(10)
         self.addItem(self.region)
         self.region.sigRegionChangeFinished.connect(self._region_moved)
+        self.selection_image = pg.ImageItem(axisOrder="row-major")  # a row above the booms: the brushed slots
+        self.selection_image.setZValue(5)
+        self.addItem(self.selection_image)
         self._quiet = False
+        self._slots = np.empty(0, dtype=np.int64)
+        self._booms: list[int] = []
 
     def set_timezone(self, tz: str) -> None:
         self.axis.utcOffset = display_offset_s(tz)
@@ -214,12 +219,32 @@ class OverviewStrip(pg.PlotWidget):
     def set_availability(self, slots: np.ndarray, availability: np.ndarray, booms: list[int]) -> None:
         """availability: (booms × slots) status codes."""
         rgba = _color_rows(availability, style.AVAILABILITY_COLORS)
+        self._slots, self._booms = slots, list(booms)
         self.image.setImage(rgba)
         x0 = slot_to_unix(slots[0]) if slots.size else 0.0
         self.image.setRect(x0, 0, slots.size * SLOT_SECONDS, rgba.shape[0])
         self.getPlotItem().getAxis("left").setTicks([[(i + 0.5, f"b{b}") for i, b in enumerate(booms)]])
         self.setYRange(0, rgba.shape[0], padding=0)
         self.setXRange(x0, x0 + slots.size * SLOT_SECONDS, padding=0)
+
+    def set_selection(self, selected: np.ndarray) -> None:
+        """Mark the brushed slots in a row above the booms, to show where in the
+        whole period they fall.
+        """
+        slots, rows = self._slots, len(self._booms)
+        ticks = [(i + 0.5, f"b{b}") for i, b in enumerate(self._booms)]
+        if selected.size == 0 or slots.size == 0:
+            self.selection_image.clear()
+            self.setYRange(0, rows, padding=0)
+        else:
+            on = np.isin(slots, selected)
+            rgba = np.zeros((1, slots.size, 4), dtype=np.uint8)
+            rgba[0, on] = pg.mkColor(style.SELECTED_COLOR).getRgb()
+            self.selection_image.setImage(rgba)
+            self.selection_image.setRect(slot_to_unix(slots[0]), rows, slots.size * SLOT_SECONDS, 1)
+            self.setYRange(0, rows + 1, padding=0)
+            ticks.append((rows + 0.5, "sel"))
+        self.getPlotItem().getAxis("left").setTicks([ticks])
 
     def show_range(self, x0: float, x1: float) -> None:
         self._quiet = True

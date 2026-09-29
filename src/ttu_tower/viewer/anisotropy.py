@@ -50,6 +50,42 @@ def region_triangles(k: float = EDGE_K) -> dict[str, list]:
     }
 
 
+HEX_GRIDSIZE = 40  # the old plotting code's barycentric heatmaps
+HEX_EXTENT = (0.0, 1.0, 0.0, SQRT3 / 2)
+
+
+def hexbin(x, y, gridsize: int = HEX_GRIDSIZE, extent=HEX_EXTENT) -> tuple[np.ndarray, np.ndarray, np.ndarray,
+                                                                           np.ndarray]:
+    """Hexagonal binning as matplotlib's `hexbin` does it (two offset lattices,
+    each point to the nearer centre), over every hexagon of the extent, empty
+    ones included: (centre x, centre y, counts, hexagon vertices relative to a
+    centre, shape (6, 2)).
+    """
+    xmin, xmax, ymin, ymax = extent
+    nx = gridsize
+    ny = int(nx / np.sqrt(3))
+    sx, sy = (xmax - xmin) / nx, (ymax - ymin) / ny
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    ix, iy = (x[ok] - xmin) / sx, (y[ok] - ymin) / sy
+    ix1, iy1 = np.round(ix).astype(int), np.round(iy).astype(int)
+    ix2, iy2 = np.floor(ix).astype(int), np.floor(iy).astype(int)
+    d1 = (ix - ix1) ** 2 + 3.0 * (iy - iy1) ** 2
+    d2 = (ix - ix2 - 0.5) ** 2 + 3.0 * (iy - iy2 - 0.5) ** 2
+    first = d1 < d2
+    n1, n2 = (nx + 1) * (ny + 1), nx * ny
+    in1 = first & (ix1 >= 0) & (ix1 <= nx) & (iy1 >= 0) & (iy1 <= ny)
+    in2 = ~first & (ix2 >= 0) & (ix2 < nx) & (iy2 >= 0) & (iy2 < ny)
+    counts1 = np.bincount(ix1[in1] * (ny + 1) + iy1[in1], minlength=n1)
+    counts2 = np.bincount(ix2[in2] * ny + iy2[in2], minlength=n2)
+    g1x, g1y = np.meshgrid(np.arange(nx + 1), np.arange(ny + 1), indexing="ij")
+    g2x, g2y = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+    cx = np.concatenate([g1x.ravel() * sx + xmin, (g2x.ravel() + 0.5) * sx + xmin])
+    cy = np.concatenate([g1y.ravel() * sy + ymin, (g2y.ravel() + 0.5) * sy + ymin])
+    hexagon = np.array([[0.5, -0.5], [0.5, 0.5], [0.0, 1.0], [-0.5, 0.5], [-0.5, -0.5], [0.0, -1.0]])         * np.array([sx, sy / 3.0])
+    return cx, cy, np.concatenate([counts1, counts2]), hexagon
+
+
 def _in_triangle(x, y, tri) -> np.ndarray:
     (x1, y1), (x2, y2), (x3, y3) = tri
     c1 = (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
@@ -110,6 +146,23 @@ def boom_track(index, boom: int, variant: str, slot_lo: int, slot_hi: int) -> pd
     wide = wide.reindex(columns=["aniso_l2", "aniso_l3"])
     x, y = barycentric_xy(wide["aniso_l2"], wide["aniso_l3"])
     return pd.DataFrame({"slot": wide.index.to_numpy(), "x": x, "y": y})
+
+
+def boom_map(run, index, boom: int, variant: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(slots, x, y): one boom's final states on the map over the whole period."""
+    from ttu_tower.viewer import timeline
+    from ttu_tower.viewer.catalog import VARIANTS, Quantity
+
+    def eigen(variable):
+        return Quantity(key=f"boom_final|{variable}|", table="boom_final", variable=variable, stat=None,
+                        kind="boom", variants=VARIANTS, label=variable, unit="", group="Turbulence")
+
+    l2 = timeline.load(run, index, eigen("aniso_l2"), variant, [boom]).curves[boom]
+    l3 = timeline.load(run, index, eigen("aniso_l3"), variant, [boom]).curves[boom]
+    slots, a, b = timeline.joined(l2, l3)
+    x, y = barycentric_xy(a, b)
+    ok = np.isfinite(x) & np.isfinite(y)
+    return slots[ok], x[ok], y[ok]
 
 
 def class_image(run, index, variant: str, booms) -> tuple[np.ndarray, np.ndarray]:

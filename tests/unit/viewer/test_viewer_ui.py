@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 pytest.importorskip("pytestqt")
@@ -328,3 +329,63 @@ def test_opening_an_inspector_shows_a_busy_cursor_until_its_slot_is_read(window,
     assert QApplication.overrideCursor() is None and window.statusBar().currentMessage() == ""
     qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
     inspector.close()
+
+
+def test_timeline_csv_has_labelled_columns_and_local_times(window, tmp_path):
+    from ttu_tower.viewer.ui.plot_export import plot_frame
+    plot = window.plots[0]
+    member, _, x, _ = _a_point(plot)
+    _zoom_to(window, x)
+    frame = plot_frame(plot.plot_item)
+    assert frame.index.name == "time (Etc/GMT+6)"
+    label = plot.items[member].export_label
+    assert label in frame.columns
+    curve = plot.curves[member]
+    (x0, x1), _ = plot.vb.viewRange()
+    keep = (curve.x >= x0) & (curve.x <= x1)
+    assert np.allclose(frame[label].to_numpy(dtype=float), curve.y[keep], equal_nan=True)  # every sample, not decimated
+    first = pd.Timestamp(curve.x[keep][0], unit="s", tz="UTC").tz_convert("Etc/GMT+6")
+    assert frame.index[0] == first.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def test_the_export_dialog_applies_a_title_and_labels_only_while_exporting(window, qtbot, tmp_path, monkeypatch):
+    from pyqtgraph.exporters import ImageExporter
+    from PySide6.QtWidgets import QMessageBox
+    from ttu_tower.viewer.ui.plot_export import LabelledCSVExporter, ViewerExportDialog
+    plot = window.plots[0]
+    dialog = ViewerExportDialog(plot.plot_item.scene())
+    qtbot.addWidget(dialog)
+    dialog.show(plot.plot_item)
+    assert dialog.ui.paramTree.minimumHeight() >= 150 and dialog.ui.gridLayout.rowStretch(5) > 0
+    names = [dialog.ui.formatList.item(i).text() for i in range(dialog.ui.formatList.count())]
+    assert "CSV of plot data (labelled columns)" in names and "CSV of original plot data" not in names
+    told = []
+    monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text: told.append(text))
+    seen = {}
+    original = ImageExporter.export
+
+    def spy(self, fileName=None, toBytes=False, copy=False):
+        seen["title"] = self.item.titleLabel.text
+        seen["x"] = self.item.getAxis("bottom").labelText
+        return original(self, fileName=fileName, toBytes=toBytes, copy=copy)
+
+    monkeypatch.setattr(ImageExporter, "export", spy)
+    for i, name in enumerate(names):
+        if name.startswith("Image"):
+            dialog.ui.formatList.setCurrentRow(i)
+    dialog.text["title"].setText("Wind at 16.8 m")
+    dialog.text["bottom"].setText("local time")
+    path = tmp_path / "timeline.png"
+    dialog.currentExporter.fileSaveDialog = lambda **_: dialog.currentExporter.export(fileName=str(path))
+    dialog.exportClicked()
+    assert path.exists() and told == [f"Saved to {path}"]
+    assert seen == {"title": "Wind at 16.8 m", "x": "local time"}
+    assert plot.plot_item.getAxis("bottom").labelText != "local time"  # the plot itself as it was
+    for i, name in enumerate(names):
+        if name.startswith("CSV"):
+            dialog.ui.formatList.setCurrentRow(i)
+    assert isinstance(dialog.currentExporter, LabelledCSVExporter)
+    csv = tmp_path / "timeline.csv"
+    dialog.currentExporter.fileSaveDialog = lambda **_: dialog.currentExporter.export(fileName=str(csv))
+    dialog.exportClicked()
+    assert pd.read_csv(csv).columns[0].startswith("time (") and told[-1] == f"Saved to {csv}"

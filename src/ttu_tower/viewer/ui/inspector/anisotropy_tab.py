@@ -11,26 +11,61 @@ from PySide6.QtWidgets import (
     QCheckBox, QGraphicsPolygonItem, QHBoxLayout, QLabel, QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from ttu_tower.viewer import anisotropy, timeline
-from ttu_tower.viewer.catalog import VARIANTS, Quantity
+from ttu_tower.viewer import anisotropy
 from ttu_tower.viewer.ui import style, tables
 
 _TRACK = "#444444"
 
 
-def _eigen_quantity(variable: str) -> Quantity:
-    return Quantity(key=f"boom_final|{variable}|", table="boom_final", variable=variable, stat=None, kind="boom",
-                    variants=VARIANTS, label=variable, unit="", group="Turbulence")
+def _polygon(plot, points, fill, z: float = -10) -> None:
+    item = QGraphicsPolygonItem(QPolygonF([QPointF(x, y) for x, y in points]))
+    item.setBrush(QBrush(fill))
+    item.setPen(QPen(Qt.PenStyle.NoPen))
+    item.setZValue(z)
+    plot.addItem(item)
+
+
+def draw_frame(plot, regions: bool, short_labels: bool = False) -> None:
+    """The map itself: class regions (faint), the triangle, the plane-strain line and the corner labels."""
+    if regions:
+        for name, tris in anisotropy.region_triangles().items():
+            color = QColor(anisotropy.CASE_COLORS[name])
+            color.setAlpha(45)
+            for tri in tris:
+                _polygon(plot, tri, color)
+    corners = anisotropy.CORNERS
+    outline = [corners["1C"], corners["2C"], corners["3C"], corners["1C"]]
+    plot.plot([p[0] for p in outline], [p[1] for p in outline], pen=pg.mkPen("k", width=2))
+    (ax, ay), (bx, by) = anisotropy.plane_strain_line()
+    # white dashes over a black line: visible on white and across the whole viridis heatmap
+    for pen in (pg.mkPen("#000000", width=2.5), pg.mkPen("#ffffff", width=1.5, style=Qt.PenStyle.DashLine)):
+        line = plot.plot([ax, bx], [ay, by], pen=pen)
+        line.setZValue(5)
+    for name, (x, y) in corners.items():
+        text = name if short_labels else {"1C": "1C (linear)", "2C": "2C (planar)", "3C": "3C (isotropic)"}[name]
+        label = pg.TextItem(text, color="#000", anchor=(0.5, 0 if y == 0 else 1))
+        label.setPos(x, y - 0.02 if y == 0 else y + 0.02)
+        plot.addItem(label)
+
+
+def density_image(x, y, bins: int = 60):
+    """A log-count image of map positions, clipped to the triangle."""
+    counts, ex, ey = np.histogram2d(x, y, bins=bins, range=[[0, 1], [0, anisotropy.SQRT3 / 2]])
+    cx, cy = np.meshgrid((ex[:-1] + ex[1:]) / 2, (ey[:-1] + ey[1:]) / 2, indexing="ij")
+    inside = (cy <= anisotropy.SQRT3 * cx) & (cy <= anisotropy.SQRT3 * (1 - cx))
+    img = np.where((counts > 0) & inside, np.log10(np.maximum(counts, 1)), np.nan)
+    item = pg.ImageItem(img, axisOrder="col-major")
+    item.setColorMap(pg.ColorMap([0.0, 1.0], [(236, 236, 244), (70, 70, 120)]))
+    item.setRect(ex[0], ey[0], ex[-1] - ex[0], ey[-1] - ey[0])
+    item.setOpacity(0.8)
+    item.setZValue(-5)
+    return item
 
 
 def whole_period(run, index, boom: int, variant: str) -> tuple[np.ndarray, np.ndarray]:
     """Map positions of every final state of one boom. Runs on a worker thread."""
-    l2 = timeline.load(run, index, _eigen_quantity("aniso_l2"), variant, [boom]).curves[boom]
-    l3 = timeline.load(run, index, _eigen_quantity("aniso_l3"), variant, [boom]).curves[boom]
-    _, a, b = timeline.joined(l2, l3)
-    x, y = anisotropy.barycentric_xy(a, b)
-    ok = np.isfinite(x) & np.isfinite(y)
-    return x[ok], y[ok]
+    _, x, y = anisotropy.boom_map(run, index, boom, variant)
+    return x, y
 
 
 class AnisotropyTab(QWidget):
@@ -139,50 +174,16 @@ class AnisotropyTab(QWidget):
 
     # --- drawing ------------------------------------------------------------------------------------
 
-    def _polygon(self, points, fill, pen=None, z: float = -10) -> None:
-        item = QGraphicsPolygonItem(QPolygonF([QPointF(x, y) for x, y in points]))
-        item.setBrush(QBrush(fill))
-        item.setPen(pen if pen is not None else QPen(Qt.PenStyle.NoPen))
-        item.setZValue(z)
-        self.plot.addItem(item)
-
     def redraw(self) -> None:
         self.plot.clear()
         if self.states is None:
             return
-        if self.regions.isChecked():
-            for name, tris in anisotropy.region_triangles().items():
-                color = QColor(anisotropy.CASE_COLORS[name])
-                color.setAlpha(45)
-                for tri in tris:
-                    self._polygon(tri, color)
+        draw_frame(self.plot, self.regions.isChecked())
         if self.whole.isChecked() and self.density is not None and self.density[0].size:
-            self._draw_density(*self.density)
-        corners = anisotropy.CORNERS
-        outline = [corners["1C"], corners["2C"], corners["3C"], corners["1C"]]
-        self.plot.plot([p[0] for p in outline], [p[1] for p in outline], pen=pg.mkPen("k", width=2))
-        (ax, ay), (bx, by) = anisotropy.plane_strain_line()
-        self.plot.plot([ax, bx], [ay, by], pen=pg.mkPen("#333333", width=1, style=Qt.PenStyle.DashLine))
-        for name, (x, y) in corners.items():
-            label = pg.TextItem({"1C": "1C (linear)", "2C": "2C (planar)", "3C": "3C (isotropic)"}[name],
-                                color="#000", anchor=(0.5, 0 if y == 0 else 1))
-            label.setPos(x, y - 0.02 if y == 0 else y + 0.02)
-            self.plot.addItem(label)
+            self.plot.addItem(density_image(*self.density))
         self._draw_track()
         self._draw_booms()
         self._describe()
-
-    def _draw_density(self, x, y) -> None:
-        counts, ex, ey = np.histogram2d(x, y, bins=60, range=[[0, 1], [0, anisotropy.SQRT3 / 2]])
-        cx, cy = np.meshgrid((ex[:-1] + ex[1:]) / 2, (ey[:-1] + ey[1:]) / 2, indexing="ij")
-        inside = (cy <= anisotropy.SQRT3 * cx) & (cy <= anisotropy.SQRT3 * (1 - cx))
-        img = np.where((counts > 0) & inside, np.log10(np.maximum(counts, 1)), np.nan)
-        item = pg.ImageItem(img, axisOrder="col-major")
-        item.setColorMap(pg.ColorMap([0.0, 1.0], [(236, 236, 244), (70, 70, 120)]))
-        item.setRect(ex[0], ey[0], ex[-1] - ex[0], ey[-1] - ey[0])
-        item.setOpacity(0.8)
-        item.setZValue(-5)
-        self.plot.addItem(item)
 
     def _draw_track(self) -> None:
         t = self.track

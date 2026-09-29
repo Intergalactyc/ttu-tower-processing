@@ -1,3 +1,4 @@
+import gc
 import os
 from types import SimpleNamespace
 
@@ -16,6 +17,22 @@ from viewer_fixtures import (
 )
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _viewer_session(tmp_path_factory):
+    """The windows' settings go to a scratch folder, not the user's own; the
+    automatic garbage collection the viewer turns off comes back afterwards.
+    """
+    try:
+        from PySide6.QtCore import QSettings
+    except ImportError:
+        yield
+        return
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path_factory.mktemp("qsettings")))
+    yield
+    gc.enable()
 
 
 def _args(config, **overrides):

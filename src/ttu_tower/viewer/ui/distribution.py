@@ -106,8 +106,21 @@ class DistributionView(QWidget):
         # TABLE_SHARE of the height, less when its rows need less
         self.split = QSplitter(Qt.Orientation.Vertical)
         self.split.setChildrenCollapsible(False)
+        self.sel_table = tables.new_table()
+        self.sel_table.setToolTip(self.table.toolTip())
+        self.captions = [QLabel(), QLabel()]
+        for c in self.captions:
+            c.setStyleSheet("color:#555;")
+            c.hide()
+        self.tables_box = QWidget()
+        box = QVBoxLayout(self.tables_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(1)
+        for w in (self.captions[0], self.table, self.captions[1], self.sel_table):
+            box.addWidget(w)
+        self.sel_table.hide()
         self.split.addWidget(self.plot)
-        self.split.addWidget(self.table)
+        self.split.addWidget(self.tables_box)
         self.split.setStretchFactor(0, 1)
         self.split.setStretchFactor(1, 0)
         self.split.splitterMoved.connect(self._user_sized)
@@ -116,7 +129,7 @@ class DistributionView(QWidget):
         layout.addWidget(self.note)
         self._args = None
         self.selection = np.empty(0, dtype=np.int64)
-        self._stats: pd.DataFrame | None = None
+        self._stats: dict = {}  # part ("all", or "rest" and "selected") -> summary frame
         self._log = False
         self._edges = np.linspace(0.0, 1.0, 2)
         self._fit_choices(False)
@@ -164,8 +177,18 @@ class DistributionView(QWidget):
     def values_by_member(self) -> dict:
         return {m: y for m, (_, y) in self.slots_and_values().items()}
 
+    def split_values(self, selected: bool) -> dict:
+        """member -> values of the brushed slots (or of the rest)."""
+        out = {}
+        for m, (slots, y) in self.slots_and_values().items():
+            chosen = np.isin(slots, self.selection)
+            out[m] = y[chosen if selected else ~chosen]
+        return out
+
     def set_selection(self, slots: np.ndarray) -> None:
-        """Brushed slots: each histogram shows their share of it, filled."""
+        """Brushed slots: each boom's histogram splits into the selection
+        (filled) and the rest (lines), each normalized on its own.
+        """
         self.selection = slots
         self.refresh()
 
@@ -177,24 +200,30 @@ class DistributionView(QWidget):
         self.note.hide()
         if self._args is None or self._args[0] is None:
             self.title.setText("")
-            self._show_table(pd.DataFrame())
+            self._stats = {}
+            self._show_tables()
             return
         data = self._args[0]
         q = data.quantity
         values = self.values_by_member()
         scope = "whole period" if self._args[2] is None else "visible range"
         name = self.stability_box.currentData()
-        self.title.setText(f"<b>{q.title}</b> — {scope}" + (f", {name} only" if name else ""))
+        split = self.selection.size > 0 and not q.categorical
+        self.title.setText(f"<b>{q.title}</b> — {scope}" + (f", {name} only" if name else "")
+                           + (" · filled: brushed selection, lines: the rest (each its own density)" if split else ""))
         self._fit_choices(q.circular)
         self._enable_controls(q, values)
         if q.categorical:
             self._bars(values, data.categories or [])
+        elif split:
+            self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values)
+            self._selected_histograms()
         else:
             self._histograms(values, q.unit, q.circular)
-            self._selected_share(q.circular)
-        self._stats = self._summary_frame(values, q.categorical, q.circular)
-        self._show_table(self._stats)
-        self._start_fits(values, q)
+        parts = {"rest": self.split_values(False), "selected": self.split_values(True)} if split else {"all": values}
+        self._stats = {part: self._summary_frame(v, q.categorical, q.circular) for part, v in parts.items()}
+        self._show_tables()
+        self._start_fits(parts, q)
 
     def _enable_controls(self, q, values: dict) -> None:
         """Grey out what can't apply: fits and log bins to categories, log bins
@@ -210,6 +239,58 @@ class DistributionView(QWidget):
         self.log_bins.setEnabled(why is None)
         self.log_bins.setToolTip(why or "logarithmically spaced bins, on a log axis")
 
+    def figure_spec(self) -> dict | None:
+        """This panel's histograms (or bars) and fits, for a matplotlib figure."""
+        if self._args is None or self._args[0] is None:
+            return None
+        data = self._args[0]
+        q = data.quantity
+        split = self.selection.size > 0 and not q.categorical
+        values = self.split_values(False) if split else self.values_by_member()
+        panel = {"title": self.title.text().replace("<b>", "").replace("</b>", ""), "hists": [], "bars": [],
+                 "fits": []}
+        if q.categorical:
+            categories = data.categories or []
+            width = 0.8 / max(len(values), 1)
+            for i, (m, v) in enumerate(values.items()):
+                codes = v[np.isfinite(v)].astype(int)
+                counts = np.bincount(codes, minlength=len(categories)) if codes.size else np.zeros(len(categories))
+                panel["bars"].append({"label": style.member_label(m) or "value",
+                                      "color": pg.mkColor(style.member_color(m, i)).name(),
+                                      "x": np.arange(len(categories)) - 0.4 + width * (i + 0.5),
+                                      "height": counts / max(counts.sum(), 1), "width": width})
+            panel.update(xlabel="", ylabel="fraction", xticks=list(enumerate(categories)))
+            return panel
+        if self._edges.size < 2:
+            return panel | {"xlabel": q.unit or "value", "ylabel": "density", "log_x": False}
+        for i, (m, v) in enumerate(values.items()):
+            v = v[np.isfinite(v)]
+            if v.size:
+                density, _ = np.histogram(v, bins=self._edges, density=True)
+                label = style.member_label(m) or "value"
+                panel["hists"].append({"label": f"{label}, the rest" if split else label,
+                                       "color": pg.mkColor(style.member_color(m, i)).name(), "edges": self._edges,
+                                       "density": density})
+        if split:
+            for i, (m, v) in enumerate(self.split_values(True).items()):
+                v = v[np.isfinite(v)]
+                if v.size:
+                    density, _ = np.histogram(v, bins=self._edges, density=True)
+                    panel["hists"].append({"label": f"{style.member_label(m) or 'value'}, selected",
+                                           "color": pg.mkColor(style.member_color(m, i)).name(),
+                                           "edges": self._edges, "density": density, "filled": True})
+        lo, hi = self._edges[0], self._edges[-1]
+        grid = np.geomspace(lo, hi, 300) if self._log else np.linspace(lo, hi, 300)
+        members = list(self._args[1])
+        for (part, m), f in self.fits.items():
+            if f is not None:
+                i = members.index(m) if m in members else 0
+                with np.errstate(all="ignore"):
+                    panel["fits"].append({"label": m, "color": pg.mkColor(style.member_color(m, i)).name(),
+                                          "x": grid, "pdf": f.pdf(grid), "dashdot": part == "selected"})
+        panel.update(xlabel=q.unit or "value", ylabel="density", log_x=bool(self._log))
+        return panel
+
     # --- the table -----------------------------------------------------------------------------
 
     def _summary_frame(self, values: dict, categorical: bool, circular: bool) -> pd.DataFrame:
@@ -222,28 +303,53 @@ class DistributionView(QWidget):
         frame = pd.DataFrame.from_dict(rows, orient="index", columns=list(_STATS))
         return frame.dropna(axis=1, how="all")
 
-    def _show_table(self, frame: pd.DataFrame) -> None:
-        tables.fill(self.table, frame, index=True,
-                    fmt=lambda col, v: f"{v:.0f}" if col == "N" and np.isfinite(v) else None)
+    def _show_tables(self, fitted: dict | None = None) -> None:
+        """The summary per part, with its fit's parameters appended: one table
+        for all slots, or the rest's and the brushed selection's.
+        """
+        fitted = fitted or {}
+        split = "selected" in self._stats
+        shown = ([("rest", self.table, "the rest (lines)"), ("selected", self.sel_table, "brushed selection (filled)")]
+                 if split else [("all", self.table, "")])
+        for part, table, _ in shown:
+            frame = self._stats.get(part, pd.DataFrame())
+            extra = fitted.get(part)
+            if extra is not None and not extra.empty:
+                # a normal fit's σ beside the sample σ
+                frame = frame.join(extra.rename(columns={c: f"{c} (fit)" for c in extra.columns if c in frame.columns}))
+            tables.fill(table, frame, index=True,
+                        fmt=lambda col, v: f"{v:.0f}" if col == "N" and np.isfinite(v) else None)
+        self.sel_table.setVisible(split)
+        for label, (_, _, text) in zip(self.captions, shown if split else []):
+            label.setText(text)
+        for label in self.captions:
+            label.setVisible(split)
         self._size_table()
 
     def _user_sized(self, *_) -> None:
         self._sized_by_user = True
 
     def _size_table(self) -> None:
-        """Never taller than its rows; at least a row or two; by default no more than
-        TABLE_SHARE of the space (it scrolls), unless its handle has been dragged.
+        """Never taller than their rows; at least a row or two each; by default no
+        more than TABLE_SHARE of the space (they scroll), unless the handle has
+        been dragged.
         """
-        rows = self.table.rowCount()
-        self.table.setMinimumHeight(tables.rows_height(self.table, min(rows, 2)))
-        self.table.setMaximumHeight(tables.rows_height(self.table, rows))
+        shown = [t for t in (self.table, self.sel_table) if not t.isHidden()]
+        captions = sum(c.sizeHint().height() + 1 for c in self.captions if not c.isHidden())
+        for t in shown:
+            t.setMinimumHeight(tables.rows_height(t, min(t.rowCount(), 2)))
+            t.setMaximumHeight(tables.rows_height(t, t.rowCount()))
+        low = captions + sum(t.minimumHeight() for t in shown)
+        high = captions + sum(t.maximumHeight() for t in shown)
+        self.tables_box.setMinimumHeight(low)
+        self.tables_box.setMaximumHeight(high)
         if self._sized_by_user:
             return
         total = sum(self.split.sizes())
         if total <= 0:
             return
-        table = min(self.table.maximumHeight(), max(self.table.minimumHeight(), int(TABLE_SHARE * total)))
-        self.split.setSizes([total - table, table])
+        share = min(high, max(low, int(TABLE_SHARE * total * (1.5 if len(shown) > 1 else 1.0))))
+        self.split.setSizes([total - share, share])
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
@@ -251,12 +357,13 @@ class DistributionView(QWidget):
 
     # --- fits ---------------------------------------------------------------------------------
 
-    def _start_fits(self, values: dict, q) -> None:
+    def _start_fits(self, parts: dict, q) -> None:
+        """Fit each part (all slots, or the rest and the selection) of each boom."""
         name = self.fit_box.currentData()
         self.fits = {}
         if name is None or q.categorical:
             return
-        values = {m: v[np.isfinite(v)] for m, v in values.items()}
+        values = {(part, m): v[np.isfinite(v)] for part, by_member in parts.items() for m, v in by_member.items()}
         if name != distfits.CIRCULAR and name not in distfits.available(
                 np.concatenate(list(values.values())) if values else np.empty(0), False):
             self.note.setText(f"{name} needs every value positive")
@@ -270,27 +377,35 @@ class DistributionView(QWidget):
                                on_done=lambda fits: self._fits_ready(args, fits))
 
     def _fits_ready(self, args, fits: dict) -> None:
-        if args is not self._args or self._stats is None:
+        """`fits`: (part, member) -> DistFit; PDFs dashed (the selection's dash-dotted)."""
+        if args is not self._args or not self._stats:
             return
         self.fits = fits
-        rows = {}
-        for i, (member, f) in enumerate(fits.items()):
+        members = list(self._args[1])
+        rows: dict = {}
+        for (part, member), f in fits.items():
             if f is None:
                 continue
-            rows[style.member_label(member) or "value"] = {**f.params, "KS": f.ks, "AIC": f.aic}
+            rows.setdefault(part, {})[style.member_label(member) or "value"] = {**f.params, "KS": f.ks, "AIC": f.aic}
             lo, hi = self._edges[0], self._edges[-1]
             x = np.geomspace(lo, hi, 300) if self._log else np.linspace(lo, hi, 300)
             with np.errstate(all="ignore"):
                 y = f.pdf(x)
-            self.plot.addItem(pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
-                style.member_color(member, i), width=1.6, style=Qt.PenStyle.DashLine)))
-        fitted = pd.DataFrame.from_dict(rows, orient="index")
-        self._show_table(self._stats.join(fitted) if not fitted.empty else self._stats)
+            dash = Qt.PenStyle.DashDotLine if part == "selected" else Qt.PenStyle.DashLine
+            i = members.index(member) if member in members else 0
+            curve = pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
+                style.member_color(member, i), width=1.6, style=dash))
+            part_label = {"rest": ", the rest", "selected": ", brushed selection"}.get(part, "")
+            curve.export_label = f"{style.member_label(member) or 'value'}{part_label}: {self.fit_box.currentText()} PDF"
+            self.plot.addItem(curve)
+        self._show_tables({part: pd.DataFrame.from_dict(r, orient="index") for part, r in rows.items()})
 
     # --- plots --------------------------------------------------------------------------------
 
-    def _histograms(self, values: dict, unit: str, circular: bool = False) -> None:
-        pooled = np.concatenate([v[np.isfinite(v)] for v in values.values()]) if values else np.empty(0)
+    def _histograms(self, values: dict, unit: str, circular: bool = False, bins_from: dict | None = None) -> None:
+        """`bins_from`: the values the bins span (default `values`), so a split's parts share bins."""
+        spanned = values if bins_from is None else bins_from
+        pooled = np.concatenate([v[np.isfinite(v)] for v in spanned.values()]) if spanned else np.empty(0)
         self.plot.setLogMode(x=False)
         if pooled.size < 2:
             self._edges = np.empty(0)
@@ -312,29 +427,30 @@ class DistributionView(QWidget):
             counts, _ = np.histogram(v, bins=edges, density=True)
             x = np.log10(edges) if log else edges
             item = pg.PlotDataItem(x, counts, stepMode="center", pen=pg.mkPen(style.member_color(member, i), width=1.5))
+            label = style.member_label(member) or "value"
+            item.export_label = f"{label}: the rest" if self.selection.size else label
             self.plot.addItem(item)
         self.plot.setLabel("bottom", ("log10 " if log else "") + (unit or "value"))
         self.plot.setLabel("left", "density")
 
-    def _selected_share(self, circular: bool) -> None:
-        """The brushed slots' part of each histogram (same density scale, so
-        it sits inside the full histogram).
+    def _selected_histograms(self) -> None:
+        """The brushed slots' histogram per boom, filled, as a density of the
+        selection alone (so its shape compares with the rest's).
         """
-        if self.selection.size == 0 or self._edges.size < 2:
+        if self._edges.size < 2:
             return
-        widths = np.diff(self._edges)
-        for i, (member, (slots, y)) in enumerate(self.slots_and_values().items()):
-            finite = np.isfinite(y)
-            chosen = finite & np.isin(slots, self.selection)
-            if not chosen.any():
+        for i, (member, y) in enumerate(self.split_values(True).items()):
+            y = y[np.isfinite(y)]
+            if y.size == 0:
                 continue
-            counts, _ = np.histogram(y[chosen], bins=self._edges)
-            share = counts / (finite.sum() * widths)
+            share, _ = np.histogram(y, bins=self._edges, density=True)
             color = pg.mkColor(style.member_color(member, i))
             color.setAlpha(110)
             x = np.log10(self._edges) if self._log else self._edges
-            self.plot.addItem(pg.PlotDataItem(x, share, stepMode="center", fillLevel=0, brush=pg.mkBrush(color),
-                                              pen=pg.mkPen(style.SELECTED_COLOR, width=1)))
+            item = pg.PlotDataItem(x, share, stepMode="center", fillLevel=0, brush=pg.mkBrush(color),
+                                   pen=pg.mkPen(style.SELECTED_COLOR, width=1))
+            item.export_label = f"{style.member_label(member) or 'value'}: brushed selection"
+            self.plot.addItem(item)
 
     def _bars(self, values: dict, categories: list[str]) -> None:
         n = max(len(values), 1)

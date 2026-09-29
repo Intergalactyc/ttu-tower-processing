@@ -54,6 +54,7 @@ class DecimatedCurve:
         self.item = item
         self.x = np.asarray(x, dtype=np.float64)
         self.y = np.asarray(y, dtype=np.float64)
+        item.export_data = (self.x, self.y)  # CSV export takes these, not the decimated points drawn
 
     def redraw(self, x0: float, x1: float, buckets: int, log_y: bool = False) -> None:
         y = self.y
@@ -87,6 +88,9 @@ class PlotDecimator:
 
     def clear(self) -> None:
         self.curves.clear()
+
+    def remove(self, item) -> None:
+        self.curves = [c for c in self.curves if c.item is not item]
 
     def redraw(self) -> None:
         vb = self.plot_item.getViewBox()

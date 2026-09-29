@@ -173,6 +173,20 @@ class WindRoseView(QWidget):
         layout.addWidget(self.meso_plot, stretch=1)
         layout.addWidget(self.info)
 
+    def figure_spec(self) -> tuple[str, dict] | None:
+        roses = [(self.tower_plot, True), (self.meso_plot, False)]
+        if self.tower is None:
+            return None
+        try:
+            bearings = windrose.parse_bearings(self.bearings.text())
+        except ValueError:
+            bearings = []
+        tables = [p.table for p, _ in roses]
+        outer = max(RosePlot.outer(t) for t in tables) or 1.0
+        return "windrose", {"roses": [{"title": p.getPlotItem().titleLabel.text, "table": p.table,
+                                       "bearings": bearings} for p, _ in roses if p.table is not None],
+                            "speed_labels": _speed_labels(windrose.SPEED_EDGES), "outer": outer * 1.05}
+
     def set_run(self, run, index, booms) -> None:
         self.run, self.index = run, index
         self.tower = self.mesonet = None

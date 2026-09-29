@@ -152,6 +152,7 @@ class ScatterView(QWidget):
         self.stats.setWordWrap(True)
         self.vb = LassoViewBox(self._on_lasso)
         self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         self.plot.setToolTip("Shift-drag (or drag in brush mode) to lasso slots; Ctrl adds, Alt removes")
         self.selection = np.empty(0, dtype=np.int64)
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
@@ -203,6 +204,8 @@ class ScatterView(QWidget):
         layout.addWidget(self.stats)
         layout.addWidget(fit_box)
         self._items: list = []
+        self.drawn_lines: list = []  # what's drawn, for figure_spec
+        self.drawn_groups: list = []
 
     # --- sources -----------------------------------------------------------------------------------
 
@@ -303,6 +306,7 @@ class ScatterView(QWidget):
 
     def redraw(self) -> None:
         self._enable_controls()
+        self.drawn_lines, self.drawn_groups = [], []
         self.plot.clear()
         self.legend.clear()
         dx, dy = self._data(0), self._data(1)
@@ -363,6 +367,7 @@ class ScatterView(QWidget):
             groups = [(n, codes == i, style.stability_color(n, i)) for i, n in enumerate(names)]
             groups.append(("unclassified", ~np.isin(codes, range(len(names))), pg.mkColor("#bbbbbb")))
         size = 3 if slots.size > 5000 else 5
+        self.drawn_groups = [(name, mask, pg.mkColor(color).name()) for name, mask, color in groups]
         for name, mask, color in groups:
             if not mask.any():
                 continue
@@ -384,6 +389,8 @@ class ScatterView(QWidget):
         self.plot.addItem(item)
 
     def _line(self, x, y, color, label, width: float = 1.8, dash: bool = False) -> None:
+        self.drawn_lines.append({"label": label, "color": pg.mkColor(color).name(), "x": np.asarray(x, dtype=float),
+                                 "y": np.asarray(y, dtype=float), "dashed": dash})
         vx, vy = self._to_view(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
         ok = np.isfinite(vx) & np.isfinite(vy)
         self.plot.plot(vx[ok], vy[ok], pen=pg.mkPen(color, width=width,
@@ -489,6 +496,25 @@ class ScatterView(QWidget):
         if self.fit_inputs != self._inputs():
             text += " — <span style='color:#a60'>fitted to earlier data or settings; press Fit to refit</span>"
         self.fit_status.setText(text)
+
+    def figure_spec(self) -> tuple[str, dict] | None:
+        """What's drawn, for a matplotlib figure (in data units; log axes stay log)."""
+        if self.x.size == 0:
+            return None
+        slots, x, y = self._shown()
+        groups = self.drawn_groups or [("", np.ones(slots.size, dtype=bool), _POINT)]
+        chosen = np.isin(slots, self.selection) if self.selection.size else np.zeros(slots.size, dtype=bool)
+        dx, dy = self._data(0), self._data(1)
+        (x0, x1), (y0, y1) = self.plot.getPlotItem().getViewBox().viewRange()
+        unview = (lambda v: 10 ** np.asarray(v)) if self.log_x.isChecked() else np.asarray
+        unview_y = (lambda v: 10 ** np.asarray(v)) if self.log_y.isChecked() else np.asarray
+        return "scatter", {
+            "xlabel": f"{dx.quantity.title} · {self.member[0].currentText()}",
+            "ylabel": f"{dy.quantity.title} · {self.member[1].currentText()}",
+            "groups": [{"label": n, "color": c, "x": x[m], "y": y[m]} for n, m, c in groups if m.any()],
+            "lines": self.drawn_lines, "selected": {"x": x[chosen], "y": y[chosen]} if chosen.any() else None,
+            "note": self.stats.text(), "log_x": self.log_x.isChecked(), "log_y": self.log_y.isChecked(),
+            "xlim": tuple(unview([x0, x1])), "ylim": tuple(unview_y([y0, y1]))}
 
     # --- brushing ----------------------------------------------------------------------------------
 

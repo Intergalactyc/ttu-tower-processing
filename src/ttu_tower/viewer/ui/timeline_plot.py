@@ -144,6 +144,7 @@ class TimelinePlot(QWidget):
         self.plot_item.getAxis("left").setWidth(MIN_AXIS_WIDTH)
         self.vb.setAutoVisible(y=True)
         self.decimator = PlotDecimator(self.plot_item)
+        self.plot_item.export_tz = tz
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -170,6 +171,8 @@ class TimelinePlot(QWidget):
         self.tau_items: dict = {}  # member -> ScatterPlotItem
         self.selection = np.empty(0, dtype=np.int64)
         self.selected_items: dict = {}  # member -> PlotDataItem (rings on the brushed slots)
+        self.compare_items: dict = {}  # member -> PlotDataItem (the other run's curve, dashed)
+        self.compare_tag: str | None = None
         self._brush_region = None
         self._tip_shown = False
         self.widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
@@ -177,13 +180,14 @@ class TimelinePlot(QWidget):
     # --- data ----------------------------------------------------------------------------------
 
     def set_timezone(self, tz: str) -> None:
+        self.plot_item.export_tz = tz
         self.axis.utcOffset = display_offset_s(tz)
         self.axis.picture = None
         self.axis.update()
 
     def clear(self, message: str = "") -> None:
-        self._remove(self.selected_items)
-        self.selected_items = {}
+        self._remove(self.selected_items, self.compare_items)
+        self.selected_items, self.compare_items, self.compare_tag = {}, {}, None
         self.clear_overlays()
         for item in self.items.values():
             self.plot_item.removeItem(item)
@@ -205,6 +209,7 @@ class TimelinePlot(QWidget):
         self.vb.suppress_fit = False
         variant = "" if data.variant == "none" else f" · {data.variant}"
         self.title.setText(f"<b>{q.title}</b>{variant}")
+        self.plot_item.export_title = f"{q.title}{variant}"
         self.plot_item.setLabel("left", q.unit if not q.categorical else "")
 
         symbol = None if spec.style == "lines" else "o"
@@ -218,6 +223,7 @@ class TimelinePlot(QWidget):
                                    symbol=symbol or ("o" if q.categorical else None), symbolSize=MARKER_SIZE,
                                    symbolBrush=color, symbolPen=None, connect="finite")
             pass_clicks(item)
+            item.export_label = style.member_label(member) or q.label
             self.plot_item.addItem(item)
             self.items[member] = item
             self.curves[member] = curve
@@ -248,7 +254,8 @@ class TimelinePlot(QWidget):
 
     def _apply_visibility(self) -> None:
         visible = self.legend.visible()
-        for items in (self.items, self.filtered_items, self.filtered_crosses, self.tau_items, self.selected_items):
+        for items in (self.items, self.filtered_items, self.filtered_crosses, self.tau_items, self.selected_items,
+                      self.compare_items):
             for member, item in items.items():
                 item.setVisible(member in visible)
         self.decimator.redraw()
@@ -291,6 +298,8 @@ class TimelinePlot(QWidget):
                                    symbolBrush=None, symbolPen=pg.mkPen(FILTERED_COLOR, width=1.2))
             cross = pg.PlotDataItem(curve.x[ok], y[ok], pen=None, symbol="x", symbolSize=MARKER_SIZE + 1,
                                     symbolPen=None, symbolBrush=style.member_color(member, i))
+            ring.export_label = f"{style.member_label(member) or 'value'}: filtered (value before filtering)"
+            cross.export_skip = True
             for z, it in ((-5, ring), (-4, cross)):
                 pass_clicks(it)
                 it.setZValue(z)
@@ -321,12 +330,46 @@ class TimelinePlot(QWidget):
                       "pen": pg.mkPen(TAU_MARKS[st][1]), "size": MARKER_SIZE + 4}
                      for xi, yi, st in zip(x, y, statuses)]
             item = pg.ScatterPlotItem(spots=spots)
+            item.export_label = f"{style.member_label(member) or 'value'}: τ not simply found"
             pass_clicks(item)
             item.setZValue(5)
             item.setVisible(member in visible)
             self.plot_item.addItem(item)
             self.tau_items[member] = item
             self.tau_marks[member] = (slots, statuses, x, y)
+        self._update_key()
+
+    # --- another run ------------------------------------------------------------------------------
+
+    def set_compare(self, data, tag: str | None) -> None:
+        """Another run's curves of the same quantity and booms, dashed in the same colours."""
+        for item in self.compare_items.values():
+            self.decimator.remove(item)
+            self.plot_item.removeItem(item)
+        self.compare_items, self.compare_tag = {}, tag
+        if data is not None and self.data is not None:
+            q = self.data.quantity
+            visible = self.legend.visible()
+            for i, member in enumerate(self.items):
+                curve = data.curves.get(member)
+                if curve is None:
+                    continue
+                color = style.member_color(member, i)
+                if q.categorical:
+                    item = pg.PlotDataItem(pen=None, symbol="t", symbolSize=MARKER_SIZE + 2, symbolBrush=None,
+                                           symbolPen=pg.mkPen(color, width=1))
+                else:
+                    item = pg.PlotDataItem(pen=pg.mkPen(color, width=1.4, style=Qt.PenStyle.DashLine),
+                                           connect="finite")
+                pass_clicks(item)
+                item.export_label = f"{style.member_label(member) or 'value'}: {tag}"
+                item.setZValue(-2)
+                item.setVisible(member in visible)
+                self.plot_item.addItem(item)
+                x, y = break_wraps(curve.x, curve.y) if q.circular else (curve.x, curve.y)
+                self.decimator.add(item, x, y)
+                self.compare_items[member] = item
+            self.decimator.redraw()
         self._update_key()
 
     # --- brushing ---------------------------------------------------------------------------------
@@ -363,6 +406,7 @@ class TimelinePlot(QWidget):
             pass_clicks(item)
             item.setZValue(6)
             item.setVisible(member in visible)
+            item.export_label = f"{style.member_label(member) or 'value'}: brushed selection"
             self.plot_item.addItem(item)
             self.selected_items[member] = item
 
@@ -370,6 +414,8 @@ class TimelinePlot(QWidget):
         parts = []
         if self.filtered_items:
             parts.append(f"<span style='color:{FILTERED_COLOR}'>⊗ filtered</span>")
+        if self.compare_items:
+            parts.append(f"<span style='color:#555'>- - {self.compare_tag}</span>")
         if self.tau_items:
             parts.append("τ " + " ".join(f"<span style='color:{TAU_MARKS[s][1]}'>{g} {s}</span>"
                                          for s, g in _TAU_GLYPHS.items()))

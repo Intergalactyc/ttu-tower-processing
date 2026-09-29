@@ -32,12 +32,14 @@ class ProfilePlot(QWidget):
         self.fit_box.setToolTip("a curve of the value against height, fitted to each profile's points (dashed)")
         self.plot = pg.PlotWidget()
         item = self.plot.getPlotItem()
+        self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         item.showGrid(x=True, y=True, alpha=0.15)
         for side in ("left", "bottom"):
             item.getAxis(side).enableAutoSIPrefix(False)
         item.setLabel("left", "height [m]")
         self.table = tables.new_table()
         self.stats: pd.DataFrame | None = None
+        self.drawn_quantity = None
         self.fits: dict = {}
         self._marks: list = []  # (points item, bars item or None, x, height, spread, class position, classes)
         self._log_z = False
@@ -78,6 +80,7 @@ class ProfilePlot(QWidget):
         self._marks = []
         self._log_z = log_z
         self.stats = stats
+        self.drawn_quantity = q
         self.title.setText(f"<b>{q.title}</b> — {method}, {scope}")
         item = self.plot.getPlotItem()
         item.setLabel("bottom", q.unit or q.label)
@@ -93,6 +96,8 @@ class ProfilePlot(QWidget):
             x, z = part["centre"].to_numpy(), part["height"].to_numpy()
             curve = pg.PlotDataItem(x, z, pen=pg.mkPen(color, width=1.5) if lines else None, symbol="o",
                                     symbolSize=7, symbolBrush=color, symbolPen=None)
+            curve.export_data = (x, z)  # the true heights, not the few-pixel offsets drawn
+            curve.export_label = f"{'all slots' if g == profiles.ALL else g}: {method}"
             self.plot.addItem(curve)
             spread = part["spread"].to_numpy()
             bars = None
@@ -187,6 +192,31 @@ class ProfilesView(QWidget):
 
     def sizeHint(self) -> QSize:
         return QSize(600, 600)  # two plots' worth would widen the whole dock
+
+    def figure_spec(self) -> tuple[str, dict] | None:
+        """The drawn profiles, for a matplotlib figure."""
+        panels = []
+        for plot in self.plots:
+            if plot.stats is None:
+                continue
+            q = plot.drawn_quantity
+            names = list(self.stability[1]) if self.stability is not None else []
+            groups = []
+            for g, part in plot.stats.groupby("group", sort=False):
+                part = part[np.isfinite(part["centre"])]
+                if part.empty:
+                    continue
+                color = _GROUP_COLORS.get(g) or style.stability_color(g, names.index(g)).name()
+                fit = plot.fits.get(g)
+                z = part["height"].to_numpy()
+                zz = np.geomspace(z.min(), z.max(), 100) if fit is not None else None
+                groups.append({"label": g if g != profiles.ALL else "all slots", "color": color,
+                               "x": part["centre"].to_numpy(), "z": z, "lines": self.lines.isChecked(),
+                               "spread": part["spread"].to_numpy() if self.error_bars.isChecked() else None,
+                               "fit": (fit.func(zz), zz) if fit is not None else None})
+            panels.append({"title": plot.title.text().replace("<b>", "").replace("</b>", ""),
+                           "xlabel": q.unit or q.label, "log_z": self.log_z.isChecked(), "groups": groups})
+        return ("profiles", {"panels": panels}) if panels else None
 
     def set_sources(self, sources, x_range, stability) -> None:
         """`sources`: (TimelineData or None, members shown) per panel."""

@@ -1,10 +1,13 @@
 """The main window: two x-linked timelines of any quantities, their
 distributions, a scatter of one against the other and wind roses, stability
 and anisotropy bands, a whole-period overview, and click-through to the raw
-data; linked brushing across them, a find over any quantities, and bookmarks.
+data; linked brushing across them, a find over any quantities, and bookmarks;
+composite spectra, diurnal cycles and anisotropy over an interval, another run
+to compare against, and matplotlib figures of any of it.
 """
 import logging
 
+import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
@@ -16,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.timegrid import time_to_slot
-from ttu_tower.viewer import anisotropy, brush, timeline
+from ttu_tower.viewer import anisotropy, brush, compare, figures, timeline
 from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
@@ -24,10 +27,16 @@ from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_v
 from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.run import RunHandle, list_registered
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix, unix_to_slot
+from ttu_tower.viewer.ui.anisotropy_view import AnisotropyMapView
 from ttu_tower.viewer.ui.bookmarks_panel import BookmarkDialog, BookmarksPanel
+from ttu_tower.viewer.ui.compare_view import CompareView
+from ttu_tower.viewer.ui.composite_view import CompositeSpectraView
+from ttu_tower.viewer.ui.diurnal_view import DiurnalView
+from ttu_tower.viewer.ui.export_dialog import ExportDialog
 from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.find_panel import FindPanel
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
+from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
 from ttu_tower.viewer.ui.profiles_view import ProfilesView
 from ttu_tower.viewer.ui.qc_summary import QCSummaryView
@@ -41,7 +50,7 @@ _DAY = 86_400.0
 _ZOOMS = (("Y", 366 * _DAY), ("M", 31 * _DAY), ("W", 7 * _DAY), ("D", _DAY), ("6h", _DAY / 4))
 _HF_VARIABLES = ["ue", "vn", "w", "ts", "vpts", "t", "rh", "p"]
 _ALL = tuple(sorted(HEIGHTS))
-_DEFAULTS = (("boom_final|ws|mean", "none", _ALL), ("boom_final|ustar|", "mrd", _ALL))
+_DEFAULTS = (("boom_final|ws|mean", "mrd", _ALL), ("boom_final|ustar|", "mrd", _ALL))
 _FALLBACKS = (("coverage|momentum|usable", "none", _ALL), ("slot_qc|ts|skew", "none", _ALL))
 _TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "profile": "profile", "none": "numbers"}
 
@@ -51,7 +60,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, run: RunHandle | None = None, runner: JobRunner | None = None):
         super().__init__()
-        self.settings = QSettings("ttu-tower", "ttu-view")
+        self.settings = QSettings()  # the application's organization and name, set in app.main
         self.runner = runner or JobRunner(parent=self)
         self.run: RunHandle | None = None
         self.index: FragmentIndex | None = None
@@ -64,6 +73,8 @@ class MainWindow(QMainWindow):
         self.inspectors: list[InspectorWindow] = []
         self._have_range = False
         self.selection = brush.EMPTY  # the brushed slots, shared by every view
+        self.other_run = self.other_index = self.other_catalog = None  # the run compared against
+        self.others = [None, None]  # its TimelineData per panel, or why it has none
         self.bookmarks = BookmarkStore()
         self._opening: InspectorWindow | None = None  # the inspector the busy cursor waits on
         self._also_here = ""  # the other curves at the clicked point, said again once the inspector opens
@@ -150,12 +161,22 @@ class MainWindow(QMainWindow):
         self.windrose = WindRoseView(self.runner)
         self.qc_summary = QCSummaryView(self.runner)
         self.profiles = ProfilesView()
+        self.composite = CompositeSpectraView(self.runner)
+        self.diurnal = DiurnalView()
+        self.diurnal.cellSelected.connect(lambda slots: self.set_selection(slots, "replace"))
+        self.aniso_map = AnisotropyMapView(self.runner)
+        self.aniso_map.brushed = self.set_selection
+        self.compare = CompareView()
+        self.dist_tab = dist_split
         self.right_tabs = QTabWidget()
-        self.right_tabs.addTab(dist_split, "Distributions")
-        self.right_tabs.addTab(self.scatter, "Scatter")
-        self.right_tabs.addTab(self.profiles, "Profiles")
-        self.right_tabs.addTab(self.windrose, "Wind rose")
-        self.right_tabs.addTab(self.qc_summary, "QC")
+        self.right_tabs.setUsesScrollButtons(True)
+        for widget, label in ((dist_split, "Distributions"), (self.scatter, "Scatter"), (self.profiles, "Profiles"),
+                              (self.composite, "Spectra"), (self.diurnal, "Diurnal"), (self.aniso_map, "Anisotropy"),
+                              (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare")):
+            self.right_tabs.addTab(widget, label)
+        self.right_tabs.setTabToolTip(3, "composite MRD spectra: each boom's median over the slots")
+        self.right_tabs.setTabToolTip(4, "a panel's quantity by hour of day and month")
+        self.right_tabs.setTabToolTip(8, "this run against another (choose it in the toolbar)")
         self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -285,6 +306,17 @@ class MainWindow(QMainWindow):
                                      "lasso; without it, Shift-drag does the same. Ctrl adds, Alt removes, Esc clears")
         self.brush_action.toggled.connect(self._set_brush_mode)
         bar.addAction(self.brush_action)
+        bar.addSeparator()
+        self.compare_box = QComboBox()
+        self.compare_box.setToolTip("another run to compare with: its curves dashed on the timelines, and the "
+                                    "Compare tab")
+        self.compare_box.activated.connect(self._on_compare_chosen)
+        bar.addWidget(QLabel(" compare "))
+        bar.addWidget(self.compare_box)
+        export = QAction("Export figure…", self)
+        export.setToolTip("save the timelines or the showing summary tab as a matplotlib figure (PNG, PDF, SVG)")
+        export.triggered.connect(self._export_figure)
+        bar.addAction(export)
         self.range_label = QLabel()
         bar.addWidget(self.range_label)
         self._refresh_run_list()
@@ -374,6 +406,10 @@ class MainWindow(QMainWindow):
         self.set_selection(brush.EMPTY, "replace")
         self.windrose.set_run(run, self.index, booms)
         self.qc_summary.set_run(run, self.index, booms)
+        self.composite.set_run(run, self.index, booms)
+        self.aniso_map.set_run(run, self.index, booms)
+        self._fill_compare_box()
+        self._set_other_run(None)
         self._load_aniso_band()
 
     def _load_aniso_band(self) -> None:
@@ -435,6 +471,7 @@ class MainWindow(QMainWindow):
             return
         self.datas[i] = data
         self.plots[i].set_data(data, spec)
+        self._load_other(i, spec)
         self._load_overlays(i, spec)
         self._sync_axis_widths()
         self._apply_night()
@@ -564,6 +601,15 @@ class MainWindow(QMainWindow):
         elif shown is self.profiles:
             self.profiles.set_sources([(data, plot.visible_members()) if data is not None else None
                                        for data, plot in zip(self.datas, self.plots)], x_range, self.stability)
+        elif shown is self.composite:
+            self.composite.set_range(x_range, self.stability)
+        elif shown is self.diurnal:
+            self.diurnal.set_sources(self.datas, x_range, self.tz_box.currentData() or self.run.timezone)
+        elif shown is self.aniso_map:
+            self.aniso_map.set_range(x_range, self.stability)
+        elif shown is self.compare:
+            self.compare.set_sources(self.datas, self.others, self.other_run.tag if self.other_run else None,
+                                     x_range)
         else:
             for data, plot, dist in zip(self.datas, self.plots, self.dists):
                 if data is None:
@@ -655,6 +701,8 @@ class MainWindow(QMainWindow):
             d.set_selection(self.selection)
         self.scatter.set_selection(self.selection)
         self.profiles.set_selection(self.selection)
+        self.composite.set_selection(self.selection)
+        self.aniso_map.set_selection(self.selection)
         self._show_selection()
 
     def _show_selection(self) -> None:
@@ -675,6 +723,151 @@ class MainWindow(QMainWindow):
             return
         boom = self.inspectors[-1].boom if self.inspectors else self.goto_boom.currentData()
         self.inspect_sequence([(int(k), boom) for k in self.selection], 0, f"selection, b{boom}")
+
+    # --- another run ---------------------------------------------------------------------------
+
+    def _fill_compare_box(self) -> None:
+        self.compare_box.blockSignals(True)
+        self.compare_box.clear()
+        self.compare_box.addItem("(none)", None)
+        for row in list_registered():
+            if row["exists"] and "primary" in row["stages"] and row["tag"] != self.run.tag:
+                self.compare_box.addItem(row["tag"], row["tag"])
+        self.compare_box.blockSignals(False)
+
+    def _on_compare_chosen(self, index: int) -> None:
+        tag = self.compare_box.itemData(index)
+        if tag is None:
+            self._set_other_run(None)
+            return
+        try:
+            self._set_other_run(RunHandle.open(tag))
+        except Exception as exc:
+            QMessageBox.warning(self, "ttu-view", f"can't open {tag}: {exc}")
+            self.compare_box.setCurrentIndex(0)
+
+    def _set_other_run(self, run) -> None:
+        self.other_run = run
+        self.other_index = FragmentIndex(run.run_dir) if run is not None else None
+        self.other_catalog = None
+        self.others = [None, None]
+        for p in self.plots:
+            p.set_compare(None, None)
+        if run is None:
+            self._refresh_distributions()
+            return
+        self.statusBar().showMessage(f"comparing with {run.tag}: reading its quantities…", 6000)
+        self.runner.submit(build_catalog, run, key="other-catalog", label=f"reading {run.tag}'s quantities",
+                           on_done=lambda catalog: self._other_catalog_ready(run, catalog),
+                           on_error=self._report_error)
+
+    def _other_catalog_ready(self, run, catalog) -> None:
+        if run is not self.other_run:
+            return
+        self.other_catalog = catalog
+        for i, spec in enumerate(self.specs):
+            if spec.quantity is not None and self.datas[i] is not None:
+                self._load_other(i, spec)
+
+    def _load_other(self, i: int, spec: PanelSpec) -> None:
+        """The compared run's version of panel i, dashed under this run's."""
+        run = self.other_run
+        if run is None or spec.quantity is None:
+            return
+        if self.other_catalog is None:
+            self.others[i] = "reading the other run's quantities…"
+            return
+        other, variant = compare.counterpart(self.other_catalog, spec.quantity, spec.variant)
+        if other is None:
+            self.others[i] = variant  # the reason
+            self._refresh_distributions()
+            return
+        members = tuple(m for m in spec.members if spec.quantity.kind != "boom" or m in run.booms)
+
+        def ready(data):
+            if run is self.other_run and spec is self.specs[i]:
+                self.others[i] = data
+                self.plots[i].set_compare(data, run.tag)
+                self._refresh_distributions()
+
+        self.runner.submit(timeline.load, run, self.other_index, other, variant, members, key=f"other{i}",
+                           label=f"loading {run.tag}'s {other.label}", on_done=ready, on_error=self._report_error)
+
+    # --- figures -------------------------------------------------------------------------------
+
+    def timelines_spec(self) -> tuple[str, dict] | None:
+        tz = self.tz_box.currentData() or self.run.timezone
+        x0, x1 = self.x_range()
+
+        def local(x):
+            return pd.to_datetime(x, unit="s", utc=True).tz_convert(tz).tz_localize(None)
+
+        def broken(x, y):
+            """Local times and values with a NaN wherever slots are missing, so no line bridges a gap."""
+            gaps = np.flatnonzero(np.diff(x) > SLOT_SECONDS * 1.5)
+            x, y = np.insert(x, gaps + 1, x[gaps] + SLOT_SECONDS), np.insert(y.astype(float), gaps + 1, np.nan)
+            return local(x), y
+
+        panels = []
+        for i, (plot, data) in enumerate(zip(self.plots, self.datas)):
+            if data is None:
+                continue
+            q = data.quantity
+            curves, others = [], []
+            for j, m in enumerate(plot.visible_members()):
+                c = data.curves[m]
+                keep = (c.x >= x0) & (c.x <= x1)
+                color = pg.mkColor(style.member_color(m, j)).name()
+                t, y = broken(c.x[keep], c.y[keep])
+                curves.append({"label": style.member_label(m) or "value", "color": color, "t": t, "y": y,
+                               "points": plot.lines_drawn is False})
+                other = self.others[i]
+                if not isinstance(other, str) and other is not None and m in other.curves:
+                    o = other.curves[m]
+                    ok = (o.x >= x0) & (o.x <= x1)
+                    t, y = broken(o.x[ok], o.y[ok])
+                    others.append({"label": m, "color": color, "t": t, "y": y})
+            variant = "" if data.variant == "none" else f" · {data.variant}"
+            panels.append({"title": q.title + variant, "ylabel": q.unit, "log_y": plot.log_y,
+                           "categories": data.categories if q.categorical else None, "curves": curves,
+                           "others": others})
+        if not panels:
+            return None
+        night = []
+        if self.night is not None and self.night_box.isChecked():
+            for a, b in brush.runs(self.night.slots[np.nan_to_num(self.night.y) > 0.5]):
+                t0, t1 = slot_to_unix(a), slot_to_unix(b)
+                if t1 >= x0 and t0 <= x1:
+                    night.append((local(np.array([t0]))[0], local(np.array([t1]))[0]))
+        xlim = tuple(local(np.array([x0, x1])))
+        return "timelines", {"panels": panels, "night": night, "xlim": xlim, "xlabel": f"time ({tz})"}
+
+    def summary_spec(self) -> tuple[str, dict] | None:
+        shown = self.right_tabs.currentWidget()
+        if shown is self.dist_tab:
+            panels = [p for p in (d.figure_spec() for d in self.dists) if p is not None]
+            return ("distributions", {"panels": panels}) if panels else None
+        return shown.figure_spec() if hasattr(shown, "figure_spec") else None
+
+    def _export_figure(self) -> None:
+        if self.run is None:
+            return
+        tab = self.right_tabs.tabText(self.right_tabs.currentIndex())
+        dialog = ExportDialog(tab, self.summary_spec() is not None, self.settings, self)
+        if not dialog.exec():
+            return
+        spec = self.timelines_spec() if dialog.target() == "timelines" else self.summary_spec()
+        if spec is None:
+            QMessageBox.information(self, "ttu-view", "nothing to draw there yet")
+            return
+        try:
+            fig = figures.render(*spec, dialog.size())
+            figures.save(fig, dialog.path(), dialog.dpi())
+        except Exception as exc:
+            QMessageBox.warning(self, "ttu-view", f"couldn't save the figure: {exc}")
+            logging.getLogger("ttu_view").exception("figure export")
+            return
+        self.statusBar().showMessage(f"saved {dialog.path()}", 8000)
 
     # --- find and bookmarks ---------------------------------------------------------------------
 
@@ -747,6 +940,7 @@ class MainWindow(QMainWindow):
         for w in list(self.inspectors):
             w.close()
         self.runner.wait(5000)
+        self.runner.shutdown()
         if self.reprocessor is not None:
             self.reprocessor.close()
         super().closeEvent(ev)

@@ -9,6 +9,8 @@ from ttu_tower.viewer.run import RunHandle, RunNotFound, list_registered
 
 def configure_pyqtgraph() -> None:
     pg.setConfigOptions(background="w", foreground="k", antialias=False, useNumba=False)
+    from ttu_tower.viewer.ui import plot_export
+    plot_export.install()  # the right-click Export dialog and a CSV with labelled columns
 
 
 def open_initial_run(tag: str | None, run_dir: str | None, test: bool, settings_tag: str | None) -> RunHandle | None:
@@ -27,6 +29,7 @@ def main(tag: str | None = None, run_dir: str | None = None, test: bool = False)
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     logs.install()  # warnings and Qt's messages to the log file, not the console
+    app.setOrganizationName("ttu-tower")
     app.setApplicationName("ttu-view")
     configure_pyqtgraph()
 

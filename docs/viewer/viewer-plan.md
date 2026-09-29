@@ -7,9 +7,12 @@ feedback. See "Phase 1 checkpoint revisions" and "Phase 2 as built" below.
 **Phases 3 and 4 are built and have been through two rounds of Elliott's review fixes** (see
 "Phase 3 as built", "Phase 4 as built" and the two "Review fixes" sections).
 
-**Phase 5 (linked brushing, find, bookmarks) is built and awaits Elliott's checkpoint.** See
-"Phase 5 as built". Phase 6 is the rest. Nothing since phase 2 is committed by me (Elliott
-commits).
+**Phase 5 (linked brushing, find, bookmarks) is built** ("Phase 5 as built").
+
+**Phase 6 is built and awaits Elliott's checkpoint** ("Phase 6 as built"): composite spectra, the
+diurnal × month heatmap, an interval anisotropy map, two-run comparison and matplotlib figure
+export. PSD waits for the pipeline to compute it. Elliott commits; nothing here is committed by
+me.
 
 ## Context
 
@@ -1039,7 +1042,14 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
   - The selection is one set of slots shared by every view (`MainWindow.set_selection`):
     - magenta rings on each visible curve's value at those slots
     - a "sel" row in the whole-period overview, showing where in the year they fall
-    - each histogram's selected share, filled in the boom's colour under the full histogram
+    - each boom's histogram split into the selection (filled) and the rest (lines), each a
+      density of its own slots on shared bins, so their shapes compare (revised at Elliott's
+      request: the selection was first drawn as a share of the whole and came out very short).
+      A second table then gives the selection's statistics (captioned "brushed selection
+      (filled)") under the rest's ("the rest (lines)"). A distribution fit is made to each part
+      separately: its parameters go in that part's table, the rest's PDF is dashed and the
+      selection's dash-dotted. Fit columns that share a name with a sample statistic get "(fit)"
+      (a normal fit's σ).
     - ringed points on the scatter
     - a "selection vs rest" grouping in Profiles, chosen automatically when a selection first
       appears
@@ -1098,6 +1108,124 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
 - (Distribution fits were built in phase 3.)
 
 ---
+
+### Phase 6 as built (2026-09-28)
+The right dock's tabs are now Distributions, Scatter, Profiles, **Spectra**, **Diurnal**,
+**Anisotropy**, Wind rose, QC and **Compare** (scroll buttons when narrow). Each follows the
+viewed interval or the whole period like the others.
+
+- **Spectra** (`viewer/composite.py`, `ui/composite_view.py`): composite MRD spectra like
+  ttu-windprofiles' `baseplots.cospectra`.
+  - Per boom (toggle buttons), the median over slots at each averaging scale, with 25–75 %
+    bars, on a log τ axis. Dashed guides at 60, 180, 600 and 1800 s.
+  - Choices: any of the 8 spectra; mrd or mrd_unexcised; all slots, one stability class, or the
+    brushed selection (or the rest).
+  - "normalize" divides each slot's spectrum by its sum over scales; log y is for variances
+    only.
+  - A boom's slot × scale matrix is read once per (boom, variant, spectrum) and cached, about
+    1 s a boom on `oneyear`.
+- **Diurnal** (`viewer/diurnal.py`, `ui/diurnal_view.py`): a panel's quantity for one boom (or
+  pair) as an hour-of-day × month heatmap in the display time zone, pooling years.
+  - Statistics: median, mean, std or count. Directions use the vector mean and Yamartino σ with
+    a cyclic colour map; categories show the share in a chosen category.
+  - Hover shows the value and N. **Clicking a cell selects its slots** (linked brushing).
+- **Anisotropy** (`ui/anisotropy_view.py`, `anisotropy.boom_map`, `anisotropy.hexbin`): one boom's states
+  over the interval on the barycentric map, as the old plotting code's `barycentric.py` drew
+  them (revised at Elliott's request).
+  - **Heatmap (default):** a hexbin of slots per hexagon (gridsize 40), viridis, every hexagon
+    filled and clipped to the triangle, with a colour bar per panel; "log colour" is an option.
+    `anisotropy.hexbin` reproduces matplotlib's binning exactly (tested), so the viewer and the
+    exported figure agree.
+  - **Points** instead, with the class regions shaded underneath if wanted.
+  - **Split:** all together, **one panel per stability class**, or "brushed selection | the
+    rest", which needs a brushed selection. That option's tooltip says how to make one, and it
+    is greyed out without one.
+  - Split panels use short corner labels, tight view ranges, no layout margins and narrow
+    unlabelled colour bars, so the triangles fill their panels; the colour's meaning is in the
+    note under the plots.
+  - A table gives each panel's share per anisotropy class (the pipeline's regions).
+  - A lasso on a panel selects that panel's slots inside it.
+  - The export draws the same panels with `Axes.hexbin`, clipped to the triangle, with full
+    corner labels on the first panel only (as the reference does).
+- **Two-run comparison** (`viewer/compare.py`, `ui/compare_view.py`): the toolbar's
+  **compare** picker opens another registered run read-only.
+  - Its version of each panel's quantity (same key and variant, if it has them) is drawn dashed
+    in the same colours under this run's curves.
+  - The Compare tab lists per boom: N in each run, N both, the means, the bias (other − this),
+    RMSE, % identical and r (directions wrap to ±180°). A scatter shows other against this for
+    one boom, with y = x.
+  - On `oneyear` against `pilot_2014_04`: ws is identical; u* differs slightly where τ changed.
+- **Figure export** (`viewer/figures.py`, `ui/export_dialog.py`, toolbar **Export figure…**):
+  - Exports the timelines (both panels over the viewed interval, night shading, the compared
+    run dashed, lines broken at missing slots) or the showing summary tab. Distributions,
+    scatter, profiles, spectra, diurnal, anisotropy, wind roses and compare have figures; QC is
+    tables and has none.
+  - Drawn with matplotlib's object API on the Agg canvas (never pyplot), in the paper's style:
+    tab colours, stability colours and markers from ttu-windprofiles' `style.py`, viridis by
+    height.
+  - Size in inches and dpi are remembered; PNG, PDF or SVG by extension.
+  - Each view hands over a plain description (`figure_spec()`), so `render(kind, spec, size)`
+    is Qt-free and tested for every kind.
+  - `matplotlib` is added to the `viewer` extra. It was already installed, as a dependency of
+    wtxmeso.
+- **The right-click Export dialog** (`ui/plot_export.py`, installed by `configure_pyqtgraph`;
+  Elliott's review):
+  - pyqtgraph's own dialog, subclassed. Its "Export options" panel is given room and a stretch
+    so it grows with the window.
+  - A "Title and axis labels (for this export only)" box, prefilled from the plot (a timeline's
+    title comes from its panel). The text is applied to the plot only while the file is written,
+    then restored.
+  - A "Saved to <path>" message box on completion, or a warning with the error.
+  - pyqtgraph's CSV exporter is replaced by "CSV of plot data (labelled columns)":
+    - Columns are named by what they are ("b5 (16.8 m)", "b5 (16.8 m): filtered (value before
+      filtering)", "…: brushed selection", "…: <other run>", "… normal PDF"), else the item's
+      legend name, else the y-axis label.
+    - A date axis becomes a "time (<zone>)" index in the display zone.
+    - Timelines export every stored sample, not the decimated points drawn; profiles export the
+      true heights, not the drawn pixel offsets.
+    - Options: separator, significant digits, one row per x (curves side by side, the default)
+      or x and y columns per curve (the default for the scatter, profile and compare plots),
+      and the viewed x range or all the data.
+- **Job runner fix:** the full suite had begun hanging now and then, in about half the runs.
+  - Every stack dump showed the GUI thread stopped at an ordinary Qt call (`self.scene()`,
+    `QEventLoop.quit()`, a menu's `translate`, a `clear()`) and a worker stopped at an ordinary
+    numpy or pandas allocation, neither moving for minutes. GIL contention alone was measured
+    and ruled out.
+  - Cause: Python's cycle collector runs on whichever thread happens to allocate. A worker
+    thread collecting cycles freed closed windows' and cleared plots' Qt objects off the GUI
+    thread, which deadlocked PySide. The first dump caught it directly, in a weakref callback
+    during `clear()`.
+  - `JobRunner` turns automatic collection off and collects on a GUI-thread timer every
+    0.5 s instead (pyqtgraph's `GarbageCollector`, which exists for this). The viewer tests'
+    conftest turns automatic collection back on when they finish.
+  - Verified 2026-09-29: `test_inspector_tabs_ui.py`, which had stalled about one run in two,
+    passed five runs in a row, then the full viewer suite passed (176 passed, 2 integration
+    skips).
+  - Also, `JobRunner` now runs jobs on plain Python threads with a priority queue
+    (`worker._Pool`), because a `QThreadPool` deletes its QRunnables on its own threads.
+    Results come back through the same queued signal. A superseded job still waiting skips
+    its work (a lock-guarded set), priorities are unchanged, and the main window ends the
+    workers on close.
+- **Settings:** the main window reads `QSettings()` under the application's organization and
+  name, the same registry key as before. The viewer tests point that at a scratch folder, so
+  they no longer overwrite the user's window geometry and last run.
+- **Variant picker:** it starts at `mrd (selected τ)` and keeps the last variant chosen among
+  several as quantities change. The τ-independent variant is labelled "slot (no τ)" instead
+  of "—", and every variant has a tooltip. For ws, w and ts means, "slot (no τ)" (primary
+  `means`) equals `naive` to rounding on `oneyear`. vpts differs because `boom_stats` converts
+  it to the measured pressure while `means` keeps the reference pressure.
+- **Already built earlier:** the wind rose (phase 3), the inspector's barycentric map (phase 3)
+  and distribution fits (phase 3).
+- **Not built: PSD.** The pipeline doesn't compute PSDs yet; the Spectra tab's `MRD | PSD`
+  switch stays reserved.
+- **Tests:**
+  - `test_viewer_composites.py`: composite medians and normalization, diurnal cells (time zone,
+    categories, directions, cell slots), comparison statistics and direction wrapping, every
+    figure kind rendered to PNG, PDF and SVG, and (slow) the spectra matrix and anisotropy map
+    against the stored rows
+  - slow UI tests: composite groups and the selection, a diurnal click selecting its slots, the
+    anisotropy lasso, a run compared with itself (identical everywhere), and figures exported
+    from every tab
 
 ## Critical files
 - **New:** `src/ttu_tower/viewer/**`, `src/ttu_tower/cli/view.py`, `src/ttu_tower/cli/runs.py`,

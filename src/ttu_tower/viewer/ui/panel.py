@@ -13,8 +13,16 @@ from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer.catalog import Catalog, Quantity
 from ttu_tower.viewer.timeline import has_filtered_overlay, has_tau_overlay
 
-_VARIANT_LABELS = {"none": "—", "mrd": "mrd (selected τ)", "naive": "naive (10 min)",
+_VARIANT_LABELS = {"none": "slot (no τ)", "mrd": "mrd (selected τ)", "naive": "naive (10 min)",
                    "mrd_unexcised": "mrd unexcised"}
+_VARIANT_TIPS = {
+    "none": "Over the whole 10-min slot on the final usable mask (means, slow sensors and what's "
+            "built from them); doesn't depend on τ.",
+    "mrd": "Mean over the valid τ-blocks tiling the slot, at the selected τ (τ = 20 min: the "
+           "window from 5 min before the slot to 15 min after).",
+    "naive": "The 600-s rung of mrd: the slot as a single block.",
+    "mrd_unexcised": "As mrd, on the series with nothing removed (gaps ≤ 10 min interpolated).",
+}
 STYLES = ("lines", "points", "lines + points")
 
 
@@ -58,7 +66,8 @@ class PanelControls(QWidget):
         self.tree.currentItemChanged.connect(self._on_quantity_changed)
 
         self.variant = QComboBox()
-        self.variant.currentIndexChanged.connect(lambda *_: self._emit())
+        self.variant.currentIndexChanged.connect(self._on_variant_changed)
+        self._preferred_variant = "mrd"  # kept across quantities that offer it
 
         self.boom_boxes: dict[int, QCheckBox] = {}
         boom_page = QWidget()
@@ -193,13 +202,13 @@ class PanelControls(QWidget):
             parent.setExpanded(bool(text) and shown > 0)
 
     def _sync_quantity_widgets(self, q: Quantity) -> None:
-        current = self.variant.currentData()
         self.variant.blockSignals(True)
         self.variant.clear()
         for v in q.variants:
             self.variant.addItem(_VARIANT_LABELS.get(v, v), v)
-        i = self.variant.findData(current)
-        self.variant.setCurrentIndex(i if i >= 0 else 0)
+            self.variant.setItemData(self.variant.count() - 1, _VARIANT_TIPS.get(v, ""), Qt.ItemDataRole.ToolTipRole)
+        i = self.variant.findData(self._preferred_variant)
+        self.variant.setCurrentIndex(i if i >= 0 else max(self.variant.findData("mrd"), 0))
         self.variant.setEnabled(len(q.variants) > 1)
         self.variant.blockSignals(False)
 
@@ -258,6 +267,11 @@ class PanelControls(QWidget):
                          log_y=self.log_y.isChecked() and not q.categorical, style=self.style.currentText(),
                          show_filtered=can_filter and self.filtered_box.isChecked(),
                          show_tau=can_tau and self.tau_box.isChecked())
+
+    def _on_variant_changed(self, *_) -> None:
+        if self.variant.count() > 1:
+            self._preferred_variant = self.variant.currentData()
+        self._emit()
 
     def _on_quantity_changed(self, *_) -> None:
         q = self.current_quantity()

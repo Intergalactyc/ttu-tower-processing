@@ -290,6 +290,20 @@ def test_a_click_on_any_quantity_opens_its_slot(window, qtbot):
     assert not failures, failures
 
 
+def test_variant_starts_at_mrd_and_keeps_the_last_choice(window):
+    panel = window.panels[0]
+    assert panel.current_quantity().key == "boom_final|ws|mean"
+    assert panel.variant.currentData() == "mrd"
+    panel.select("boom_final|t|mean")
+    assert panel.variant.currentData() == "none" and not panel.variant.isEnabled()
+    panel.select("boom_final|ws|mean")
+    assert panel.variant.currentData() == "mrd"
+    panel.variant.setCurrentIndex(panel.variant.findData("naive"))
+    panel.select("boom_final|t|mean")
+    panel.select("boom_final|ustar|")
+    assert panel.variant.currentData() == "naive"
+
+
 def test_qc_summary_tab_fills_a_row_per_boom(window, qtbot):
     window.right_tabs.setCurrentWidget(window.qc_summary)
     qc = window.qc_summary
@@ -467,3 +481,119 @@ def test_bookmarks_are_saved_listed_and_opened(window, qtbot, tmp_path):
     qtbot.waitUntil(lambda: inspector.bundle is not None and _idle(window), timeout=60_000)
     assert (inspector.slot, inspector.boom, inspector.variant()) == (SPIKY_SLOT + 1, 1, "naive")
     assert inspector.seq_info.text().startswith("2 / 2")
+
+
+def test_composite_spectra_draw_a_median_per_boom(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.composite)
+    view = window.composite
+    qtbot.waitUntil(lambda: bool(view.summaries) and _idle(window), timeout=60_000)
+    assert set(view.summaries) == set(FULL_BOOMS)
+    everything = view.summaries[FULL_BOOMS[0]]["n"].max()
+    window.set_selection(np.unique(window.datas[0].curves[FULL_BOOMS[0]].slots)[:5], "replace")
+    view.group.setCurrentIndex(view.group.findData("selected"))
+    assert 0 < view.summaries[FULL_BOOMS[0]]["n"].max() <= 5 < everything
+    view.spectrum.setCurrentIndex(view.spectrum.findData("ww"))
+    qtbot.waitUntil(lambda: view._loaded_key == view._key() and bool(view.summaries), timeout=60_000)
+    assert view.log_y.isEnabled()
+
+
+def test_a_diurnal_cell_click_selects_its_slots(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.diurnal)
+    view = window.diurnal
+    qtbot.waitUntil(lambda: view.values is not None, timeout=60_000)
+    h, m = map(int, np.argwhere(view.counts > 0)[0])
+    assert view._clicked(m + 0.5, h + 0.5)
+    assert window.selection.size == view.counts[h, m]
+
+
+def test_the_anisotropy_map_lassoes_slots(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.aniso_map)
+    view = window.aniso_map
+    qtbot.waitUntil(lambda: view.states is not None and _idle(window), timeout=60_000)
+    slots, _, _ = view.shown()
+    assert len(view.panels) == 1 and view.display.currentData() == "heatmap"
+    view._on_lasso(np.array([-1.0, 2.0, 2.0, -1.0]), np.array([-1.0, -1.0, 2.0, 2.0]), "replace")
+    assert list(window.selection) == sorted(set(slots)) and view.table.rowCount() >= 1
+    assert view.split.currentData() == "selection" and [p[0] for p in view.panels] == ["selected", "the rest"]
+    window.set_selection(slots[:3], "replace")
+    rest_panel = view.panels[1]
+    view._on_lasso(np.array([-1.0, 2.0, 2.0, -1.0]), np.array([-1.0, -1.0, 2.0, 2.0]), "replace", rest_panel[2])
+    assert list(window.selection) == sorted(set(slots) - set(slots[:3]))  # a lasso on one panel takes its slots only
+
+
+def test_comparing_a_run_with_itself_agrees_everywhere(window, qtbot):
+    window._set_other_run(RunHandle.from_dir(window.run.run_dir))
+    qtbot.waitUntil(lambda: all(o is not None and not isinstance(o, str) for o in window.others)
+                    and _idle(window), timeout=60_000)
+    assert set(window.plots[0].compare_items) == set(window.plots[0].items)
+    window.right_tabs.setCurrentWidget(window.compare)
+    frame = window.compare.frame
+    assert frame is not None and len(frame) == len(window.datas[0].curves)
+    assert (frame["N both"] == frame["N (this run)"]).all() and (frame["RMSE"] == 0).all()
+    window._set_other_run(None)
+    assert not window.plots[0].compare_items
+
+
+def test_figures_export_from_every_tab(window, qtbot, tmp_path):
+    from ttu_tower.viewer import figures
+    window.full_period.setChecked(True)
+    spec = window.timelines_spec()
+    figures.save(figures.render(*spec, (6, 4)), tmp_path / "timelines.pdf")
+    exported = []
+    for i in range(window.right_tabs.count()):
+        window.right_tabs.setCurrentIndex(i)
+        qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
+        qtbot.wait(50)
+        spec = window.summary_spec()
+        if spec is not None:
+            figures.save(figures.render(*spec, (6, 4)), tmp_path / f"{spec[0]}.png", dpi=60)
+            exported.append(spec[0])
+    assert {"distributions", "scatter", "profiles", "composite", "diurnal", "anisotropy", "windrose"} <= set(exported)
+    assert (tmp_path / "timelines.pdf").stat().st_size > 1000
+
+
+def test_a_selection_splits_each_histogram_into_its_own_density(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    slots = np.unique(window.datas[0].curves[FULL_BOOMS[0]].slots)
+    window.set_selection(slots[:6], "replace")
+    assert "brushed selection" in dist.title.text()
+    hists = dist.figure_spec()["hists"]
+    selected = [h for h in hists if h.get("filled")]
+    rest = [h for h in hists if not h.get("filled")]
+    assert len(selected) == len(rest) == len(FULL_BOOMS)
+    for h in hists:  # each part is a density of its own slots, not a share of the whole
+        widths = np.diff(h["edges"])
+        assert (h["density"] * widths).sum() == pytest.approx(1.0, abs=0.05)
+    window.set_selection(np.empty(0, dtype=np.int64), "replace")
+    assert not any(h.get("filled") for h in dist.figure_spec()["hists"])
+
+
+def test_a_selection_gets_its_own_statistics_table(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    dist.fit_box.setCurrentIndex(dist.fit_box.findData("normal"))
+    qtbot.waitUntil(lambda: bool(dist.fits) and _idle(window), timeout=60_000)
+    assert dist.sel_table.isHidden() and dist.table.rowCount() == len(FULL_BOOMS)
+    slots = np.unique(window.datas[0].curves[FULL_BOOMS[0]].slots)
+    window.set_selection(slots[:6], "replace")
+    qtbot.waitUntil(lambda: {p for p, _ in dist.fits} == {"rest", "selected"} and _idle(window), timeout=60_000)
+    assert not dist.sel_table.isHidden() and dist.captions[1].text().startswith("brushed selection")
+
+    def column(table, name):
+        j = [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())].index(name)
+        return [float(table.item(r, j).text()) for r in range(table.rowCount())]
+
+    selected_n, rest_n = column(dist.sel_table, "N"), column(dist.table, "N")
+    whole = [np.isfinite(window.datas[0].curves[b].y).sum() for b in FULL_BOOMS]
+    assert all(0 < n <= 6 for n in selected_n) and [a + b for a, b in zip(selected_n, rest_n)] == whole
+    assert "μ" in [dist.sel_table.horizontalHeaderItem(c).text() for c in range(dist.sel_table.columnCount())]
+    window.set_selection(np.empty(0, dtype=np.int64), "replace")
+    assert dist.sel_table.isHidden() and not dist.captions[0].isVisible()

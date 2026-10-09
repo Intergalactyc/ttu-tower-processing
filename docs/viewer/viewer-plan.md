@@ -1227,6 +1227,48 @@ viewed interval or the whole period like the others.
     anisotropy lasso, a run compared with itself (identical everywhere), and figures exported
     from every tab
 
+### Changes (Elliott, 2026-10-02)
+
+- **Panel B's default quantity** is TI (`boom_final|ti|`, `mrd`) instead of u*.
+- **The Slot Inspector's Profile tab** adds TKE and ζ = z/L, for 12 panels in 6 columns.
+- **The low-level jet tool** lives in its own Jets tabs; see `docs/llj/llj-plan.md`.
+- **Scatter tab:** with slots brushed, "show: all slots / selection only" picks the points.
+  The statistics, lines and fits use only the shown points. A "ring the selection" check box,
+  on by default, turns the rings off. Both are greyed out while nothing is brushed.
+- **Distributions tab:** with slots brushed, "show" picks what's plotted.
+  - **Selection and the rest** is the default, as before: the selection filled, the rest as
+    lines, two tables.
+  - **Selection only:** the selection alone, one table.
+  - **All slots:** every slot, as if nothing were brushed.
+  - It works for categories too, where "selection and the rest" shows all the slots. Each
+    part's fits follow what's shown.
+- **Distribution bins:** each Distributions panel has a bins row.
+  - The bin count defaults to 60.
+  - "Auto range" (on by default) spans the 0.1st–99.9th percentiles, or 0–360° for
+    directions. While it's on, its from/to boxes show the range it chose.
+  - Unticked, "from" and "to" set the range, starting from the automatic one. Values outside
+    it are left out.
+  - The log-bins box works with either; log bins need a lower end above 0.
+- **Panel buttons:** "Controls" and "Summary" toolbar buttons (each dock's toggle action) show
+  or hide those panels, docked or detached. A detached panel that was closed can be brought
+  back, and pressing a button while its panel is open closes it.
+- **Stability tab (Controls):** chooses how stability is classified for every view that uses
+  it: the band, the Distributions, Profiles, Scatter, Spectra and Anisotropy tabs' class
+  choices, and Find's `stability`.
+  - **Criterion:** Ri_b between any two booms, or ζ = z/L at one boom (with its variant).
+  - **Classes:** the five classes, split by four editable boundaries. Each class runs from its
+    lower boundary (included) to the next (excluded).
+  - **Default:** the run's own `post.stability`, converted where its classes are the five
+    names as contiguous `[lo, hi)` intervals. Otherwise the run's own is used and can't be
+    shown as boundaries.
+  - **ζ boundaries:** they start at ±0.05 / ±0.5 (`stability.ZETA_EDGES`), only a starting point.
+  - **Saving and reset:** a criterion of one's own is remembered per run (QSettings
+    `stability/<tag>`), and "The run's own" goes back. The tab lists slots per class over the
+    whole period, and the band's legend names the criterion.
+  - **Code:** `viewer/stability.py` (`StabilitySpec`, `from_config`, `values`, `classify`);
+    `timeline.stability(run, index, spec=None)`; `ui/stability_panel.py`.
+  - **The run's outputs are never changed.**
+
 ## Critical files
 - **New:** `src/ttu_tower/viewer/**`, `src/ttu_tower/cli/view.py`, `src/ttu_tower/cli/runs.py`,
   `tests/unit/viewer/**`.

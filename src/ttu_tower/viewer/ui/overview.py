@@ -1,7 +1,7 @@
-"""Strips under the timelines: the stability class and each boom's
-anisotropy state along the viewed interval (x-linked to the timelines), and
-the whole-period availability overview, whose draggable box shows and sets
-the viewed interval.
+"""Strips under the timelines: the stability class, each boom's anisotropy
+state and the jet events along the viewed interval (x-linked to the
+timelines), and the whole-period availability overview, whose draggable box
+shows and sets the viewed interval.
 """
 import numpy as np
 import pyqtgraph as pg
@@ -67,7 +67,8 @@ class StabilityBand(QWidget):
     def link_to(self, plot_item) -> None:
         self.plot.getPlotItem().setXLink(plot_item)
 
-    def set_classes(self, slots: np.ndarray, stability) -> None:
+    def set_classes(self, slots: np.ndarray, stability, criterion: str = "") -> None:
+        """`criterion`: what classified them, for the legend."""
         if stability is None or slots.size == 0:
             self.image.clear()
             self.legend.setText("stability: unavailable (needs a tertiary stage)")
@@ -78,7 +79,7 @@ class StabilityBand(QWidget):
         rgba = _color_rows(_on_grid(slots, curve)[None, :], colors)
         self.image.setImage(rgba)
         self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * SLOT_SECONDS, 1)
-        self.legend.setText("stability: " + "  ".join(
+        self.legend.setText(f"stability{f' by {criterion}' if criterion else ''}: " + "  ".join(
             f"<span style='color:{style.stability_color(name, i).name()}'>■</span> {name}"
             for i, name in enumerate(names)))
 
@@ -181,6 +182,108 @@ class AnisotropyBand(QWidget):
         row = int(np.floor(pos.y()))
         if 0 <= row < len(self.rows):
             self.cellClicked.emit(int(unix_to_slot(pos.x())), self.rows[row])
+
+
+class JetsBand(QWidget):
+    """The jet events along the timelines (x-linked to them): each event's
+    span in its peak boom's color, grey where the filters remove it. A click
+    picks an event, a double click asks to open it; hovering names it.
+    """
+
+    eventClicked = Signal(int)
+    eventDoubleClicked = Signal(int)
+
+    _REMOVED = (170, 170, 170, 255)
+    REJECTED = (150, 70, 70, 255)
+    NO_NOSE = (90, 90, 90, 255)  # a hand-made event without a jet slot
+    _MARK = (240, 140, 0, 255)  # the strip over events edited or made by hand
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.vb = FixedXViewBox()
+        self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot.setMinimumHeight(18)
+        self.plot.hideAxis("bottom")
+        left = self.plot.getPlotItem().getAxis("left")
+        left.setTicks([[(0.5, "jets")]])
+        left.setWidth(60)
+        self.plot.setMouseEnabled(x=True, y=False)
+        self.plot.getPlotItem().setMenuEnabled(False)
+        self.plot.hideButtons()
+        self.image = pg.ImageItem(axisOrder="row-major")
+        self.plot.addItem(self.image)
+        self.highlight = pg.LinearRegionItem(movable=False, brush=(230, 0, 126, 25),
+                                             pen=pg.mkPen(style.SELECTED_COLOR, width=2))
+        self.highlight.hide()
+        self.plot.addItem(self.highlight)
+        self.plot.setYRange(0, 1, padding=0)
+        self.plot.scene().sigMouseClicked.connect(self._on_click)
+        self.plot.scene().sigMouseMoved.connect(self._on_move)
+        self.legend = QLabel("jets: none yet")
+        self.legend.setWordWrap(True)
+        self.legend.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.legend)
+        layout.addWidget(self.plot, stretch=1)
+        self.slots = np.empty(0, dtype=np.int64)
+        self.event_of = np.empty(0, dtype=np.int64)  # per slot: its event, or -1
+        self.labels: dict[int, str] = {}
+
+    def set_axis_width(self, width: int) -> None:
+        self.plot.getPlotItem().getAxis("left").setWidth(width)
+
+    def link_to(self, plot_item) -> None:
+        self.plot.getPlotItem().setXLink(plot_item)
+
+    def set_events(self, slots: np.ndarray, event_of: np.ndarray, colors: dict, labels: dict, legend: str,
+                   marked=()) -> None:
+        """`event_of`: per slot of `slots` its event id or -1; `colors`: event id
+        -> RGBA, None for one the filters remove; `marked`: events edited or
+        made by hand, drawn with a strip along their top.
+        """
+        self.slots, self.event_of, self.labels = slots, event_of, labels
+        self.legend.setText(legend)
+        if slots.size == 0 or not colors:
+            self.image.clear()
+            self.highlight.hide()
+            return
+        rgba = np.zeros((4, slots.size, 4), dtype=np.uint8)  # the top row is the strip
+        for event_id, color in colors.items():
+            inside = event_of == event_id
+            rgba[:, inside] = self._REMOVED if color is None else color
+            if event_id in marked:
+                rgba[3, inside] = self._MARK
+        self.image.setImage(rgba, levels=(0, 255))
+        self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * SLOT_SECONDS, 1)
+
+    def show_event(self, event_id: int | None) -> None:
+        inside = np.flatnonzero(self.event_of == event_id) if event_id is not None else np.empty(0, int)
+        if inside.size == 0:
+            self.highlight.hide()
+            return
+        self.highlight.setRegion((slot_to_unix(self.slots[inside[0]]), slot_to_unix(self.slots[inside[-1]] + 1)))
+        self.highlight.show()
+
+    def _event_at(self, scene_pos) -> int | None:
+        if self.slots.size == 0 or not self.vb.sceneBoundingRect().contains(scene_pos):
+            return None
+        i = int(unix_to_slot(self.vb.mapSceneToView(scene_pos).x())) - int(self.slots[0])
+        if 0 <= i < self.slots.size and self.event_of[i] >= 0:
+            return int(self.event_of[i])
+        return None
+
+    def _on_click(self, ev) -> None:
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return
+        event_id = self._event_at(ev.scenePos())
+        if event_id is not None:
+            (self.eventDoubleClicked if ev.double() else self.eventClicked).emit(event_id)
+
+    def _on_move(self, pos) -> None:
+        event_id = self._event_at(pos)
+        self.plot.setToolTip(self.labels.get(event_id, "") if event_id is not None else "")
 
 
 class OverviewStrip(pg.PlotWidget):

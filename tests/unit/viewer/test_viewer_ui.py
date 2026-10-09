@@ -311,6 +311,22 @@ def test_series_start_with_the_wind_and_sonic_theta_and_show_what_was_clicked(wi
     inspector.close()
 
 
+def test_toolbar_buttons_bring_back_a_closed_panel_even_detached(window, qtbot):
+    for title, dock in (("Controls", window.controls_dock), ("Summary", window.summary_dock)):
+        action = window.dock_actions[title]
+        assert action in window.toolbar.actions() and action.isChecked() and dock.isVisible()
+        dock.setFloating(True)
+        dock.close()
+        qtbot.waitUntil(lambda: not dock.isVisible(), timeout=2000)
+        assert not action.isChecked()
+        action.trigger()
+        assert dock.isVisible() and dock.isFloating() and action.isChecked()
+        action.trigger()  # pressed while open: it closes
+        assert not dock.isVisible()
+        action.trigger()
+        dock.setFloating(False)
+
+
 def test_the_step_arrows_move_by_a_whole_or_half_interval(window):
     _, _, x, _ = _a_point(window.plots[0])
     window.set_x_range(x - 3600, x + 3600)

@@ -8,7 +8,9 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSpinBox, QSplitter, QVBoxLayout, QWidget,
+)
 
 from ttu_tower.math.polar import yamartino_std
 from ttu_tower.viewer import distfits
@@ -18,6 +20,9 @@ from ttu_tower.viewer.ui import style, tables
 
 _STATS = ("N", "NaN %", "mean", "median", "σ", "p5", "p95")
 TABLE_SHARE = 0.3  # the table's default share of the height it shares with its histogram
+BINS = 60  # the default bin count
+# with slots brushed: the selection beside the rest, the selection alone, or every slot
+SHOW = (("both", "selection and the rest"), ("selected", "selection only"), ("all", "all slots"))
 
 
 def summary(values: np.ndarray, circular: bool = False) -> list[float]:
@@ -78,9 +83,33 @@ class DistributionView(QWidget):
         self.fit_box = QComboBox()
         self.fit_box.setToolTip("fit a distribution to each boom's values (maximum likelihood; dashed)")
         self.fit_box.currentIndexChanged.connect(lambda *_: self.refresh())
-        self.stability_box = stability_combo("only the slots of one stability class (Ri_b of the configured pair)")
+        self.stability_box = stability_combo("only the slots of one stability class (as classified under Controls → Stability)")
         self.stability_box.setEnabled(False)
         self.stability_box.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.show_box = QComboBox()
+        for key, label in SHOW:
+            self.show_box.addItem(label, key)
+        self.show_box.setToolTip("with slots brushed: the selection (filled) beside the rest (lines), the "
+                                 "selection alone, or every slot as if nothing were brushed")
+        self.show_box.setEnabled(False)
+        self.show_box.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.bin_count = QSpinBox()
+        self.bin_count.setRange(5, 500)
+        self.bin_count.setValue(BINS)
+        self.bin_count.setToolTip("how many bins span the range")
+        self.bin_auto = QCheckBox("auto range")
+        self.bin_auto.setChecked(True)
+        self.bin_auto.setToolTip("the bins span the 0.1st to 99.9th percentiles (0–360° for directions); "
+                                 "untick to set the range (values outside it are left out)")
+        self.bin_lo, self.bin_hi = QDoubleSpinBox(), QDoubleSpinBox()
+        for box in (self.bin_lo, self.bin_hi):
+            box.setRange(-1e9, 1e9)
+            box.setDecimals(3)
+            box.setEnabled(False)
+            box.setKeyboardTracking(False)  # redraw once a value is entered, not on every keystroke
+            box.valueChanged.connect(lambda *_: self.refresh())
+        self.bin_count.valueChanged.connect(lambda *_: self.refresh())
+        self.bin_auto.toggled.connect(self._on_bin_auto)
         self.fits: dict = {}
         self.plot = pg.PlotWidget()
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
@@ -97,11 +126,23 @@ class DistributionView(QWidget):
         head = QHBoxLayout()
         head.addWidget(QLabel("stability"))
         head.addWidget(self.stability_box)
+        head.addWidget(QLabel("show"))
+        head.addWidget(self.show_box)
         head.addStretch(1)
         head.addWidget(QLabel("fit"))
         head.addWidget(self.fit_box)
-        head.addWidget(self.log_bins)
         layout.addLayout(head)
+        bins = QHBoxLayout()
+        bins.addWidget(QLabel("bins"))
+        bins.addWidget(self.bin_count)
+        bins.addWidget(self.bin_auto)
+        bins.addWidget(QLabel("from"))
+        bins.addWidget(self.bin_lo)
+        bins.addWidget(QLabel("to"))
+        bins.addWidget(self.bin_hi)
+        bins.addWidget(self.log_bins)
+        bins.addStretch(1)
+        layout.addLayout(bins)
         # the table scrolls, and the handle above it resizes it; by default it takes at most
         # TABLE_SHARE of the height, less when its rows need less
         self.split = QSplitter(Qt.Orientation.Vertical)
@@ -186,11 +227,15 @@ class DistributionView(QWidget):
         return out
 
     def set_selection(self, slots: np.ndarray) -> None:
-        """Brushed slots: each boom's histogram splits into the selection
-        (filled) and the rest (lines), each normalized on its own.
+        """Brushed slots: by default each boom's histogram splits into the
+        selection (filled) and the rest (lines), each normalized on its own.
         """
         self.selection = slots
         self.refresh()
+
+    def showing(self) -> str:
+        """"both" (the selection and the rest), "selected", or "all"; "all" when nothing is brushed."""
+        return self.show_box.currentData() if self.selection.size else "all"
 
     def refresh(self) -> None:
         self.plot.clear()
@@ -208,22 +253,37 @@ class DistributionView(QWidget):
         values = self.values_by_member()
         scope = "whole period" if self._args[2] is None else "visible range"
         name = self.stability_box.currentData()
-        split = self.selection.size > 0 and not q.categorical
+        showing = self.showing()
+        split = showing == "both" and not q.categorical
+        note = {"both": " · filled: brushed selection, lines: the rest (each its own density)",
+                "selected": " · the brushed selection only", "all": ""}[showing]
         self.title.setText(f"<b>{q.title}</b> — {scope}" + (f", {name} only" if name else "")
-                           + (" · filled: brushed selection, lines: the rest (each its own density)" if split else ""))
+                           + (note if split or showing == "selected" else ""))
         self._fit_choices(q.circular)
+        self.show_box.setEnabled(self.selection.size > 0)
+        if showing == "selected":
+            values = self.split_values(True)
         self._enable_controls(q, values)
         if q.categorical:
             self._bars(values, data.categories or [])
         elif split:
-            self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values)
+            self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values, part="the rest")
             self._selected_histograms()
         else:
-            self._histograms(values, q.unit, q.circular)
-        parts = {"rest": self.split_values(False), "selected": self.split_values(True)} if split else {"all": values}
+            self._histograms(values, q.unit, q.circular, part="brushed selection" if showing == "selected" else "")
+        if split:
+            parts = {"rest": self.split_values(False), "selected": self.split_values(True)}
+        else:
+            parts = {"selected" if showing == "selected" else "all": values}
         self._stats = {part: self._summary_frame(v, q.categorical, q.circular) for part, v in parts.items()}
         self._show_tables()
         self._start_fits(parts, q)
+
+    def _on_bin_auto(self, auto: bool) -> None:
+        """A range of one's own starts from the automatic one."""
+        for box in (self.bin_lo, self.bin_hi):
+            box.setEnabled(not auto)
+        self.refresh()
 
     def _enable_controls(self, q, values: dict) -> None:
         """Grey out what can't apply: fits and log bins to categories, log bins
@@ -238,6 +298,10 @@ class DistributionView(QWidget):
                else None if positive else "needs every value positive")
         self.log_bins.setEnabled(why is None)
         self.log_bins.setToolTip(why or "logarithmically spaced bins, on a log axis")
+        for w in (self.bin_count, self.bin_auto):
+            w.setEnabled(not q.categorical)
+        for box in (self.bin_lo, self.bin_hi):
+            box.setEnabled(not q.categorical and not self.bin_auto.isChecked())
 
     def figure_spec(self) -> dict | None:
         """This panel's histograms (or bars) and fits, for a matplotlib figure."""
@@ -245,8 +309,12 @@ class DistributionView(QWidget):
             return None
         data = self._args[0]
         q = data.quantity
-        split = self.selection.size > 0 and not q.categorical
-        values = self.split_values(False) if split else self.values_by_member()
+        showing = self.showing()
+        split = showing == "both" and not q.categorical
+        if split:
+            values = self.split_values(False)
+        else:
+            values = self.split_values(True) if showing == "selected" else self.values_by_member()
         panel = {"title": self.title.text().replace("<b>", "").replace("</b>", ""), "hists": [], "bars": [],
                  "fits": []}
         if q.categorical:
@@ -268,7 +336,8 @@ class DistributionView(QWidget):
             if v.size:
                 density, _ = np.histogram(v, bins=self._edges, density=True)
                 label = style.member_label(m) or "value"
-                panel["hists"].append({"label": f"{label}, the rest" if split else label,
+                suffix = ", the rest" if split else ", selected" if showing == "selected" else ""
+                panel["hists"].append({"label": f"{label}{suffix}",
                                        "color": pg.mkColor(style.member_color(m, i)).name(), "edges": self._edges,
                                        "density": density})
         if split:
@@ -308,9 +377,12 @@ class DistributionView(QWidget):
         for all slots, or the rest's and the brushed selection's.
         """
         fitted = fitted or {}
-        split = "selected" in self._stats
-        shown = ([("rest", self.table, "the rest (lines)"), ("selected", self.sel_table, "brushed selection (filled)")]
-                 if split else [("all", self.table, "")])
+        split = "rest" in self._stats
+        if split:
+            shown = [("rest", self.table, "the rest (lines)"),
+                     ("selected", self.sel_table, "brushed selection (filled)")]
+        else:
+            shown = [("selected" if "selected" in self._stats else "all", self.table, "")]
         for part, table, _ in shown:
             frame = self._stats.get(part, pd.DataFrame())
             extra = fitted.get(part)
@@ -402,8 +474,11 @@ class DistributionView(QWidget):
 
     # --- plots --------------------------------------------------------------------------------
 
-    def _histograms(self, values: dict, unit: str, circular: bool = False, bins_from: dict | None = None) -> None:
-        """`bins_from`: the values the bins span (default `values`), so a split's parts share bins."""
+    def _histograms(self, values: dict, unit: str, circular: bool = False, bins_from: dict | None = None,
+                    part: str = "") -> None:
+        """`bins_from`: the values the bins span (default `values`), so a split's parts share bins;
+        `part`: what the values are, for the CSV export ("the rest", "brushed selection").
+        """
         spanned = values if bins_from is None else bins_from
         pooled = np.concatenate([v[np.isfinite(v)] for v in spanned.values()]) if spanned else np.empty(0)
         self.plot.setLogMode(x=False)
@@ -412,13 +487,25 @@ class DistributionView(QWidget):
             return
         log = self.log_bins.isEnabled() and self.log_bins.isChecked()
         self._log = log
-        if log:
-            edges = np.logspace(np.log10(pooled.min()), np.log10(pooled.max()), 61)
+        n = self.bin_count.value() + 1
+        if self.bin_auto.isChecked():
+            if log:
+                lo, hi = pooled.min(), pooled.max()
+            else:
+                lo, hi = np.percentile(pooled, [0.1, 99.9]) if not circular else (0.0, 360.0)
+            for box, v in ((self.bin_lo, lo), (self.bin_hi, hi)):  # what auto chose, to start a range from
+                box.blockSignals(True)
+                box.setValue(float(v))
+                box.blockSignals(False)
         else:
-            lo, hi = np.percentile(pooled, [0.1, 99.9]) if not circular else (0.0, 360.0)
-            if lo == hi:
-                lo, hi = lo - 0.5, hi + 0.5
-            edges = np.linspace(lo, hi, 61)
+            lo, hi = self.bin_lo.value(), self.bin_hi.value()
+            if log and lo <= 0:
+                self.note.setText("log bins need a range above 0: the lower end was raised to the smallest value")
+                self.note.show()
+                lo = pooled.min()
+        if hi <= lo:
+            lo, hi = lo - 0.5, lo + 0.5
+        edges = np.logspace(np.log10(lo), np.log10(hi), n) if log else np.linspace(lo, hi, n)
         self._edges = edges
         for i, (member, v) in enumerate(values.items()):
             v = v[np.isfinite(v)]
@@ -428,7 +515,7 @@ class DistributionView(QWidget):
             x = np.log10(edges) if log else edges
             item = pg.PlotDataItem(x, counts, stepMode="center", pen=pg.mkPen(style.member_color(member, i), width=1.5))
             label = style.member_label(member) or "value"
-            item.export_label = f"{label}: the rest" if self.selection.size else label
+            item.export_label = f"{label}: {part}" if part else label
             self.plot.addItem(item)
         self.plot.setLabel("bottom", ("log10 " if log else "") + (unit or "value"))
         self.plot.setLabel("left", "density")

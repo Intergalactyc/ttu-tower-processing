@@ -29,7 +29,7 @@ BUILTINS = {
     "hour": "hour of day (run's zone), 0-23",
     "month": "month, 1-12",
     "doy": "day of year, 1-366",
-    "stability": "stability class name (Ri_b of the configured pair), e.g. 'strongly unstable'",
+    "stability": "stability class name (as classified under Controls → Stability), e.g. 'strongly unstable'",
     "filtered": "True where tertiary filtered any quantity group of this boom-slot (chosen variant or the means)",
     **{f"filtered_{g}": f"True where tertiary filtered the {g} group of this boom-slot" for g in FILTER_GROUPS},
 }

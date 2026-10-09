@@ -260,16 +260,25 @@ def night(run, index: FragmentIndex) -> Curve | None:
     return _curve(df["slot"].to_numpy(dtype=np.int64), df["value"].to_numpy(dtype=np.float64))
 
 
-def stability(run, index: FragmentIndex) -> tuple[Curve, list[str]] | None:
-    """Stability class codes per slot (from the configured Ri_b pair) and the class names."""
-    if "tertiary" not in run.stages or run.cfg is None:
+def stability(run, index: FragmentIndex, spec=None) -> tuple[Curve, list[str]] | None:
+    """Stability class codes per slot and the class names: the run's own
+    classification (the configured Ri_b pair), or `spec`'s (a viewer.stability.StabilitySpec).
+    """
+    if "tertiary" not in run.stages:
         return None
-    boom, boom2 = run.cfg.post.stability.pair
-    f = pa_dataset.field
-    pairs = index.read("pairs", columns=["slot", "boom", "boom2", "variable", "value"],
-                       filter=(f("variable") == "rib") & (f("boom") == boom) & (f("boom2") == boom2))
-    classes = stability_classes(pairs, run.cfg.post)
-    names = [name for name, _ in run.cfg.post.stability.classes]
+    if spec is not None:
+        from ttu_tower.viewer import stability as criteria
+        classes = criteria.classify(criteria.values(index, spec), spec.classes())
+        names = list(criteria.NAMES)
+    else:
+        if run.cfg is None:
+            return None
+        boom, boom2 = run.cfg.post.stability.pair
+        f = pa_dataset.field
+        pairs = index.read("pairs", columns=["slot", "boom", "boom2", "variable", "value"],
+                           filter=(f("variable") == "rib") & (f("boom") == boom) & (f("boom2") == boom2))
+        classes = stability_classes(pairs, run.cfg.post)
+        names = [name for name, _ in run.cfg.post.stability.classes]
     codes = pd.Categorical(classes.to_numpy(dtype=object), categories=names).codes.astype(np.float64)
     codes[codes < 0] = np.nan
     return _curve(classes.index.to_numpy(dtype=np.int64), codes), names

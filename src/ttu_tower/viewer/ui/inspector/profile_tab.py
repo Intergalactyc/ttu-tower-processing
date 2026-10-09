@@ -15,7 +15,7 @@ _GHOST = "#9a9a9a"
 _FIT_PENS = {"alpha": ("#d62728", Qt.PenStyle.SolidLine), "loglaw": ("#1f77b4", Qt.PenStyle.DashLine),
              "loglaw_c": ("#17becf", Qt.PenStyle.DotLine), "gamma": ("#d62728", Qt.PenStyle.SolidLine),
              "wdgamma": ("#d62728", Qt.PenStyle.SolidLine)}
-_COLUMNS = 5
+_COLUMNS = 6
 
 
 class ProfileTab(QWidget):

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 pytest.importorskip("pytestqt")
@@ -55,7 +56,7 @@ def test_profile_tab_ghosts_the_filtered_boom_and_switches_boom_on_click(window,
     inspector = _inspect(window, qtbot, "profile")
     profile = inspector.profile
     qtbot.waitUntil(lambda: bool(profile.plots), timeout=60_000)
-    assert len(profile.plots) == 10
+    assert len(profile.plots) == 12 and {"tke", "zeta"} <= set(profile.plots)
     points = profile.points["sigma_w"].set_index("boom")
     assert points.loc[SPIKY_BOOM, "filtered"]
     other = next(b for b in FULL_BOOMS if b != SPIKY_BOOM)
@@ -160,6 +161,120 @@ def test_scatter_follows_the_interval_and_fits_only_when_asked(window, qtbot):
     scatter.color_by.setCurrentIndex(scatter.color_by.findData("stability"))
     scatter._swap()
     assert scatter.source[0].currentData() == 1
+
+
+def test_scatter_can_show_only_the_selection_and_drop_its_rings(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    window.panels[1].select("boom_final|ustar|", "mrd", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[1] is not None
+                    and window.datas[1].quantity.key == "boom_final|ustar|", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    window.full_period.setChecked(True)
+    scatter = window.scatter
+    assert not scatter.points_shown.isEnabled() and scatter.ring.isChecked()  # nothing brushed yet
+
+    def rings():
+        return [i for i in scatter.plot.getPlotItem().items if (getattr(i, "name", lambda: "")() or "").startswith(
+            "selected")]
+    chosen = scatter.slots[::3]
+    window.set_selection(chosen, "replace")
+    assert scatter.points_shown.isEnabled() and scatter._shown()[0].size == scatter.slots.size and rings()
+    scatter.points_shown.setCurrentIndex(scatter.points_shown.findData("selected"))
+    shown = scatter._shown()[0]
+    assert sorted(shown) == sorted(chosen) and scatter.stats.text().startswith(f"N {chosen.size}")
+    scatter.ring.setChecked(False)
+    assert not rings()
+    assert scatter.figure_spec()[1]["selected"] is None
+    window.set_selection(np.empty(0, dtype=np.int64), "replace")
+    assert scatter._shown()[0].size == scatter.slots.size  # nothing brushed: every slot again
+
+
+def test_distributions_show_the_selection_the_rest_or_every_slot(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.dist_tab)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    assert dist.showing() == "all" and not dist.show_box.isEnabled()
+    slots = window.datas[0].curves[FULL_BOOMS[0]].slots
+    window.set_selection(slots[:6], "replace")
+    assert dist.showing() == "both" and set(dist._stats) == {"rest", "selected"} and not dist.sel_table.isHidden()
+
+    def labels():
+        return [getattr(i, "export_label", "") for i in dist.plot.getPlotItem().listDataItems()]
+    assert any(text.endswith("brushed selection") for text in labels())
+    dist.show_box.setCurrentIndex(dist.show_box.findData("selected"))
+    assert set(dist._stats) == {"selected"} and dist.sel_table.isHidden()
+    assert dist._stats["selected"]["N"].max() <= 6 and all(text.endswith("brushed selection") for text in labels())
+    dist.show_box.setCurrentIndex(dist.show_box.findData("all"))
+    assert set(dist._stats) == {"all"} and dist._stats["all"]["N"].max() > 6
+    assert not any("selection" in text or "rest" in text for text in labels())
+
+
+def test_distribution_bins_can_be_counted_and_ranged(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.dist_tab)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    assert dist._edges.size == 61 and not dist.bin_lo.isEnabled()
+    auto = (dist._edges[0], dist._edges[-1])
+    assert (dist.bin_lo.value(), dist.bin_hi.value()) == pytest.approx(auto, abs=1e-3)
+    dist.bin_count.setValue(20)
+    assert dist._edges.size == 21
+    dist.bin_auto.setChecked(False)
+    assert dist.bin_lo.isEnabled() and dist._edges[0] == pytest.approx(auto[0], abs=1e-3)  # starts from auto's
+    dist.bin_lo.setValue(0.0)
+    dist.bin_hi.setValue(40.0)
+    assert dist._edges[0] == 0.0 and dist._edges[-1] == 40.0 and dist._edges.size == 21
+    x, _ = dist.plot.getPlotItem().listDataItems()[0].getData()
+    assert x[0] == 0.0 and x[-1] == 40.0
+    dist.bin_auto.setChecked(True)
+    assert dist._edges[0] == pytest.approx(auto[0])
+
+
+def test_stability_can_be_classified_by_another_pair_or_by_zeta(window, qtbot, full_run):
+    from ttu_tower.viewer import stability as criteria
+    panel = window.stability_panel
+    assert window.stability_spec is None and "the run's own" in panel.in_use.text()
+    own = window.stability
+
+    def classified(spec):
+        return lambda: _idle(window) and window.stability_spec == spec and window.stability is not own
+
+    rib = criteria.StabilitySpec("rib", (1, 2), "mrd", (-0.5, -0.1, 0.1, 0.5))
+    panel.set_spec(rib)
+    panel._emit()  # as an edit would
+    qtbot.waitUntil(classified(rib), timeout=60_000)
+    curve, names = window.stability
+    assert names == list(criteria.NAMES) and np.isfinite(curve.y).any()
+    assert "Ri_b(b1, b2)" in panel.in_use.text() and "Ri_b(b1, b2)" in window.stability_band.legend.text()
+    assert panel.counts.rowCount() == 5
+    values = criteria.values(window.index, rib)
+    expected = criteria.classify(values, rib.classes()).dropna()
+    got = pd.Series(np.asarray(names, dtype=object)[curve.y[np.isfinite(curve.y)].astype(int)],
+                    index=curve.slots[np.isfinite(curve.y)])
+    assert got.equals(expected.loc[got.index]) and len(got) == len(expected)
+
+    panel.variable.setCurrentIndex(panel.variable.findData("zeta"))
+    panel.boom_a.setCurrentIndex(panel.boom_a.findData(2))
+    zeta = panel.spec()
+    assert zeta.variable == "zeta" and zeta.edges == criteria.ZETA_EDGES and zeta.booms[0] == 2
+    qtbot.waitUntil(classified(zeta), timeout=60_000)
+    assert "ζ at b2" in window.stability_band.legend.text()
+
+    panel.edges[1].setValue(panel.edges[2].value() + 1)  # boundaries out of order: refused
+    assert not panel.errors.isHidden() and window.stability_spec == zeta
+
+    again = MainWindow(RunHandle.from_dir(full_run.run_dir))  # the choice is remembered for the run
+    qtbot.addWidget(again)
+    try:
+        qtbot.waitUntil(lambda: _idle(again) and again.stability_spec == zeta, timeout=60_000)
+    finally:
+        again.close()
+    panel.reset.click()
+    qtbot.waitUntil(lambda: _idle(window) and window.stability_spec is None, timeout=60_000)
+    assert "the run's own" in panel.in_use.text()
 
 
 def test_wind_rose_tab_follows_boom_filtering_and_interval(window, qtbot):

@@ -3,8 +3,10 @@ distributions, a scatter of one against the other and wind roses, stability
 and anisotropy bands, a whole-period overview, and click-through to the raw
 data; linked brushing across them, a find over any quantities, and bookmarks;
 composite spectra, diurnal cycles and anisotropy over an interval, another run
-to compare against, and matplotlib figures of any of it.
+to compare against, and matplotlib figures of any of it; and low-level jets,
+detected live from tunable settings, listed and shown on their own band.
 """
+import json
 import logging
 
 import numpy as np
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.timegrid import time_to_slot
 from ttu_tower.viewer import anisotropy, brush, compare, figures, timeline
+from ttu_tower.viewer import stability as criteria
 from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
@@ -35,6 +38,8 @@ from ttu_tower.viewer.ui.diurnal_view import DiurnalView
 from ttu_tower.viewer.ui.export_dialog import ExportDialog
 from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.find_panel import FindPanel
+from ttu_tower.viewer.ui.jets_controller import JetsController
+from ttu_tower.viewer.ui.stability_panel import StabilityPanel
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
@@ -50,7 +55,7 @@ _DAY = 86_400.0
 _ZOOMS = (("Y", 366 * _DAY), ("M", 31 * _DAY), ("W", 7 * _DAY), ("D", _DAY), ("6h", _DAY / 4))
 _HF_VARIABLES = ["ue", "vn", "w", "ts", "vpts", "t", "rh", "p"]
 _ALL = tuple(sorted(HEIGHTS))
-_DEFAULTS = (("boom_final|ws|mean", "mrd", _ALL), ("boom_final|ustar|", "mrd", _ALL))
+_DEFAULTS = (("boom_final|ws|mean", "mrd", _ALL), ("boom_final|ti|", "mrd", _ALL))
 _FALLBACKS = (("coverage|momentum|usable", "none", _ALL), ("slot_qc|ts|skew", "none", _ALL))
 _TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "profile": "profile", "none": "numbers"}
 
@@ -99,6 +104,8 @@ class MainWindow(QMainWindow):
         self.aniso_band.cellClicked.connect(
             lambda slot, boom: QTimer.singleShot(0, lambda: self.inspect(
                 boom, slot, variant=self.aniso_band.variant.currentData(), tab="anisotropy")))
+        self.jets = JetsController(self)
+        self.jets.band.link_to(self.plots[0].plot_item)
         self.overview = OverviewStrip()
         self.overview.rangeRequested.connect(lambda x0, x1: self.set_x_range(x0, x1))
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -106,8 +113,9 @@ class MainWindow(QMainWindow):
             splitter.addWidget(p)
         splitter.addWidget(self.stability_band)
         splitter.addWidget(self.aniso_band)
+        splitter.addWidget(self.jets.band)
         splitter.addWidget(self.overview)
-        splitter.setSizes([400, 400, 50, 120, 140])
+        splitter.setSizes([400, 400, 50, 120, 50, 140])
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -131,6 +139,18 @@ class MainWindow(QMainWindow):
         self.bookmark_panel.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
         tabs.addTab(self.find, "Find")
         tabs.addTab(self.bookmark_panel, "Bookmarks")
+        tabs.addTab(self.jets.panel, "Jets")
+        self.stability_panel = StabilityPanel()
+        self.stability_panel.changed.connect(lambda: self._stability_timer.start())
+        self.stability_panel.resetRequested.connect(self._reset_stability)
+        tabs.addTab(self.stability_panel, "Stability")
+        tabs.setTabToolTip(tabs.count() - 1, "how stability is classified, for every view that uses it")
+        self._stability_timer = QTimer(self)
+        self._stability_timer.setSingleShot(True)
+        self._stability_timer.setInterval(300)
+        self._stability_timer.timeout.connect(lambda: self._set_stability(self.stability_panel.spec()))
+        self.stability_spec = None  # None: the run's own classification
+        self._overlay_slots = np.empty(0, dtype=np.int64)
         self.left_tabs = tabs
         self.night_box = QCheckBox("shade night")
         self.night_box.setChecked(True)
@@ -141,13 +161,17 @@ class MainWindow(QMainWindow):
         self.aniso_box = QCheckBox("anisotropy band")
         self.aniso_box.setChecked(True)
         self.aniso_box.toggled.connect(self.aniso_band.setVisible)
+        self.jets_box = QCheckBox("jets band")
+        self.jets_box.setChecked(True)
+        self.jets_box.toggled.connect(self.jets.band.setVisible)
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(tabs, stretch=1)
         left_layout.addWidget(self.night_box)
         left_layout.addWidget(self.stability_box)
         left_layout.addWidget(self.aniso_box)
-        self._dock("Controls", left, Qt.DockWidgetArea.LeftDockWidgetArea)
+        left_layout.addWidget(self.jets_box)
+        self.controls_dock = self._dock("Controls", left, Qt.DockWidgetArea.LeftDockWidgetArea)
 
         self.dists = [DistributionView(self.runner), DistributionView(self.runner)]
         self.full_period = QCheckBox("whole period (not just the visible range)")
@@ -172,18 +196,21 @@ class MainWindow(QMainWindow):
         self.right_tabs.setUsesScrollButtons(True)
         for widget, label in ((dist_split, "Distributions"), (self.scatter, "Scatter"), (self.profiles, "Profiles"),
                               (self.composite, "Spectra"), (self.diurnal, "Diurnal"), (self.aniso_map, "Anisotropy"),
-                              (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare")):
+                              (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare"),
+                              (self.jets.view, "Jets")):
             self.right_tabs.addTab(widget, label)
         self.right_tabs.setTabToolTip(3, "composite MRD spectra: each boom's median over the slots")
         self.right_tabs.setTabToolTip(4, "a panel's quantity by hour of day and month")
         self.right_tabs.setTabToolTip(8, "this run against another (choose it in the toolbar)")
+        self.right_tabs.setTabToolTip(9, "low-level jet events (set the detection on the left, under Jets)")
         self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(2, 2, 2, 2)
         right_layout.addWidget(self.full_period)
         right_layout.addWidget(self.right_tabs, stretch=1)
-        self._dock("Summary", right, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.summary_dock = self._dock("Summary", right, Qt.DockWidgetArea.RightDockWidgetArea)
+        self._dock_buttons()
 
         self.hover = QLabel()
         self.busy = QLabel()
@@ -249,6 +276,18 @@ class MainWindow(QMainWindow):
         dock.setWidget(widget)
         self.addDockWidget(area, dock)
         return dock
+
+    def _dock_buttons(self) -> None:
+        """Toolbar toggles that show or hide the Controls and Summary panels, so a
+        detached panel that was closed can be brought back.
+        """
+        self.dock_actions = {}
+        self.toolbar.insertSeparator(self.range_action)
+        for dock in (self.controls_dock, self.summary_dock):
+            action = dock.toggleViewAction()
+            action.setToolTip(f"show or hide the {dock.windowTitle()} panel (docked or detached)")
+            self.toolbar.insertAction(self.range_action, action)
+            self.dock_actions[dock.windowTitle()] = action
 
     def _build_toolbar(self) -> None:
         bar = QToolBar("main")
@@ -318,7 +357,8 @@ class MainWindow(QMainWindow):
         export.triggered.connect(self._export_figure)
         bar.addAction(export)
         self.range_label = QLabel()
-        bar.addWidget(self.range_label)
+        self.toolbar = bar
+        self.range_action = bar.addWidget(self.range_label)
         self._refresh_run_list()
 
     def _refresh_run_list(self) -> None:
@@ -411,6 +451,8 @@ class MainWindow(QMainWindow):
         self._fill_compare_box()
         self._set_other_run(None)
         self._load_aniso_band()
+        self.jets.set_run(run)
+        self._open_stability(run)
 
     def _load_aniso_band(self) -> None:
         if self.run is None:
@@ -433,14 +475,86 @@ class MainWindow(QMainWindow):
 
     def _overlays_ready(self, result, booms) -> None:
         slots, image, stability, night = result
-        self.night, self.stability = night, stability
+        self.night, self._overlay_slots = night, slots
         self.overview.set_availability(slots, image, booms)
         self.qc_summary.set_availability(slots, image)
-        self._refresh_distributions()  # the stability classes arrived
-        self.stability_band.set_classes(slots, stability)
+        if self.stability_spec is None:  # a criterion of one's own arrives by itself
+            self._stability_ready(self.run, None, stability)
+        else:
+            self.stability_band.set_classes(slots, self.stability, self.stability_spec.describe())
         self._apply_night()
         if not self._have_range:
             self.zoom_all()
+
+    # --- stability ------------------------------------------------------------------------------
+
+    def _settings_key(self) -> str:
+        return f"stability/{self.run.tag}"
+
+    def _open_stability(self, run) -> None:
+        """The run's own classification, or the one last set for this run."""
+        own = criteria.from_config(run.cfg.post) if run.cfg is not None else None
+        self.stability_spec, self.stability = None, None
+        self.stability_panel.set_spec(own or criteria.StabilitySpec())
+        raw = self.settings.value(self._settings_key())
+        saved = None
+        if raw:
+            try:
+                saved = criteria.StabilitySpec.from_dict(json.loads(raw))
+            except (ValueError, TypeError, AttributeError):
+                saved = None
+        if saved is not None and not saved.errors() and saved != own:
+            self.stability_panel.set_spec(saved)
+            self._set_stability(saved)
+        else:
+            self._describe_stability(own)
+
+    def _describe_stability(self, own) -> None:
+        if self.stability_spec is not None:
+            text = f"in use: {self.stability_spec.describe()}, set here (the run's outputs are unchanged)"
+        elif own is not None:
+            text = f"in use: the run's own, {own.describe()}"
+        else:
+            text = "in use: the run's own (its classes aren't five contiguous intervals, so they can't be shown here)"
+        self.stability_panel.show_in_use(text)
+
+    def _set_stability(self, spec) -> None:
+        if self.run is None:
+            return
+        own = criteria.from_config(self.run.cfg.post) if self.run.cfg is not None else None
+        if spec == own:
+            self._reset_stability()
+            return
+        self.stability_spec = spec
+        self.settings.setValue(self._settings_key(), json.dumps(spec.to_dict()))
+        self._describe_stability(own)
+        run = self.run
+        self.runner.submit(timeline.stability, run, self.index, spec, key="stability",
+                           label=f"classifying stability by {spec.describe()}", on_error=self._report_error,
+                           on_done=lambda result: self._stability_ready(run, spec, result))
+
+    def _reset_stability(self) -> None:
+        if self.run is None:
+            return
+        own = criteria.from_config(self.run.cfg.post) if self.run.cfg is not None else None
+        self.stability_spec = None
+        self.settings.remove(self._settings_key())
+        self.stability_panel.set_spec(own or criteria.StabilitySpec())
+        self._describe_stability(own)
+        run = self.run
+        self.runner.submit(timeline.stability, run, self.index, key="stability", label="classifying stability",
+                           on_error=self._report_error,
+                           on_done=lambda result: self._stability_ready(run, None, result))
+
+    def _stability_ready(self, run, spec, result) -> None:
+        if run is not self.run or spec != self.stability_spec:
+            return
+        self.stability = result
+        own = criteria.from_config(run.cfg.post) if run.cfg is not None else None
+        label = spec.describe() if spec is not None else own.describe() if own is not None else ""
+        self.stability_band.set_classes(self._overlay_slots, result, label)
+        self.stability_panel.show_counts(result)
+        self._refresh_distributions()
 
     def _report_error(self, exc, tb) -> None:
         self.statusBar().showMessage(f"error: {exc}", 15_000)
@@ -510,6 +624,7 @@ class MainWindow(QMainWindow):
             p.plot_item.getAxis("left").setWidth(width)
         self.stability_band.set_axis_width(width)
         self.aniso_band.set_axis_width(width)
+        self.jets.band.set_axis_width(width)
         self.overview.set_axis_width(width)
 
     def _show_all_members(self) -> None:
@@ -561,6 +676,7 @@ class MainWindow(QMainWindow):
             for p in self.plots:
                 p.set_timezone(tz)
             self.overview.set_timezone(tz)
+            self.jets.set_timezone(tz)
 
     def _goto_slot(self) -> int | None:
         if self.run is None:
@@ -607,6 +723,8 @@ class MainWindow(QMainWindow):
             self.diurnal.set_sources(self.datas, x_range, self.tz_box.currentData() or self.run.timezone)
         elif shown is self.aniso_map:
             self.aniso_map.set_range(x_range, self.stability)
+        elif shown is self.jets.view:
+            self.jets.set_x_range(x_range)
         elif shown is self.compare:
             self.compare.set_sources(self.datas, self.others, self.other_run.tag if self.other_run else None,
                                      x_range)
@@ -685,9 +803,9 @@ class MainWindow(QMainWindow):
                          frame=frame, emphasis=emphasis, focus_vars=focus, variant=variant, show=show)
         return window
 
-    def inspect_sequence(self, items, start: int, label: str, variant: str = "mrd") -> None:
+    def inspect_sequence(self, items, start: int, label: str, variant: str = "mrd", tab: str | None = None) -> None:
         slot, boom = items[start]
-        self.inspect(boom, slot, variant=variant, sequence=items, label=label)
+        self.inspect(boom, slot, variant=variant, tab=tab, sequence=items, label=label)
 
     # --- linked brushing ------------------------------------------------------------------------
 

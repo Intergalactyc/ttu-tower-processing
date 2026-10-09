@@ -101,6 +101,16 @@ class ScatterView(QWidget):
         self.color_by = QComboBox()
         for label in ("single color", "stability"):
             self.color_by.addItem(label, label)
+        self.points_shown = QComboBox()
+        self.points_shown.addItem("all slots", "all")
+        self.points_shown.addItem("selection only", "selected")
+        self.points_shown.setToolTip("with slots brushed: every slot, or only the brushed ones (the statistics, "
+                                     "lines and fits then use only those too)")
+        self.ring = QCheckBox("ring the selection")
+        self.ring.setChecked(True)
+        self.ring.setToolTip("circle the brushed slots' points")
+        self.points_shown.currentIndexChanged.connect(lambda *_: self.redraw())
+        self.ring.toggled.connect(lambda *_: self.redraw())
         self.log_x, self.log_y = QCheckBox("log x"), QCheckBox("log y")
         self.trend, self.mid, self.unit = QCheckBox("trend (linear)"), QCheckBox("binned"), QCheckBox("y = x")
         self.mid_method = QComboBox()
@@ -171,6 +181,11 @@ class ScatterView(QWidget):
         for w in (self.display, self.color_by, self.log_x, self.log_y):
             look.addWidget(w)
         look.addStretch(1)
+        chosen = QHBoxLayout()
+        chosen.addWidget(QLabel("show"))
+        chosen.addWidget(self.points_shown)
+        chosen.addWidget(self.ring)
+        chosen.addStretch(1)
         lines = QHBoxLayout()
         for w in (self.trend, self.mid, self.mid_method, self.mid_bins, self.unit):
             lines.addWidget(w)
@@ -199,6 +214,7 @@ class ScatterView(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addLayout(axes)
         layout.addLayout(look)
+        layout.addLayout(chosen)
         layout.addLayout(lines)
         layout.addWidget(self.plot, stretch=1)
         layout.addWidget(self.stats)
@@ -274,9 +290,16 @@ class ScatterView(QWidget):
 
     # --- drawing -----------------------------------------------------------------------------------
 
+    def selected_only(self) -> bool:
+        return self.points_shown.currentData() == "selected" and self.selection.size > 0
+
     def _shown(self):
-        """The points drawable on the current axes (positive where an axis is log)."""
+        """The points drawable on the current axes (positive where an axis is log),
+        only the brushed ones if so chosen.
+        """
         keep = np.ones(self.x.size, dtype=bool)
+        if self.selected_only():
+            keep &= np.isin(self.slots, self.selection)
         if self.log_x.isChecked():
             keep &= self.x > 0
         if self.log_y.isChecked():
@@ -290,6 +313,9 @@ class ScatterView(QWidget):
     def _enable_controls(self) -> None:
         """Grey out what can't apply to what's shown."""
         points = self.display.currentData() == "points"
+        brushed = self.selection.size > 0
+        self.points_shown.setEnabled(brushed)
+        self.ring.setEnabled(brushed)
         self.color_by.setEnabled(points)
         self.color_by.setToolTip("density maps aren't colored by class" if not points else "color the points")
         self.color_by.model().item(1).setEnabled(self.stability is not None)
@@ -318,6 +344,10 @@ class ScatterView(QWidget):
                 self.stats.setText("no slots with both values in range")
             return
         slots, x, y = self._shown()
+        if slots.size == 0:
+            self.stats.setText("no brushed slots with both values in range" if self.selected_only()
+                               else "no points to show on these axes")
+            return
         vx, vy = self._to_view(x, y)
         mode = self.display.currentData()
         if mode.startswith("density"):
@@ -440,7 +470,9 @@ class ScatterView(QWidget):
             settings = None
         return (self.fit_name.currentData() or "", self._options(), self.source[0].currentData(),
                 self.member[0].currentData(), self.source[1].currentData(), self.member[1].currentData(),
-                int(self.slots.size), span, self.log_x.isChecked(), self.log_y.isChecked(), settings)
+                int(self.slots.size), span, self.log_x.isChecked(), self.log_y.isChecked(),
+                # settings last: run_fit reads them as inputs[-1]
+                int(self._shown()[0].size) if self.selected_only() else None, settings)
 
     def _on_fit_choice(self, *_) -> None:
         if self.fit_name.currentData() is None and self.fit_result is not None:  # "none" takes the fit away
@@ -503,7 +535,8 @@ class ScatterView(QWidget):
             return None
         slots, x, y = self._shown()
         groups = self.drawn_groups or [("", np.ones(slots.size, dtype=bool), _POINT)]
-        chosen = np.isin(slots, self.selection) if self.selection.size else np.zeros(slots.size, dtype=bool)
+        ringed = self.selection.size and self.ring.isChecked()
+        chosen = np.isin(slots, self.selection) if ringed else np.zeros(slots.size, dtype=bool)
         dx, dy = self._data(0), self._data(1)
         (x0, x1), (y0, y1) = self.plot.getPlotItem().getViewBox().viewRange()
         unview = (lambda v: 10 ** np.asarray(v)) if self.log_x.isChecked() else np.asarray
@@ -528,8 +561,8 @@ class ScatterView(QWidget):
         self.redraw()
 
     def _highlight(self, slots, vx, vy) -> None:
-        """Ring the brushed slots' points."""
-        if self.selection.size == 0:
+        """Ring the brushed slots' points (unless that's switched off)."""
+        if self.selection.size == 0 or not self.ring.isChecked():
             return
         on = np.isin(slots, self.selection)
         if on.any():

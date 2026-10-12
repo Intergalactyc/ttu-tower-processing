@@ -15,7 +15,7 @@ _GHOST = "#9a9a9a"
 _FIT_PENS = {"alpha": ("#d62728", Qt.PenStyle.SolidLine), "loglaw": ("#1f77b4", Qt.PenStyle.DashLine),
              "loglaw_c": ("#17becf", Qt.PenStyle.DotLine), "gamma": ("#d62728", Qt.PenStyle.SolidLine),
              "wdgamma": ("#d62728", Qt.PenStyle.SolidLine)}
-_COLUMNS = 6
+_COLUMNS = 7
 
 
 class ProfileTab(QWidget):
@@ -84,7 +84,6 @@ class ProfileTab(QWidget):
             axes = {"left": Log10Axis(orientation="left")} if log_z else {}
             plot = self.graphics.addPlot(row=i // _COLUMNS, col=i % _COLUMNS, axisItems=axes)
             plot.showGrid(x=True, y=True, alpha=0.15)
-            plot.getAxis("bottom").enableAutoSIPrefix(False)
             variant = f" · {self.variant}" if pq.per_variant else ""
             plot.setTitle(f"{pq.label}{f' [{pq.unit}]' if pq.unit else ''}{variant}", size="9pt")
             if i % _COLUMNS == 0:

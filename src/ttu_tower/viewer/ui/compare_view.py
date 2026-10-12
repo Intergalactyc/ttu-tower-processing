@@ -34,8 +34,6 @@ class CompareView(QWidget):
         self.plot = pg.PlotWidget()
         self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
-        for side in ("left", "bottom"):
-            self.plot.getPlotItem().getAxis(side).enableAutoSIPrefix(False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         row = QHBoxLayout()

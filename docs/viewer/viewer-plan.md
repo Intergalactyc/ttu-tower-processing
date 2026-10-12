@@ -1231,6 +1231,42 @@ viewed interval or the whole period like the others.
 
 - **Panel B's default quantity** is TI (`boom_final|ti|`, `mrd`) instead of u*.
 - **The Slot Inspector's Profile tab** adds TKE and ζ = z/L, for 12 panels in 6 columns.
+- **Profile tab, 2026-10-09:** adds w'u' (`uw`, `cov`) after u* and ILS u (`ils_u`) last. Both
+  follow the inspector's variant, MRD by default, like the other τ-dependent panels. That
+  makes 14 panels in 7 columns.
+- **Window width, 2026-10-09:** maximized on a 1920-px screen, the window ran off the right edge
+  once Jets → Aggregate had been shown. Its one-row control strip lifted the window's minimum
+  width to 1990 px, and Qt never makes a window narrower than its minimum.
+  - That strip is now two rows, and its summary line wraps.
+  - Each dock's contents now sit in a scroll area whose minimum is capped at 320 × 200, so no
+    panel can push the window past the screen again: a squeezed dock scrolls instead.
+  - The default dock widths are unchanged.
+- **Jets → Aggregate bins:** a "bins" box. "Auto" keeps the fixed widths (1 m/s, 0.5 m/s, 0.5 h,
+  10 m; half that slot by slot); a number splits each histogram's range into that many equal
+  bins. It applies to speed, falloff, duration and estimated-nose height, not to the bar charts.
+- **Transport efficiency, 2026-10-12:** primary's `ladder` table holds TE (`uw|te`, `wvpts|te`) at
+  all eight rungs (9.375–1200 s), per variant. A rung's TE uses fluctuations about that rung's
+  block means, so like the ogive it is cumulative up to that scale.
+  - **Slot Inspector → Spectra:** a fifth column holds u'w' TE (top) and w'θv' TE (bottom)
+    against rung, with the same overlays (all booms, slots ±3, unexcised) and τ lines. A
+    "transport efficiency" box, on by default, hides it. The bundle's `te` rows cover this slot
+    for every boom, and this boom's ±3 slots.
+  - **Summary → Spectra:** "u'w' transport efficiency" and "w'θv' transport efficiency" in the
+    spectrum list show the median per boom and rung, with IQR bars, over all slots, a stability
+    class or the selection. "Normalize" and "log y" are greyed out for them.
+- **Wrapping panel tabs, 2026-10-12:** the Controls and Summary tabs (`ui/wrap_tabs.py`,
+  `WrapTabWidget`) wrap onto more rows when the panel is narrow, instead of being cut off. Each is
+  a QTabWidget with its own tab bar hidden, under a flow layout of tab buttons.
+  - The scroll area that stops a panel widening the window past the screen now wraps only the
+    pages (`FitScroll`), not the whole dock. The buttons therefore always span the visible
+    width, and a page narrower than it needs scrolls beneath them.
+- **Axis units, 2026-10-12:** no plot axis uses an SI prefix any more (there was no "m°",
+  "mm²/s²" or "mK" to want).
+  - `ui/axis_units.py`, installed by `configure_pyqtgraph`, keeps each label's computed unit.
+  - Where the largest value on screen is below 0.01 or at least 10⁴, the ticks show the mantissa
+    and the label a power of ten, e.g. "(×10⁻³ K m/s)".
+  - Date axes, log-decade axes, fixed-tick axes and unlabelled axes are never scaled.
+  - Summary → Spectra's y-axis now carries the spectrum's unit.
 - **The low-level jet tool** lives in its own Jets tabs; see `docs/llj/llj-plan.md`.
 - **Scatter tab:** with slots brushed, "show: all slots / selection only" picks the points.
   The statistics, lines and fits use only the shown points. A "ring the selection" check box,

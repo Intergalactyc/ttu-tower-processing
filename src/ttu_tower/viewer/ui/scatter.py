@@ -166,8 +166,6 @@ class ScatterView(QWidget):
         self.plot.setToolTip("Shift-drag (or drag in brush mode) to lasso slots; Ctrl adds, Alt removes")
         self.selection = np.empty(0, dtype=np.int64)
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
-        for side in ("left", "bottom"):
-            self.plot.getPlotItem().getAxis(side).enableAutoSIPrefix(False)
         self.legend = self.plot.getPlotItem().addLegend(offset=(5, 5), labelTextSize="8pt")
 
         axes = QGridLayout()

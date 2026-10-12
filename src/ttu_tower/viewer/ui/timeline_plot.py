@@ -140,7 +140,6 @@ class TimelinePlot(QWidget):
         self.widget = pg.PlotWidget(viewBox=self.vb, axisItems={"bottom": self.axis})
         self.plot_item = self.widget.getPlotItem()
         self.plot_item.showGrid(x=True, y=True, alpha=0.15)
-        self.plot_item.getAxis("left").enableAutoSIPrefix(False)
         self.plot_item.getAxis("left").setWidth(MIN_AXIS_WIDTH)
         self.vb.setAutoVisible(y=True)
         self.decimator = PlotDecimator(self.plot_item)

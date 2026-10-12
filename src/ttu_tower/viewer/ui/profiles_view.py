@@ -34,8 +34,6 @@ class ProfilePlot(QWidget):
         item = self.plot.getPlotItem()
         self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         item.showGrid(x=True, y=True, alpha=0.15)
-        for side in ("left", "bottom"):
-            item.getAxis(side).enableAutoSIPrefix(False)
         item.setLabel("left", "height [m]")
         self.table = tables.new_table()
         self.stats: pd.DataFrame | None = None

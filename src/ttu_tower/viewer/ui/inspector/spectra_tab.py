@@ -1,6 +1,7 @@
 """The slot's MRD variance spectra and cospectra, with how tau was found:
 the detection rerun on the stored spectra (smoothed curve, significance band,
-searched range, peak and reversal) and the run's stored tau lines.
+searched range, peak and reversal) and the run's stored tau lines; beside
+them, the momentum and heat transport efficiencies at each ladder rung.
 """
 import numpy as np
 import pyqtgraph as pg
@@ -8,9 +9,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ttu_tower.constants import BOOMS
+from ttu_tower.viewer.composite import TE_TIP
 from ttu_tower.viewer.slotdata import (
     COSPECTRA, DETECTED, NEIGHBOURS, SPECTRA, SPECTRUM_LABELS, SPECTRUM_UNITS, rerun_detection, spectrum,
-    spectrum_variant, stored_selection,
+    spectrum_variant, stored_selection, transport_efficiency,
 )
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.axes import Log10Axis
@@ -18,6 +20,7 @@ from ttu_tower.viewer.ui.axes import Log10Axis
 _MAIN = "#1f4e9c"
 _UNEXCISED = "#b3123f"
 _TAU_PENS = {"heat": ("#d62728", "heat τ"), "momentum": ("#2a8a4a", "momentum τ")}
+_TE = ("uw", "wvpts")  # top row (beside the cospectra), bottom row
 
 
 def _fmt_s(v) -> str:
@@ -37,11 +40,13 @@ class SpectraTab(QWidget):
         self.boxes = {}
         for key, label, on in (("se", "± SE", True), ("detection", "detection details", True),
                                ("log", "log y (variances)", True), ("unexcised", "unexcised", False),
-                               ("booms", "all booms", False), ("neighbours", f"slots ±{NEIGHBOURS}", False)):
+                               ("booms", "all booms", False), ("neighbours", f"slots ±{NEIGHBOURS}", False),
+                               ("te", "transport efficiency", True)):
             box = QCheckBox(label)
             box.setChecked(on)
             box.toggled.connect(lambda *_: self.redraw())
             self.boxes[key] = box
+        self.boxes["te"].setToolTip("a column of " + TE_TIP)
         self.mode.currentIndexChanged.connect(lambda *_: self.redraw())
         controls = QHBoxLayout()
         controls.addWidget(self.mode)
@@ -92,7 +97,6 @@ class SpectraTab(QWidget):
                 axes["left"] = Log10Axis(orientation="left")
             plot = self.graphics.addPlot(row=i // 4, col=i % 4, axisItems=axes)
             plot.showGrid(x=True, y=True, alpha=0.15)
-            plot.getAxis("left").enableAutoSIPrefix(False)
             title = f"{SPECTRUM_LABELS[name]} [{SPECTRUM_UNITS[name]}]"
             emphasised = name == self.emphasis
             plot.setTitle(f"<b>{title}</b>" if emphasised else title, color="#b3123f" if emphasised else "#222")
@@ -100,6 +104,15 @@ class SpectraTab(QWidget):
                 plot.setLabel("bottom", "scale [s]")
             self.plots[name] = plot
             self._draw_spectrum(plot, name, mrd_variant, views, stored_sel)
+        if self.boxes["te"].isChecked():
+            for row, var in enumerate(_TE):
+                plot = self.graphics.addPlot(row=row, col=4, axisItems={"bottom": Log10Axis(orientation="bottom")})
+                plot.showGrid(x=True, y=True, alpha=0.15)
+                plot.setTitle(f"{SPECTRUM_LABELS[var]} transport efficiency", color="#222")
+                if row == 1:
+                    plot.setLabel("bottom", "ladder rung [s]")
+                self.plots[f"te_{var}"] = plot
+                self._draw_te(plot, var, mrd_variant, views, stored_sel)
 
     def _describe(self, views, rerun_sel, stored_sel, mrd_variant) -> None:
         parts = []
@@ -185,6 +198,32 @@ class SpectraTab(QWidget):
             if view.spectrum == name and self.boxes["detection"].isChecked() and self.mode.currentData() == "value":
                 self._draw_detection(plot, view, x)
         self._draw_tau_lines(plot, name, views, stored_sel)
+
+    def _draw_te(self, plot, var, mrd_variant, views, stored_sel) -> None:
+        """TE at each rung, with the same overlays and tau lines as the spectra."""
+        b = self.bundle
+        if self.boxes["neighbours"].isChecked():
+            for dk in range(-NEIGHBOURS, NEIGHBOURS + 1):
+                other = transport_efficiency(b.te, b.slot + dk, b.boom, mrd_variant, var) if dk else None
+                if other is not None:
+                    plot.plot(np.log10(other[0]), other[1], pen=pg.mkPen((120, 120, 120, 70), width=1))
+        if self.boxes["booms"].isChecked():
+            for boom in BOOMS:
+                other = transport_efficiency(b.te, b.slot, boom, mrd_variant, var) if boom != b.boom else None
+                if other is not None:
+                    c = style.boom_color(boom)
+                    c.setAlpha(170)
+                    plot.plot(np.log10(other[0]), other[1], pen=pg.mkPen(c, width=1))
+        if self.boxes["unexcised"].isChecked() and mrd_variant == "mrd":
+            other = transport_efficiency(b.te, b.slot, b.boom, "mrd_unexcised", var)
+            if other is not None:
+                plot.plot(np.log10(other[0]), other[1], pen=pg.mkPen(_UNEXCISED, width=1.2, style=Qt.PenStyle.DashLine))
+        own = transport_efficiency(b.te, b.slot, b.boom, mrd_variant, var)
+        if own is not None and np.isfinite(own[1]).any():
+            plot.plot(np.log10(own[0]), own[1], pen=pg.mkPen(_MAIN, width=1.6), symbol="o", symbolSize=5,
+                      symbolBrush=_MAIN, symbolPen=None)
+        plot.setYRange(0.0, 1.0, padding=0.03)
+        self._draw_tau_lines(plot, var, views, stored_sel)
 
     def _draw_detection(self, plot, view, x) -> None:
         t = view.trace

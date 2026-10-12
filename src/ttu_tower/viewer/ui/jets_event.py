@@ -116,7 +116,6 @@ class _ProfilePlot(pg.PlotWidget):
     def __init__(self, xlabel: str, unit: str):
         super().__init__()
         self.setLabel("left", "height", units="m")
-        self.getAxis("left").enableAutoSIPrefix(False)  # units as labelled, never rescaled to mK, km, ...
         self.set_quantity(xlabel, unit)
         self.showGrid(x=True, y=True, alpha=0.2)
         self.setMinimumSize(160, 160)
@@ -125,7 +124,6 @@ class _ProfilePlot(pg.PlotWidget):
 
     def set_quantity(self, label: str, unit: str) -> None:
         self.setLabel("bottom", label, units=unit or None)
-        self.getAxis("bottom").enableAutoSIPrefix(False)
 
     def draw(self, heights: np.ndarray, rows: np.ndarray, times: list[str], filled: np.ndarray, noses=None,
              title: str = "", how: str = "slots", circular: bool = False, estimates=None) -> None:

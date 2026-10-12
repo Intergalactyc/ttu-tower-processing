@@ -327,6 +327,26 @@ def test_toolbar_buttons_bring_back_a_closed_panel_even_detached(window, qtbot):
         dock.setFloating(False)
 
 
+
+def test_panel_tabs_wrap_onto_more_rows_when_narrow(window, qtbot):
+    tabs = window.right_tabs
+    assert not tabs.tabBar().isVisible() and [b.text() for b in tabs.buttons()][-1] == "Jets"
+
+    def rows():
+        return len({b.geometry().y() for b in tabs.buttons()})
+
+    window.resize(3600, 900)  # room for one row even in the wide test font
+    window.resizeDocks([window.summary_dock], [2400], Qt.Orientation.Horizontal)
+    qtbot.waitUntil(lambda: rows() == 1, timeout=2000)
+    window.resizeDocks([window.summary_dock], [260], Qt.Orientation.Horizontal)
+    qtbot.waitUntil(lambda: rows() > 1, timeout=2000)
+    assert all(tabs.bar.rect().contains(b.geometry()) for b in tabs.buttons())  # none cut off
+    assert tabs.bar.width() <= window.summary_dock.width()
+    tabs.buttons()[1].click()
+    assert tabs.currentWidget() is window.scatter
+    tabs.setCurrentWidget(window.profiles)
+    assert [b.text() for b in tabs.buttons() if b.isChecked()] == ["Profiles"]
+
 def test_the_step_arrows_move_by_a_whole_or_half_interval(window):
     _, _, x, _ = _a_point(window.plots[0])
     window.set_x_range(x - 3600, x + 3600)

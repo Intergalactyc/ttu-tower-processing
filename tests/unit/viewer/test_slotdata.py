@@ -147,10 +147,15 @@ def test_inspector_spectra_and_scales_tabs_draw(full_run, qtbot):
     inspector = window.inspect(1, k, window.catalog["boom_final|uw|cov"], "mrd")
     qtbot.waitUntil(lambda: inspector.bundle is not None, timeout=60_000)
     assert inspector.tabs.currentWidget() is inspector.spectra
-    assert set(inspector.spectra.plots) == set(slotdata.SPECTRA)
+    assert set(inspector.spectra.plots) == set(slotdata.SPECTRA) | {"te_uw", "te_wvpts"}
     assert inspector.spectra.emphasis == "uw"
+    te = slotdata.transport_efficiency(inspector.bundle.te, k, 1, "mrd", "uw")
+    assert te is not None and te[0].size == 8 and np.nanmax(np.abs(te[1])) <= 1.0
+    assert set(inspector.bundle.te["boom"]) > {1} and set(inspector.bundle.te["slot"]) > {k}  # for the overlays
     for key in ("unexcised", "booms", "neighbours"):
         inspector.spectra.boxes[key].setChecked(True)
+    inspector.spectra.boxes["te"].setChecked(False)
+    assert set(inspector.spectra.plots) == set(slotdata.SPECTRA)
     inspector.spectra.mode.setCurrentIndex(1)  # the ogive
     assert inspector.scales.table.rowCount() == 8
     inspector.close()

@@ -11,6 +11,8 @@ def configure_pyqtgraph() -> None:
     pg.setConfigOptions(background="w", foreground="k", antialias=False, useNumba=False)
     from ttu_tower.viewer.ui import plot_export
     plot_export.install()  # the right-click Export dialog and a CSV with labelled columns
+    from ttu_tower.viewer.ui import axis_units
+    axis_units.install()  # computed units on every axis, with a power of ten where needed, never an SI prefix
 
 
 def open_initial_run(tag: str | None, run_dir: str | None, test: bool, settings_tag: str | None) -> RunHandle | None:

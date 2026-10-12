@@ -113,8 +113,6 @@ class DistributionView(QWidget):
         self.fits: dict = {}
         self.plot = pg.PlotWidget()
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
-        for side in ("left", "bottom"):
-            self.plot.getPlotItem().getAxis(side).enableAutoSIPrefix(False)
         self.table = tables.new_table()
         self.table.setToolTip("fit columns: KS is the Kolmogorov–Smirnov statistic (smaller fits better); "
                               "AIC, lower is better")

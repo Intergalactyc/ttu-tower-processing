@@ -127,6 +127,11 @@ def test_spectra_matrix_and_boom_map_match_the_stored_rows(full_run):
     assert values.shape == (rows["slot"].nunique(), rows["scale_s"].nunique())
     r = rows.iloc[len(rows) // 2]
     assert values[np.searchsorted(slots, r["slot"]), np.searchsorted(scales, r["scale_s"])] == r["value"]
+    slots, rungs, te = composite.spectra_matrix(run, index, boom, "mrd", "uw_te")
+    rows = index.read("ladder", booms=[boom], filter=(f("variant") == "mrd") & (f("variable") == "uw") & (f("stat") == "te"))
+    assert te.shape == (rows["slot"].nunique(), 8) and list(rungs) == sorted(rows["rung_s"].unique())
+    r = rows.iloc[len(rows) // 2]
+    assert te[np.searchsorted(slots, r["slot"]), np.searchsorted(rungs, r["rung_s"])] == r["value"]
     map_slots, x, y = anisotropy.boom_map(run, index, boom, "mrd")
     track = anisotropy.boom_track(index, boom, "mrd", int(map_slots.min()), int(map_slots.max()))
     track = track[np.isfinite(track["x"])]

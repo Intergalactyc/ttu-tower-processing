@@ -1,6 +1,7 @@
 """Composite MRD spectra over the viewed interval (or the whole period): per
 boom, the median over slots at each averaging scale with interquartile bars,
-for every slot, one stability class, or the brushed selection.
+for every slot, one stability class, or the brushed selection. The transport
+efficiencies per ladder rung are composited alike.
 """
 import numpy as np
 import pyqtgraph as pg
@@ -40,6 +41,10 @@ class CompositeSpectraView(QWidget):
         self.spectrum = QComboBox()
         for key, label in composite.SPECTRA:
             self.spectrum.addItem(label, key)
+        self.spectrum.insertSeparator(self.spectrum.count())
+        for key, label in composite.TRANSPORT:
+            self.spectrum.addItem(label, key)
+            self.spectrum.setItemData(self.spectrum.count() - 1, composite.TE_TIP, Qt.ItemDataRole.ToolTipRole)
         self.spectrum.setCurrentIndex(self.spectrum.findData("uw"))
         self.variant = QComboBox()
         for key, label in _VARIANTS:
@@ -65,8 +70,6 @@ class CompositeSpectraView(QWidget):
         item = self.plot.getPlotItem()
         item.showGrid(x=True, y=True, alpha=0.15)
         item.setLabel("bottom", "averaging scale τ [s]")
-        for side in ("left", "bottom"):
-            item.getAxis(side).enableAutoSIPrefix(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -95,7 +98,7 @@ class CompositeSpectraView(QWidget):
         lines = [{"label": f"{HEIGHTS[b]:g} m", "color": style.boom_color(b).name(), "scale": s["scale_s"].to_numpy(),
                   "mid": s["mid"].to_numpy(), "lo": s["lo"].to_numpy(), "hi": s["hi"].to_numpy()}
                  for b, s in self.summaries.items()]
-        label = dict(composite.SPECTRA)[spectrum] + (" (normalized)" if self.normalize.isChecked() else "")
+        label = composite.LABELS[spectrum] + (" (normalized)" if self.normalize.isEnabled() and self.normalize.isChecked() else "")
         return "composite", {"title": self.info.text().split(" · dashed")[0], "ylabel": label, "lines": lines,
                              "refs": composite.REFERENCE_SCALES, "bars": self.bars.isChecked(),
                              "log_y": spectrum in composite.VARIANCES and self.log_y.isChecked()}
@@ -143,7 +146,7 @@ class CompositeSpectraView(QWidget):
         if self.run is None:
             return
         key = self._key()
-        self.info.setText("reading every boom's spectra (once per spectrum; a few seconds)…")
+        self.info.setText("reading every boom's values (once per choice; a few seconds)…")
         self.runner.submit(_load, self.run, self.index, self.booms, key[0], key[1], key=f"composite-{id(self)}",
                            label="reading spectra", on_done=lambda m: self._loaded(key, m),
                            on_error=lambda exc, tb: self.info.setText(f"couldn't read the spectra: {exc}"))
@@ -173,8 +176,14 @@ class CompositeSpectraView(QWidget):
         self.summaries = {}
         spectrum = self.spectrum.currentData()
         variance = spectrum in composite.VARIANCES
+        transport = spectrum in dict(composite.TRANSPORT)
         self.log_y.setEnabled(variance)
-        self.log_y.setToolTip("" if variance else "cospectra change sign")
+        self.log_y.setToolTip("" if variance else "efficiencies run 0–1" if transport else "cospectra change sign")
+        self.normalize.setEnabled(not transport)
+        self.normalize.setToolTip("efficiencies are already ratios" if transport else
+                                  "divide each slot's spectrum by its sum over scales (the within-block "
+                                  "(co)variance), so slots weigh alike whatever their intensity")
+        normalize = self.normalize.isChecked() and not transport
         log_y = variance and self.log_y.isChecked()
         self.plot.getPlotItem().setLogMode(y=log_y)
         if not self.matrices or self._loaded_key != self._key():
@@ -187,7 +196,7 @@ class CompositeSpectraView(QWidget):
             slots, scales, values = self.matrices[b]
             if slots.size == 0:
                 continue
-            s = composite.summarize(slots, scales, values, self._keep(slots), self.normalize.isChecked())
+            s = composite.summarize(slots, scales, values, self._keep(slots), normalize)
             s = s[np.isfinite(s["mid"])]
             if s.empty:
                 continue
@@ -212,10 +221,12 @@ class CompositeSpectraView(QWidget):
         for v in composite.REFERENCE_SCALES:
             self.plot.addItem(pg.InfiniteLine(np.log10(v), angle=90, pen=pg.mkPen("#555555", width=1,
                                                                                  style=Qt.PenStyle.DashLine)))
-        if not variance:
+        if not variance and not transport:
             self.plot.addItem(pg.InfiniteLine(0, angle=0, pen=pg.mkPen("#bbbbbb", width=1)))
-        label = dict(composite.SPECTRA)[spectrum]
-        self.plot.getPlotItem().setLabel("left", f"{label}" + (" (normalized)" if self.normalize.isChecked() else ""))
+        label = composite.LABELS[spectrum]
+        unit = None if normalize else composite.UNITS.get(spectrum)
+        self.plot.getPlotItem().setLabel("left", f"{label}" + (", normalized" if normalize else ""), units=unit)
+        self.plot.getPlotItem().setLabel("bottom", "ladder rung [s]" if transport else "averaging scale τ [s]")
         scope = "whole period" if self.x_range is None else "visible range"
         n = (f"{min(counts)}–{max(counts)}" if min(counts) != max(counts) else f"{counts[0]}") if counts else "0"
         self.info.setText(f"{self.group.currentText()}, {scope}: N = {n} slots per boom · median, bars 25–75 % · "

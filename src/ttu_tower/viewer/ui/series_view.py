@@ -430,7 +430,6 @@ class SeriesPanel(QWidget):
         plot = self.graphics.addPlot(row=row, col=0, viewBox=vb, axisItems={"bottom": axis})
         plot.showGrid(x=True, y=True, alpha=0.15)
         left = plot.getAxis("left")
-        left.enableAutoSIPrefix(False)
         left.setWidth(72)
         vb.setAutoVisible(y=True)
         vb.fitXRequested.connect(self._fit_x)

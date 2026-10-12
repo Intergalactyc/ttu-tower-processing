@@ -6,7 +6,7 @@ pytest.importorskip("PySide6")
 
 import pyqtgraph as pg  # noqa: E402
 from PySide6.QtCore import QPointF  # noqa: E402
-from PySide6.QtWidgets import QCheckBox, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QCheckBox, QLabel, QMessageBox  # noqa: E402
 
 from ttu_tower.constants import BOOMS, HEIGHTS  # noqa: E402
 from ttu_tower.jets.analysis import JetSettings  # noqa: E402
@@ -207,6 +207,34 @@ def test_the_aggregate_follows_the_interval(window, qtbot):
     window.set_x_range(slot_to_unix(FIRST), slot_to_unix(FIRST + 10))
     qtbot.waitUntil(lambda: agg.summary.text().startswith("1 event "), timeout=5000)
 
+
+
+def test_the_aggregate_histograms_take_a_bin_count(window, qtbot):
+    window.right_tabs.setCurrentWidget(window.jets.view)
+    window.full_period.setChecked(True)
+    view = window.jets.view
+    view.tabs.setCurrentWidget(view.aggregate)
+    agg = view.aggregate
+
+    def edges():
+        item = next(i for i in agg.speed_plot.getPlotItem().items if isinstance(i, pg.PlotDataItem))
+        return item.xData
+
+    assert agg.bins.text() == "auto" and np.allclose(np.diff(edges()), 1.0)  # 1 m/s bins
+    agg.bins.setValue(4)
+    x = edges()
+    assert x.size == 5 and np.allclose(np.diff(x), np.diff(x)[0])
+
+
+def test_no_dock_can_widen_the_window_past_the_screen(window, qtbot):
+    window.right_tabs.setCurrentWidget(window.jets.view)
+    view = window.jets.view
+    view.tabs.setCurrentWidget(view.aggregate)
+    before = [d.minimumSizeHint().width() for d in (window.controls_dock, window.summary_dock, window)]
+    wide = QLabel("x" * 400)  # a control row far wider than any screen
+    view.aggregate.layout().addWidget(wide)
+    assert wide.minimumSizeHint().width() > 2000
+    assert [d.minimumSizeHint().width() for d in (window.controls_dock, window.summary_dock, window)] == before
 
 def test_diagnostics_count_every_status_and_sweep_a_setting(window, qtbot):
     window.right_tabs.setCurrentWidget(window.jets.view)

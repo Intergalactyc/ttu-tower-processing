@@ -34,8 +34,10 @@ PROFILE_QUANTITIES = (
     ProfileQuantity("tke", "TKE", "m²/s²", "tke", None, True),
     ProfileQuantity("wd_std", "wd std", "deg", "wd", "std", True),
     ProfileQuantity("ustar", "u*", "m/s", "ustar", None, True),
+    ProfileQuantity("uw", "w'u'", "m²/s²", "uw", "cov", True),
     ProfileQuantity("wvpts", "w'θv'", "K m/s", "wvpts", "cov", True),
     ProfileQuantity("zeta", "ζ = z/L", "", "zeta", None, True),
+    ProfileQuantity("ils_u", "ILS u", "m", "ils_u", None, True),
 )
 
 

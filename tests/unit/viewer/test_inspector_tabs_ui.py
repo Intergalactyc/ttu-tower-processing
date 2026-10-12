@@ -56,7 +56,8 @@ def test_profile_tab_ghosts_the_filtered_boom_and_switches_boom_on_click(window,
     inspector = _inspect(window, qtbot, "profile")
     profile = inspector.profile
     qtbot.waitUntil(lambda: bool(profile.plots), timeout=60_000)
-    assert len(profile.plots) == 12 and {"tke", "zeta"} <= set(profile.plots)
+    assert len(profile.plots) == 14 and {"tke", "zeta", "uw", "ils_u"} <= set(profile.plots)
+    assert all(profile.points[k]["value"].notna().any() for k in ("uw", "ils_u"))
     points = profile.points["sigma_w"].set_index("boom")
     assert points.loc[SPIKY_BOOM, "filtered"]
     other = next(b for b in FULL_BOOMS if b != SPIKY_BOOM)
@@ -611,6 +612,11 @@ def test_composite_spectra_draw_a_median_per_boom(window, qtbot):
     view.spectrum.setCurrentIndex(view.spectrum.findData("ww"))
     qtbot.waitUntil(lambda: view._loaded_key == view._key() and bool(view.summaries), timeout=60_000)
     assert view.log_y.isEnabled()
+    view.spectrum.setCurrentIndex(view.spectrum.findData("wvpts_te"))
+    qtbot.waitUntil(lambda: view._loaded_key == view._key() and bool(view.summaries), timeout=60_000)
+    assert not view.normalize.isEnabled() and not view.log_y.isEnabled()
+    s = view.summaries[FULL_BOOMS[0]]
+    assert len(s) == 8 and ((s["mid"] > 0) & (s["mid"] <= 1)).all()
 
 
 def test_a_diurnal_cell_click_selects_its_slots(window, qtbot):

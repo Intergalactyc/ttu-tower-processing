@@ -1,6 +1,7 @@
 """Composite MRD spectra: each boom's spectra over many slots, summarized per
 scale as a median with interquartile bars (as ttu-windprofiles' cospectra
 figure does), over a range of slots, a stability class or a brushed selection.
+Transport efficiencies per ladder rung composite the same way.
 """
 import warnings
 
@@ -12,7 +13,13 @@ SPECTRA = (("uu", "u variance"), ("vv", "v variance"), ("ww", "w variance"), ("t
            ("uw", "u'w' cospectrum"), ("vw", "v'w' cospectrum"), ("uv", "u'v' cospectrum"),
            ("wvpts", "w'θv' cospectrum"))
 VARIANCES = ("uu", "vv", "ww", "tsts")
+TRANSPORT = (("uw_te", "u'w' transport efficiency"), ("wvpts_te", "w'θv' transport efficiency"))
 REFERENCE_SCALES = (60.0, 180.0, 600.0, 1800.0)  # the paper's dashed guides [s]
+LABELS = dict(SPECTRA + TRANSPORT)
+UNITS = {"uu": "m²/s²", "vv": "m²/s²", "ww": "m²/s²", "uw": "m²/s²", "vw": "m²/s²", "uv": "m²/s²", "tsts": "K²",
+         "wvpts": "K m/s"}  # per mode; transport efficiencies have none
+TE_TIP = ("transport efficiency at each ladder rung (fluctuations about that rung's block means): the net flux over "
+          "the flux of its dominant sign, 1 when every sample's product has the same sign")
 
 
 def spectra_matrix(run, index, boom: int, variant: str, spectrum: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -25,8 +32,13 @@ def spectra_matrix(run, index, boom: int, variant: str, spectrum: str) -> tuple[
 
 def _matrix(index, boom, variant, spectrum):
     f = pa_dataset.field
-    df = index.read("mrd", booms=[boom], columns=["slot", "scale_s", "value"],
-                    filter=(f("variant") == variant) & (f("spectrum") == spectrum))
+    if spectrum in dict(TRANSPORT):  # per ladder rung, from primary's ladder table
+        df = index.read("ladder", booms=[boom], columns=["slot", "rung_s", "value"],
+                        filter=(f("variant") == variant) & (f("variable") == spectrum[:-len("_te")])
+                        & (f("stat") == "te")).rename(columns={"rung_s": "scale_s"})
+    else:
+        df = index.read("mrd", booms=[boom], columns=["slot", "scale_s", "value"],
+                        filter=(f("variant") == variant) & (f("spectrum") == spectrum))
     if df.empty:
         return np.empty(0, dtype=np.int64), np.empty(0), np.empty((0, 0))
     slots, row = np.unique(df["slot"].to_numpy(dtype=np.int64), return_inverse=True)

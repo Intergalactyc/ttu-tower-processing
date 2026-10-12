@@ -8,7 +8,7 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -47,21 +47,30 @@ def _plot(title: str, xlabel: str = "", unit: str = "", ylabel: str = "density")
     w.getPlotItem().export_title = title
     w.setLabel("bottom", xlabel, units=unit or None)
     w.setLabel("left", ylabel)
-    for side in ("left", "bottom"):
-        w.getAxis(side).enableAutoSIPrefix(False)  # densities and fractions read as they are, not ×0.001
     w.showGrid(y=True, alpha=0.2)
     return w
 
 
-def _histogram(plot: pg.PlotWidget, values, step: float, label: str, brush=_BAR, start=None) -> np.ndarray:
-    """A density histogram (it integrates to 1) in `step`-wide bins."""
+def _histogram(plot: pg.PlotWidget, values, step: float, label: str, brush=_BAR, start=None,
+               bins: int | None = None) -> np.ndarray:
+    """A density histogram (it integrates to 1) in `step`-wide bins, or in
+    `bins` equal bins spanning the values (from `start`, if lower).
+    """
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return np.array([])
-    lo = np.floor((values.min() if start is None else min(start, values.min())) / step) * step
-    hi = (np.floor(values.max() / step) + 1) * step
-    edges = np.arange(lo, hi + step / 2, step)
+    if bins:
+        lo = values.min() if start is None else min(start, values.min())
+        hi = values.max()
+        if hi <= lo:
+            lo, hi = lo - 0.5, lo + 0.5
+        edges = np.linspace(lo, hi, bins + 1)
+        step = edges[1] - edges[0]
+    else:
+        lo = np.floor((values.min() if start is None else min(start, values.min())) / step) * step
+        hi = (np.floor(values.max() / step) + 1) * step
+        edges = np.arange(lo, hi + step / 2, step)
     density = np.histogram(values, edges)[0] / (values.size * step)
     item = pg.PlotDataItem(edges, density, stepMode="center", fillLevel=0, brush=brush, pen=pg.mkPen(brush[:3]))
     item.export_label = label
@@ -122,14 +131,26 @@ class AggregateView(QWidget):
         self.normalize.setToolTip("each slot's profile divided by its observed peak or estimated nose speed "
                                   "(as chosen beside)")
         self.normalize.toggled.connect(lambda *_: self.redraw())
+        self.bins = QSpinBox()
+        self.bins.setRange(0, 200)
+        self.bins.setSpecialValueText("auto")
+        self.bins.setToolTip("bins per histogram (speed, falloff, duration, estimated nose height): auto keeps "
+                             "fixed widths (1 m/s, 0.5 m/s, 0.5 h, 10 m; half that slot by slot), a number splits "
+                             "each one's range into that many equal bins")
+        self.bins.setKeyboardTracking(False)  # redraw once a value is entered, not on every keystroke
+        self.bins.valueChanged.connect(lambda *_: self.redraw())
         self.summary = QLabel()
+        self.summary.setWordWrap(True)
         head = QHBoxLayout()
         head.addWidget(self.scope)
         head.addWidget(self.which)
         head.addWidget(self.kind)
-        head.addWidget(self.normalize)
         head.addStretch(1)
-        head.addWidget(self.summary)
+        head2 = QHBoxLayout()
+        head2.addWidget(self.normalize)
+        head2.addWidget(QLabel("bins"))
+        head2.addWidget(self.bins)
+        head2.addStretch(1)
         self.height_plot = _plot("observed peak height (event median)", "height", "m", ylabel="fraction of events")
         self.speed_plot = _plot("max observed peak speed", "speed", "m/s", ylabel="density (per m/s)")
         self.falloff_plot = _plot("max falloff above the peak", "falloff", "m/s", ylabel="density (per m/s)")
@@ -151,6 +172,8 @@ class AggregateView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addLayout(head)
+        layout.addLayout(head2)
+        layout.addWidget(self.summary)
         layout.addWidget(_grid([self.height_plot, self.speed_plot, self.falloff_plot, self.duration_plot,
                                 self.hour_plot, self.share_plot, self.composite_plot, self.rose_plot]), stretch=1)
         self.result: JetResult | None = None
@@ -212,9 +235,10 @@ class AggregateView(QWidget):
         height, speed = _KINDS[self.kind.currentData()][:2]
         nosed = events[np.isfinite(events[height].to_numpy(float))]  # events with a peak to describe
         self._heights(p, nosed[height], "events")
-        _histogram(self.speed_plot, nosed[speed], 1.0, "events")
-        _histogram(self.falloff_plot, nosed["falloff_max"], 0.5, "events", start=0.0)
-        _histogram(self.duration_plot, events["duration_min"] / 60.0, 0.5, "events", start=0.0)
+        bins = self.bins.value() or None
+        _histogram(self.speed_plot, nosed[speed], 1.0, "events", bins=bins)
+        _histogram(self.falloff_plot, nosed["falloff_max"], 0.5, "events", start=0.0, bins=bins)
+        _histogram(self.duration_plot, events["duration_min"] / 60.0, 0.5, "events", start=0.0, bins=bins)
         hours = events["start_time"].dt.tz_convert(self.tz).dt.hour if len(events) else pd.Series([], dtype=int)
         _bars(self.hour_plot, range(24), np.bincount(hours.to_numpy(int), minlength=24), [str(h) if h % 3 == 0 else ""
               for h in range(24)], "events")
@@ -240,8 +264,9 @@ class AggregateView(QWidget):
                              f"{len(detected)} {noses}")
         height, speed = _KINDS[self.kind.currentData()][2:4]
         self._heights(p, detected[height], "slots")
-        _histogram(self.speed_plot, detected[speed], 0.5, "slots")
-        _histogram(self.falloff_plot, detected["falloff_abs"], 0.25, "slots", start=0.0)
+        bins = self.bins.value() or None
+        _histogram(self.speed_plot, detected[speed], 0.5, "slots", bins=bins)
+        _histogram(self.falloff_plot, detected["falloff_abs"], 0.25, "slots", start=0.0, bins=bins)
         hours = pd.DatetimeIndex(slot_to_time(members.index.to_numpy())).tz_convert(self.tz).hour
         _bars(self.hour_plot, range(24), np.bincount(np.asarray(hours, int), minlength=24),
               [str(h) if h % 3 == 0 else "" for h in range(24)], "slots")
@@ -263,7 +288,7 @@ class AggregateView(QWidget):
                   [f"{HEIGHTS[b]:g}" for b in booms], label)
         else:
             self.height_plot.getPlotItem().getAxis("bottom").setTicks(None)
-            _histogram(self.height_plot, heights, 10.0, label, start=0.0)
+            _histogram(self.height_plot, heights, 10.0, label, start=0.0, bins=self.bins.value() or None)
 
     def _share(self, r: JetResult, detected: pd.DataFrame) -> None:
         self.share_plot.setTitle("share of slots (with data) in a jet, by hour and month", size="9pt")

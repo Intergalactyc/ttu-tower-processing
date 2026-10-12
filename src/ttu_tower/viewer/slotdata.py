@@ -34,6 +34,7 @@ class SlotBundle:
     boom: int
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)  # every stored row of this slot
     mrd: pd.DataFrame | None = None  # this slot, every boom; plus the boom's neighbouring slots
+    te: pd.DataFrame | None = None  # transport efficiency per rung, over the same slots and booms as mrd
     ladder: pd.DataFrame | None = None
     ladder_coverage: pd.DataFrame | None = None
 
@@ -71,6 +72,14 @@ def load_slot(index: FragmentIndex, k: int, boom: int, booms=range(1, 11)) -> Sl
         bundle.mrd = pd.concat([this_slot, around], ignore_index=True)
         for col in ("variant", "spectrum"):
             bundle.mrd[col] = bundle.mrd[col].astype(str)
+    if _stage_present(index, "ladder"):
+        te = index.read("ladder", booms=list(booms), half_hours=range((k - NEIGHBOURS) // 3, (k + NEIGHBOURS) // 3 + 1),
+                        columns=["slot", "boom", "variant", "rung_s", "variable", "value"],
+                        filter=(f("stat") == "te") & (f("slot") >= k - NEIGHBOURS) & (f("slot") <= k + NEIGHBOURS))
+        te = te[(te["slot"] == k) | (te["boom"] == boom)].reset_index(drop=True)
+        for col in ("variant", "variable"):
+            te[col] = te[col].astype(str)
+        bundle.te = te
     bundle.ladder = bundle.tables.get("ladder")
     bundle.ladder_coverage = bundle.tables.get("ladder_coverage")
     for df in bundle.tables.values():
@@ -151,6 +160,18 @@ def spectrum(mrd: pd.DataFrame | None, slot: int, boom: int, variant: str, name:
     rows = rows.sort_values("scale_s")
     return Spectrum(rows["scale_s"].to_numpy(float), rows["value"].to_numpy(float), rows["se"].to_numpy(float),
                     rows["n_pairs"].to_numpy())
+
+
+def transport_efficiency(te: pd.DataFrame | None, slot: int, boom: int, variant: str,
+                         variable: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """(rung_s, TE) of `variable` ("uw" or "wvpts"), or None without rows."""
+    if te is None or te.empty:
+        return None
+    rows = te[(te["slot"] == slot) & (te["boom"] == boom) & (te["variant"] == variant) & (te["variable"] == variable)]
+    if rows.empty:
+        return None
+    rows = rows.sort_values("rung_s")
+    return rows["rung_s"].to_numpy(float), rows["value"].to_numpy(float)
 
 
 def spectrum_variant(bundle: SlotBundle, variant: str) -> str:

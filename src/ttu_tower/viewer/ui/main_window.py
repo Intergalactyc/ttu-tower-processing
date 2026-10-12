@@ -16,7 +16,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QSplitter, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -40,6 +40,7 @@ from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.find_panel import FindPanel
 from ttu_tower.viewer.ui.jets_controller import JetsController
 from ttu_tower.viewer.ui.stability_panel import StabilityPanel
+from ttu_tower.viewer.ui.wrap_tabs import WrapTabWidget
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
@@ -124,7 +125,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.panels = [PanelControls("Panel A"), PanelControls("Panel B")]
-        tabs = QTabWidget()
+        tabs = WrapTabWidget()
         for i, panel in enumerate(self.panels):
             tabs.addTab(panel, "Panel A" if i == 0 else "Panel B")
             panel.specChanged.connect(lambda spec, i=i: self._on_spec(i, spec))
@@ -166,7 +167,7 @@ class MainWindow(QMainWindow):
         self.jets_box.toggled.connect(self.jets.band.setVisible)
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.addWidget(tabs, stretch=1)
+        left_layout.addWidget(tabs.container(), stretch=1)
         left_layout.addWidget(self.night_box)
         left_layout.addWidget(self.stability_box)
         left_layout.addWidget(self.aniso_box)
@@ -192,8 +193,7 @@ class MainWindow(QMainWindow):
         self.aniso_map.brushed = self.set_selection
         self.compare = CompareView()
         self.dist_tab = dist_split
-        self.right_tabs = QTabWidget()
-        self.right_tabs.setUsesScrollButtons(True)
+        self.right_tabs = WrapTabWidget()
         for widget, label in ((dist_split, "Distributions"), (self.scatter, "Scatter"), (self.profiles, "Profiles"),
                               (self.composite, "Spectra"), (self.diurnal, "Diurnal"), (self.aniso_map, "Anisotropy"),
                               (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare"),
@@ -208,7 +208,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(2, 2, 2, 2)
         right_layout.addWidget(self.full_period)
-        right_layout.addWidget(self.right_tabs, stretch=1)
+        right_layout.addWidget(self.right_tabs.container(), stretch=1)
         self.summary_dock = self._dock("Summary", right, Qt.DockWidgetArea.RightDockWidgetArea)
         self._dock_buttons()
 

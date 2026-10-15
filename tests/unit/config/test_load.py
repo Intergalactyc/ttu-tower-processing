@@ -31,7 +31,7 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.files.booms == tuple(range(1, 11))
     assert cfg.qc.min_coverage == 0.75
     assert cfg.qc.max_fill_gap_samples == 50
-    assert cfg.qc.unusable_tests == ("unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce")
+    assert cfg.qc.unusable_tests == ("unchecked", "resolution", "skew", "kurt", "direction", "bounce")
     assert cfg.qc.bounds.sonic == (-45.0, 45.0)
     assert cfg.qc.bounds.ts == (233.15, 333.15)
     assert cfg.qc.bounds.t == (223.15, 323.15)
@@ -53,7 +53,7 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.qc.windows.max_empty_bin_fraction == 0.8
     assert cfg.qc.windows.dropout_min_run == 10
     assert cfg.qc.windows.ts_dropout_min_run == 50
-    assert cfg.qc.windows.ts_repeat_tolerance == 0.05
+    assert cfg.qc.windows.ts_repeat_tolerance == 0.005
     assert cfg.qc.windows.max_dropout_fraction == 0.05
     assert cfg.qc.windows.dropout_min_windows == 2
     assert cfg.qc.windows.skew_range == (-2.0, 2.0)

@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow.dataset as pa_dataset
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from ttu_tower.constants import SAMPLE_HZ
@@ -32,6 +33,7 @@ SAMPLE_TESTS = ("bounds", "spike", "coupled")  # removed sample by sample: ghost
 _RUG_GROUPS = (("sonic", ("ue", "vn", "w", "u", "v")), ("ts", ("ts", "vpts")), ("t", ("t",)), ("rh", ("rh",)),
                ("p", ("p",)))
 _RUG_ROW_PX = 16
+_LEFT_AXIS_PX = 72  # every plot's left axis, so the time axes line up
 _EARTH_TO_STREAM = {"ue": "u", "vn": "v"}
 SHOWN_BY_DEFAULT = ("ue", "vn", "w", "vpts")  # the other series start unchecked
 WHATIF_ADDED = "#e7298a"  # flagged only with the what-if settings
@@ -413,7 +415,8 @@ class SeriesPanel(QWidget):
             plot.getAxis("bottom").setStyle(showValues=False)
 
         if self.rug.isChecked():
-            self._draw_rug(x, stored_qc, self.result["removed"], len(names), first, diffs)
+            rug = self._draw_rug(x, stored_qc, self.result["removed"], len(names), first, diffs)
+            self._fit_left_axes([rug, *self.plots.values()], rug)
         elif names:  # the last series carries the time axis instead
             last = self.plots[names[-1]]
             last.getAxis("bottom").setStyle(showValues=True)
@@ -430,7 +433,7 @@ class SeriesPanel(QWidget):
         plot = self.graphics.addPlot(row=row, col=0, viewBox=vb, axisItems={"bottom": axis})
         plot.showGrid(x=True, y=True, alpha=0.15)
         left = plot.getAxis("left")
-        left.setWidth(72)
+        left.setWidth(_LEFT_AXIS_PX)
         vb.setAutoVisible(y=True)
         vb.fitXRequested.connect(self._fit_x)
         if link is not None:
@@ -543,6 +546,22 @@ class SeriesPanel(QWidget):
         rug.getAxis("left").setTicks([ticks])
         rug.setYRange(-0.7, max(len(ticks), 1) - 0.3, padding=0)
         return rug
+
+    @staticmethod
+    def _fit_left_axes(plots, rug) -> None:
+        """Widen every left axis to the rug's longest row name: pyqtgraph drops,
+        without a word, a tick label wider than its axis.
+        """
+        axis = rug.getAxis("left")
+        names = [text for level in (axis._tickLevels or []) for _, text in level]
+        if not names:
+            return
+        metrics = QFontMetrics(axis.style["tickFont"] or axis.font())
+        needed = (max(metrics.horizontalAdvance(n) for n in names) + max(0, axis.style["tickLength"])
+                  + axis.style["tickTextOffset"][0] + 6)
+        if needed > _LEFT_AXIS_PX:
+            for plot in plots:
+                plot.getAxis("left").setWidth(needed)
 
     def shutdown(self) -> None:
         self._closed = True

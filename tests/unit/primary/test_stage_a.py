@@ -141,3 +141,21 @@ def test_wind_direction_end_to_end_matches_independent_ground_truth():
 
     _, wd = vector_to_bearing(out.ue.mean(), out.vn.mean())
     assert wd == pytest.approx(from_true, abs=1e-9)
+
+
+def test_stage_a_present_is_source_non_nan():
+    nan = np.nan
+    raw = {
+        "u": np.array([5.0, nan, 1000.0, 5.0]), "v": np.array([1.0, 1.0, 1.0, 1.0]),
+        "w": np.array([0.0, 0.0, 0.0, 0.0]), "ts": np.array([60.0, 60.0, nan, 60.0]),
+        "t": np.array([60.0, 60.0, 60.0, 60.0]), "rh": np.array([50.0, 50.0, 50.0, 50.0]),
+        "p": np.array([26.6, 26.6, 26.6, 26.6]),
+    }
+    out = stage_a(raw, boom=4, cfg=_qc_cfg())
+    # a NaN raw component makes all three Earth-frame winds absent
+    for var in ("ue", "vn", "w"):
+        assert out.present[var].tolist() == [True, False, True, True]
+    # a bounds removal is NaN after Stage A but was present in the file
+    assert out.bounds_removed["ue"][2] and np.isnan(out.ue[2])
+    assert out.present["ts"].tolist() == [True, True, False, True]
+    assert out.present["p"].all()

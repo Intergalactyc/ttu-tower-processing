@@ -129,7 +129,7 @@ def _whole_run_stage_b(stage_a_by_h: dict[int, StageA], run_half_hours: list[int
     standard margin provides* doesn't change the result, not to give despike
     fewer array positions to consider than the real pipeline ever would.
     `series`/`file_run_id` are built once and shared; only
-    `core_bounds_removed` differs per half-hour.
+    `core_bounds_removed` and `core_present` differ per half-hour.
     """
     h0 = run_half_hours[0]
     run_samples = len(run_half_hours) * SAMPLES_PER_HALF_HOUR
@@ -147,7 +147,8 @@ def _whole_run_stage_b(stage_a_by_h: dict[int, StageA], run_half_hours: list[int
 
     out = {}
     for h in run_half_hours:
-        span = Span(g0=g0, series=series, file_run_id=file_run_id, core_bounds_removed=stage_a_by_h[h].bounds_removed)
+        span = Span(g0=g0, series=series, file_run_id=file_run_id, core_bounds_removed=stage_a_by_h[h].bounds_removed,
+                    core_present=stage_a_by_h[h].present)
         out[h] = stage_b(span, h, boom, cfg)
     return out
 

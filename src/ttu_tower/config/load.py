@@ -47,7 +47,7 @@ _LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
 _MIN_MAD_DEFAULT = {"ue": 0.001, "vn": 0.001, "w": 0.001, "ts": 0.01, "t": 0.002, "rh": 0.00002, "p": 0.0004}
 _Z_THRESHOLD_DEFAULT = {"ue": 3.5, "vn": 3.5, "w": 3.5, "ts": 3.5, "t": 3.5, "rh": 3.5, "p": 6.0}
 _SMOOTHING_WIDTH_DEFAULT = {"t": 20.0, "rh": 20.0, "p": 2.0}
-_UNUSABLE_TESTS_DEFAULT = ["unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce"]
+_UNUSABLE_TESTS_DEFAULT = ["unchecked", "resolution", "skew", "kurt", "direction", "bounce"]
 _GUST_PERIODS_DEFAULT = [1, 2, 3, 5, 10, 30, 60]
 _ALL_BOOMS_DEFAULT = list(range(1, 11))
 _LOGLAW_BOOMS_DEFAULT = [1, 2, 3, 4, 5, 6, 7]
@@ -285,7 +285,7 @@ def _parse_windows(d: dict, path: str) -> WindowsConfig:
     max_empty_bin_fraction = _pop_number(d, "max_empty_bin_fraction", 0.8, path, min_=0, max_=1)
     dropout_min_run = _pop_number(d, "dropout_min_run", 10, path, kind=int)
     ts_dropout_min_run = _pop_number(d, "ts_dropout_min_run", 50, path, kind=int)
-    ts_repeat_tolerance = _pop_number(d, "ts_repeat_tolerance", 0.05, path)
+    ts_repeat_tolerance = _pop_number(d, "ts_repeat_tolerance", 0.005, path)
     max_dropout_fraction = _pop_number(d, "max_dropout_fraction", 0.05, path, min_=0, max_=1)
     dropout_min_windows = _pop_number(d, "dropout_min_windows", 2, path, kind=int)
     skew_range = _pop_pair(d, "skew_range", (-2.0, 2.0), path)

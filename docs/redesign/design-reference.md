@@ -154,7 +154,9 @@ a dependency; the pieces needed are ported.
     the consumer's window;
   - *window tests* mark intervals unusable: `unchecked`, `resolution`, `dropouts` (100-s
     windows), `skew`, `kurt` (slot), and the second-layer tests `direction` and `bounce` (slot).
-    Which window tests make data unusable is config (all of them by default).
+    Which window tests make data unusable is config (all but `dropouts` by default: on the
+    full-year data it flagged quiet or smooth signal rather than stuck sensors, so it is kept as a
+    recorded diagnostic only).
 - **Variables:** despiking runs on all seven series (ue, vn, w, ts, t, rh, p). Resolution,
   dropouts and higher moments run on the sonic outputs only: the skewness of a slow signal over
   10 min is meaningless.

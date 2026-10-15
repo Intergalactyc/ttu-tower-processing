@@ -9,7 +9,7 @@ import pandas as pd
 
 from ttu_tower import schema
 from ttu_tower.constants import SAMPLE_HZ
-from ttu_tower.flags import FlagRows, mask_to_intervals
+from ttu_tower.flags import BOOM_LEVEL_VARIABLES, FlagRows, mask_to_intervals
 from ttu_tower.primary.blocks import FamilySums, finest_sums as compute_finest_sums, floor_sums as compute_floor_sums
 from ttu_tower.primary.despike import despike
 from ttu_tower.primary.gaps import fill_short, fill_within_runs
@@ -34,13 +34,14 @@ class Span:
     side, assembled from the neighbouring half-hours (or NaN where one is a
     placeholder). `file_run_id` is -1 for placeholder samples, else a tag
     shared by consecutive accepted half-hours within the span - see
-    `fill_within_runs`.
+    `fill_within_runs`. `core_present` is the core's `StageA.present`.
     """
 
     g0: int
     series: dict[str, np.ndarray]
     file_run_id: np.ndarray
     core_bounds_removed: dict[str, np.ndarray]
+    core_present: dict[str, np.ndarray]
 
 
 @dataclass
@@ -98,6 +99,7 @@ def build_span(stage_a_by_half_hour: dict[int, StageA | None], h: int, margin: i
     }
 
     core_bounds_removed = {v: np.zeros(SAMPLES_PER_HALF_HOUR, dtype=bool) for v in variables}
+    core_present = {v: np.zeros(SAMPLES_PER_HALF_HOUR, dtype=bool) for v in variables}
     for hh, (dst_lo, dst_hi, src_lo, src_hi) in slices.items():
         file_run_id[dst_lo:dst_hi] = tags[hh]
         a = stage_a_by_half_hour.get(hh)
@@ -107,13 +109,37 @@ def build_span(stage_a_by_half_hour: dict[int, StageA | None], h: int, margin: i
             series[var][dst_lo:dst_hi] = getattr(a, var)[src_lo:src_hi]
         if hh == h:
             core_bounds_removed = a.bounds_removed
+            core_present = a.present
 
-    return Span(g0=g0, series=series, file_run_id=file_run_id, core_bounds_removed=core_bounds_removed)
+    return Span(g0=g0, series=series, file_run_id=file_run_id, core_bounds_removed=core_bounds_removed,
+                core_present=core_present)
 
 
 def _slot_flag_intervals(flag: np.ndarray, slots: list[int]) -> tuple[np.ndarray, np.ndarray]:
     starts = np.array([SAMPLES_PER_SLOT * k for k, f in zip(slots, flag) if f], dtype=np.int64)
     return starts, starts + SAMPLES_PER_SLOT
+
+
+def _flagged_present_rows(flags_df: pd.DataFrame, present: dict[str, np.ndarray], core_g0: int, slots: list[int],
+                          boom: int) -> list[tuple]:
+    """`slot_qc` rows (slot, boom, variable, "flagged_<test>", fraction): the
+    fraction of each core slot's samples that are present (non-NaN in the
+    source file) and inside one of `test`'s intervals for `variable`. A
+    boom-level test counts against each of BOOM_LEVEL_VARIABLES. Only nonzero
+    fractions are kept.
+    """
+    rows = []
+    for (test, variable), g in flags_df.groupby(["test", "variable"], dropna=False, observed=True):
+        flagged = np.zeros(SAMPLES_PER_HALF_HOUR, dtype=bool)
+        for s, e in zip(g["start"].to_numpy() - core_g0, g["end"].to_numpy() - core_g0):
+            flagged[s:e] = True
+        variables = BOOM_LEVEL_VARIABLES if pd.isna(variable) else (str(variable),)
+        for var in variables:
+            counts = (flagged & present[var]).reshape(len(slots), SAMPLES_PER_SLOT).sum(axis=1)
+            for k, n in zip(slots, counts):
+                if n:
+                    rows.append((k, boom, var, f"flagged_{test}", float(n) / SAMPLES_PER_SLOT))
+    return rows
 
 
 def _record_trace(trace, core, despiked, despike_refs, despiked_x, filled_mask, slow_smoothed, l1_masks, final_masks_var):
@@ -211,9 +237,8 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
         k = hann_kernel(qc.slow.smoothing_width_s[var])
         slow_smoothed[var] = smooth(filled[var], l1_slow[var], k, c)
 
-    # 6. vpts, from the filled ts (and from the raw ts, for the "present" layer)
+    # 6. vpts, from the filled ts
     vpts_filled = compute_vpts(filled["ts"], boom)
-    vpts_present = compute_vpts(span.series["ts"], boom)
 
     # 7. first-layer masks
     finite = {var: np.isfinite(filled[var]) for var in _SONIC_TS}
@@ -275,12 +300,12 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
     finest_unexcised = compute_finest_sums(unexcised, unexcised_family, core_g0, finest_b0, _N_FINEST)
 
     # 12. per-slot coverage, means, slot_qc, mask_differs
-    present = {v: np.isfinite(span.series[v][core]) for v in _SONIC_TS}
-    present["vpts"] = np.isfinite(vpts_present[core])
+    present = {v: span.core_present[v] for v in _SONIC_TS}
+    present["vpts"] = span.core_present["ts"]
     filled_finite = {v: np.isfinite(filled[v][core]) for v in _SONIC_TS}
     filled_finite["vpts"] = np.isfinite(vpts_filled[core])
     l1_core = {v: l1_masks[v][core] for v in _MASK_VARS}
-    slow_present = {v: np.isfinite(span.series[v][core]) for v in _SLOW}
+    slow_present = {v: span.core_present[v] for v in _SLOW}
     slow_usable = {v: slow_smoothed[v][1][core] for v in _SLOW}
 
     coverage_rows, slot_qc_rows, mask_differs = [], [], {}
@@ -310,6 +335,9 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
 
         mask_differs[k] = bool(any((unexcised_masks_var[v][sl] & ~final_masks_var[v][sl]).any() for v in _MASK_VARS))
 
+    flags_df = flag_rows.frame()
+    slot_qc_rows += _flagged_present_rows(flags_df, span.core_present, core_g0, slots, boom)
+
     coverage_df = schema.cast("coverage", pd.DataFrame(coverage_rows, columns=["slot", "boom", "variable", "layer", "fraction"]))
     slot_qc_df = schema.cast("slot_qc", pd.DataFrame(slot_qc_rows, columns=["slot", "boom", "variable", "stat", "value"]))
 
@@ -325,7 +353,7 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
         _record_trace(trace, core, despiked, despike_refs, despiked_x, filled_mask, slow_smoothed, l1_masks, final_masks_var)
 
     return StageBOut(
-        coverage=coverage_df, means=means_df, slot_qc=slot_qc_df, flags=flag_rows.frame(), mask_differs=mask_differs,
+        coverage=coverage_df, means=means_df, slot_qc=slot_qc_df, flags=flags_df, mask_differs=mask_differs,
         final_series=final_series, final_masks=final_family,
         unexcised_series=unexcised, unexcised_masks=unexcised_family,
         floor=floor, floor_unexcised=floor_unexcised, finest=finest, finest_unexcised=finest_unexcised,

@@ -1267,6 +1267,11 @@ viewed interval or the whole period like the others.
     and the label a power of ten, e.g. "(×10⁻³ K m/s)".
   - Date axes, log-decade axes, fixed-tick axes and unlabelled axes are never scaled.
   - Summary → Spectra's y-axis now carries the spectrum's unit.
+- **Flag rug labels, 2026-10-14:** rug rows with longer names lost their labels, e.g.
+  `dropouts · sonic`, `excursion · sonic` and `coupled · sonic`. pyqtgraph drops any tick label
+  wider than its axis, and the Series panel's left axes are fixed at 72 px. The panel now widens
+  every plot's left axis to the longest rug name, so the labels show and the time axes stay
+  aligned.
 - **The low-level jet tool** lives in its own Jets tabs; see `docs/llj/llj-plan.md`.
 - **Scatter tab:** with slots brushed, "show: all slots / selection only" picks the points.
   The statistics, lines and fits use only the shown points. A "ring the selection" check box,

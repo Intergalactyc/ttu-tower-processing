@@ -2,6 +2,7 @@
 DataFrame}`. `write_validation_reports` runs the requested checks (default:
 all) and writes their CSVs under `<run dir>/reports/validation/<check>/`.
 """
+import logging
 import multiprocessing
 import os
 import tempfile
@@ -23,9 +24,11 @@ from ttu_tower.post.classify import stability_classes
 from ttu_tower.primary.despike import despike
 from ttu_tower.primary.gaps import fill_short
 from ttu_tower.primary.ladder import RUNG_SECONDS
-from ttu_tower.primary.report import flags_report
+from ttu_tower.primary.report import flags_report, predates_flagged_counts
 from ttu_tower.primary.stage_a import stage_a
 from ttu_tower.validation.synthetic import correlated_ou, inject_spikes, ou
+
+_logger = logging.getLogger(__name__)
 
 CHECK_NAMES = (
     "tau_agreement", "despike_calibration", "its_bias", "interp_bias",
@@ -426,12 +429,15 @@ def _survival_by_variant(boom_final: pd.DataFrame, slot_boom: pd.DataFrame, clas
 def yield_report(primary_dir: Path, tertiary_dir: Path, classes: pd.Series) -> dict[str, pd.DataFrame]:
     flags_df = read_table(Path(primary_dir) / "data" / "flags")
     coverage_df = read_table(Path(primary_dir) / "data" / "coverage")
+    slot_qc_df = read_table(Path(primary_dir) / "data" / "slot_qc")
     slots_df = pd.read_parquet(Path(primary_dir) / "slots.parquet")
     slot_boom = read_table(Path(primary_dir) / "data" / "slot_boom")
     boom_final = read_table(Path(tertiary_dir) / "data" / "boom_final")
 
+    if predates_flagged_counts(slot_qc_df, flags_df):
+        _logger.warning("flag_rates left empty: this run predates the per-slot flagged_<test> counts; rerun primary")
     return {
-        "flag_rates": flags_report(flags_df, coverage_df, slots_df),
+        "flag_rates": flags_report(slot_qc_df, coverage_df, slots_df),
         "survival_by_variant": _survival_by_variant(boom_final, slot_boom, classes),
     }
 

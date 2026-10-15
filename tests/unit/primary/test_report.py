@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ttu_tower.config import config_from_dict
 from ttu_tower.io.runs import find_home
@@ -58,3 +59,44 @@ def test_write_primary_reports_produces_all_csvs(tmp_path, monkeypatch):
     coverage_df = pd.read_csv(reports_dir / "primary_coverage.csv")
     assert {"mean", "q10", "q50", "q90", "frac_ge_c"} <= set(coverage_df.columns)
     assert (coverage_df["mean"].between(0, 1)).all()
+
+
+def _slots(n):
+    return pd.DataFrame({"slot": np.arange(n, dtype=np.int64),
+                         "slot_start": pd.date_range("2014-04-01", periods=n, freq="10min", tz="Etc/GMT+6")})
+
+
+def test_flags_report_counts_only_present_samples():
+    from ttu_tower.primary.report import flags_report
+
+    coverage = pd.DataFrame([(0, 1, "ts", "present", 0.5), (1, 1, "ts", "present", 1.0)],
+                            columns=["slot", "boom", "variable", "layer", "fraction"])
+    slot_qc = pd.DataFrame([(0, 1, "ts", "flagged_unchecked", 0.1), (1, 1, "ts", "flagged_unchecked", 0.05),
+                            (0, 1, "ts", "skew", 0.3)],
+                           columns=["slot", "boom", "variable", "stat", "value"])
+    report = flags_report(slot_qc, coverage, _slots(2))
+    overall = report[report["month"] == "overall"]
+    assert overall["test"].tolist() == ["unchecked"]
+    assert overall["fraction"].iloc[0] == pytest.approx(0.15 / 1.5)
+
+
+def test_second_layer_report_counts_merged_slots():
+    from ttu_tower.primary.report import second_layer_report
+
+    flags = pd.DataFrame({"start": [0], "end": [60_000], "test": ["direction"], "kind": ["quality"],
+                          "boom": [1], "variable": [None]})
+    report = second_layer_report(flags, _slots(4), [1])
+    direction = report[report["test"] == "direction"]["fraction"].iloc[0]
+    assert direction == pytest.approx(2 / 4)  # one merged row, two slots
+
+
+def test_predates_flagged_counts():
+    from ttu_tower.primary.report import predates_flagged_counts
+
+    old_qc = pd.DataFrame([(0, 1, "ts", "skew", 0.3)], columns=["slot", "boom", "variable", "stat", "value"])
+    new_qc = pd.concat([old_qc, pd.DataFrame([(0, 1, "ts", "flagged_spike", 0.01)], columns=old_qc.columns)])
+    flags = pd.DataFrame({"start": [0], "end": [10], "test": ["spike"], "kind": ["quality"], "boom": [1],
+                          "variable": ["ts"]})
+    assert predates_flagged_counts(old_qc, flags)
+    assert not predates_flagged_counts(new_qc, flags)
+    assert not predates_flagged_counts(old_qc, flags.iloc[0:0])

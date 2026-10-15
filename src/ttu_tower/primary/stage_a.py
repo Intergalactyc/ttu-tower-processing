@@ -54,6 +54,18 @@ def apply_bounds(si: dict[str, np.ndarray], cfg_bounds) -> tuple[dict[str, np.nd
     return out, removed
 
 
+def source_present(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Non-NaN in the source file, per Earth-frame variable. ue, vn and w are
+    each a mix of all three raw sonic components, so they're present only
+    where all three are.
+    """
+    sonic = ~(np.isnan(raw["u"]) | np.isnan(raw["v"]) | np.isnan(raw["w"]))
+    out = {"ue": sonic, "vn": sonic.copy(), "w": sonic.copy()}
+    for var in ("ts", "t", "rh", "p"):
+        out[var] = ~np.isnan(raw[var])
+    return out
+
+
 def couple_triplet(u: np.ndarray, v: np.ndarray, w: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """A sample NaN in any of u, v, w becomes NaN in all three."""
     bad = np.isnan(u) | np.isnan(v) | np.isnan(w)
@@ -102,10 +114,12 @@ class StageA:
     rh: np.ndarray
     p: np.ndarray
     bounds_removed: dict[str, np.ndarray]
+    present: dict[str, np.ndarray]  # source_present: non-NaN in the source file
 
 
 def stage_a(raw: dict[str, np.ndarray], boom: int, cfg) -> StageA:
     """The full Stage A chain for one boom's raw arrays. `cfg` is `[qc]`."""
+    present = source_present(raw)
     si = to_si(raw)
     si, removed = apply_bounds(si, cfg.bounds)
     u, v, w = couple_triplet(si["u"], si["v"], si["w"])
@@ -113,4 +127,5 @@ def stage_a(raw: dict[str, np.ndarray], boom: int, cfg) -> StageA:
     ue, vn = rotate_to_earth(u, v)
     # the triplet's bounds mask is shared, so it transfers to the rotated components as-is
     removed = {_EARTH_NAMES.get(var, var): mask for var, mask in removed.items()}
-    return StageA(ue=ue, vn=vn, w=w, ts=si["ts"], t=si["t"], rh=si["rh"], p=si["p"], bounds_removed=removed)
+    return StageA(ue=ue, vn=vn, w=w, ts=si["ts"], t=si["t"], rh=si["rh"], p=si["p"], bounds_removed=removed,
+                  present=present)

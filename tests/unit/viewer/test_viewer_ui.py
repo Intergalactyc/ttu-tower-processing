@@ -347,6 +347,32 @@ def test_panel_tabs_wrap_onto_more_rows_when_narrow(window, qtbot):
     tabs.setCurrentWidget(window.profiles)
     assert [b.text() for b in tabs.buttons() if b.isChecked()] == ["Profiles"]
 
+
+def test_every_rug_row_keeps_its_label(qtbot):
+    import pyqtgraph as pg
+    from PySide6.QtGui import QImage, QPainter
+
+    configure_pyqtgraph()
+    graphics = pg.GraphicsLayoutWidget()
+    qtbot.addWidget(graphics)
+    series, rug = graphics.addPlot(row=0, col=0), graphics.addPlot(row=1, col=0)
+    names = ["dropouts · ts", "dropouts · sonic", "excursion · sonic", "coupled · sonic"]
+    for plot in (series, rug):
+        plot.getAxis("left").setWidth(72)
+    rug.getAxis("left").setTicks([list(enumerate(names))])
+    rug.setYRange(-0.7, len(names) - 0.3, padding=0)
+    graphics.resize(600, 300)
+    graphics.show()
+    qtbot.waitExposed(graphics)
+    SeriesPanel._fit_left_axes([series, rug], rug)
+    qtbot.wait(50)
+    assert series.getAxis("left").fixedWidth == rug.getAxis("left").fixedWidth > 72  # the time axes stay aligned
+    image = QImage(400, 400, QImage.Format.Format_ARGB32)
+    painter = QPainter(image)
+    drawn = [text for _, _, text in rug.getAxis("left").generateDrawSpecs(painter)[2]]
+    painter.end()
+    assert drawn == names
+
 def test_the_step_arrows_move_by_a_whole_or_half_interval(window):
     _, _, x, _ = _a_point(window.plots[0])
     window.set_x_range(x - 3600, x + 3600)

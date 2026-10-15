@@ -616,8 +616,9 @@ sample, so window grids anchor correctly.
 - `tilt_correct(u, v, w, boom) -> (u, v, w)`: exact port of `fix_sonic_tilt_misalignment`
   (R_total = Rnz·Ry·Rz, γ = `TILT_ANGLES[boom]`, θ = `TILT_AXES[boom]`, in degrees).
 - `rotate_to_earth(u, v) -> (ue, vn)` = (v, −u).
-- `stage_a(raw, boom, cfg) -> StageA` (dataclass: `ue, vn, w, ts, t, rh, p` float64, and the
-  bounds removal masks).
+- `stage_a(raw, boom, cfg) -> StageA` (dataclass: `ue, vn, w, ts, t, rh, p` float64, the
+  bounds removal masks, and the `present` masks: non-NaN in the source file, where ue, vn and w
+  need all three raw sonic components).
 
 **`primary/despike.py`**: `despike(x, g0, cfg_despike, min_mad, c) -> Despiked(x, spike,
 excursion, unchecked)`.
@@ -1025,8 +1026,9 @@ slot_b)` pair. The runner resolves `[period]` against `[output].timezone` with
       from it) and its weights;
   11. `floor_sums` and `finest_sums` for both variants, over the core's 12,288 floor and
       192 finest blocks;
-  12. per slot: coverage rows, `slot_means`, `slot_qc` rows, `mask_differs` (any core sample of
-      ue/vn/w/ts/vpts finite in the unexcised series but not usable in the final mask).
+  12. per slot: coverage rows, `slot_means`, `slot_qc` rows (including the `flagged_<test>`
+      counts of present samples, from the core's merged flag rows), `mask_differs` (any core
+      sample of ue/vn/w/ts/vpts finite in the unexcised series but not usable in the final mask).
 - Flag rows are clipped to the core.
 - Keep only core results. `StageBOut` also carries the core's final and unexcised series and
   masks, for rawrung and slot statistics.
@@ -1092,7 +1094,8 @@ finished, summary}`, where `summary` is the unit summary record of §3.9.
 `<run dir>/reports/`:
 - `primary_files.csv`: file status counts, overall and by month.
 - `primary_slots.csv`: slot_boom status counts per boom, by month.
-- `primary_flags.csv`: per boom × variable × test, flagged-sample fraction of present samples,
+- `primary_flags.csv`: per boom × variable × test, flagged-sample fraction of present samples
+  (the numerator counts only present samples, from `slot_qc` `flagged_<test>` rows),
   overall and by month.
 - `primary_coverage.csv`: per boom × variable × layer: mean, 10/50/90% quantiles, and the
   fraction of computed slots ≥ c.
@@ -1394,7 +1397,8 @@ Series[slot → class]` uses `rib` for `post.stability.pair`.
 **`post/report.py`** (`ttu-report --stability`):
 - `stability_yield.csv`: per class × boom × variant, the fraction of computed slots whose
   ustar, (wvpts, cov) and ti survived filtering.
-- `stability_flags.csv`: per class × boom × test, flagged-sample fractions.
+- `stability_flags.csv`: per class × boom × test, flagged-sample fractions of present samples,
+  numerator and denominator summed over the test's variables (as `primary_flags.csv`).
 - `stability_tau.csv`: per class × boom × variant, the τ source and status distribution and
   the median selected τ.
 

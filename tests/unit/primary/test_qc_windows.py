@@ -9,7 +9,7 @@ def _cfg(**overrides):
     defaults = dict(
         resolution_window_s=100.0, resolution_stride_s=50.0, resolution_bins=100,
         ts_resolution_bins=30, max_empty_bin_fraction=0.8, dropout_min_run=10,
-        ts_dropout_min_run=50, ts_repeat_tolerance=0.05, max_dropout_fraction=0.05,
+        ts_dropout_min_run=50, ts_repeat_tolerance=0.005, max_dropout_fraction=0.05,
         dropout_min_windows=2, skew_range=(-2.0, 2.0), kurt_range=(1.0, 8.0),
     )
     defaults.update(overrides)
@@ -68,6 +68,22 @@ def test_ts_dropouts_flag_on_exact_repeats_within_tolerance():
 
     (_, _), (drop_s, _) = resolution_dropouts(x, g0=0, cfg_windows=cfg, c=0.75, is_ts=True)
     assert len(drop_s) > 0
+
+
+def test_ts_one_count_steps_are_not_repeats():
+    # A quiet, quantized ts that moves one 0.01-K count every sample: smooth,
+    # but never stuck, so nothing is a dropout.
+    rng = np.random.default_rng(4)
+    n = 30000
+    x = 280.0 + 0.01 * np.cumsum(rng.choice([-1, 1], n))
+
+    (_, _), (drop_s, _) = resolution_dropouts(x, g0=0, cfg_windows=_cfg(), c=0.75, is_ts=True)
+    assert len(drop_s) == 0
+
+    # a tolerance of several counts calls the same series stuck throughout
+    loose = _cfg(ts_repeat_tolerance=0.05)
+    (_, _), (drop_s2, _) = resolution_dropouts(x, g0=0, cfg_windows=loose, c=0.75, is_ts=True)
+    assert len(drop_s2) > 0
 
 
 def test_dropouts_skipped_in_resolution_flagged_windows():

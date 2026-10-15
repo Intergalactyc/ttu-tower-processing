@@ -79,3 +79,17 @@ def test_write_stability_reports_produces_all_csvs(tmp_path, monkeypatch, raw_di
     assert set(tau_df["variant"].unique()) == {"mrd", "naive", "mrd_unexcised"}
     fractions_by_group = tau_df.groupby(["stability_class", "boom", "variant"])["fraction"].sum()
     assert (fractions_by_group.round(6) == 1.0).all()
+
+
+def test_stability_flags_report_boom_level_test_over_its_variables():
+    from ttu_tower.post.report import stability_flags_report
+
+    classes = pd.Series({0: "stable", 1: "stable"})
+    variables = ("ue", "vn", "w", "ts")
+    coverage = pd.DataFrame([(k, 1, v, "present", 1.0) for k in (0, 1) for v in variables],
+                            columns=["slot", "boom", "variable", "layer", "fraction"])
+    slot_qc = pd.DataFrame([(0, 1, v, "flagged_direction", 1.0) for v in variables],
+                           columns=["slot", "boom", "variable", "stat", "value"])
+    report = stability_flags_report(classes, slot_qc, coverage, [1])
+    assert report["test"].tolist() == ["direction"]
+    assert report["fraction"].iloc[0] == pytest.approx(0.5)  # one of two slots, on every variable

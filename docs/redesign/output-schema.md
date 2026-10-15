@@ -166,7 +166,8 @@ Columns: `slot`, `boom`, `variable`, `layer`, `fraction`.
 
 - `variable` ∈ {`ue`, `vn`, `w`, `ts`, `vpts`, `t`, `rh`, `p`, `momentum`, `heat`}.
 - `layer`:
-  - `present`: non-NaN in the source file.
+  - `present`: non-NaN in the source file. ue, vn and w each mix all three raw sonic
+    components, so they need all three; vpts follows ts.
   - `filled`: finite after the ≤ 1-s interpolation (the counterpart of `unexcised` below).
   - `usable_l1`: first-layer usable.
   - `usable`: final usable.
@@ -197,6 +198,11 @@ Columns: `slot`, `boom`, `variable`, `stat`, `value`.
 - `ue`, `vn`, `w`, `ts` × `skew`, `kurt`: higher moments (NaN if coverage < c).
 - `wd` / `mean_l1`, `ws` / `mean_l1`, `ws` / `std_l1`: the first-layer inputs to the
   `direction` and `bounce` tests.
+- `ue`, `vn`, `w`, `ts`, `t`, `rh`, `p` × `flagged_<test>`: the fraction of the slot's samples
+  that are present (§3.4) and inside one of the test's flag intervals, for every test of §3.7
+  that applies to the variable (a boom-level test counts against each of ue, vn, w and ts).
+  Rows only where the fraction is nonzero. The yield reports use these, so a flag over missing
+  data counts for nothing.
 
 ### 3.7 `flags`: the interval-keyed flag store
 

@@ -23,7 +23,8 @@ def _stage_a(seed=0, ue=5.0, vn=0.0, w=0.0, ts=290.0, t=290.0, rh=0.5, p=90.0, n
     }
     if mutate is not None:
         values = mutate(values)
-    return StageA(**values, bounds_removed={v: np.zeros(n, dtype=bool) for v in _VARS})
+    return StageA(**values, bounds_removed={v: np.zeros(n, dtype=bool) for v in _VARS},
+                  present={v: ~np.isnan(values[v]) for v in _VARS})
 
 
 def _cfg(**sections):
@@ -271,3 +272,75 @@ def test_sonic_bounds_flags_use_earth_frame_names():
     out = stage_b(build_span({100: a}, h=100, margin=30_000), h=100, boom=1, cfg=cfg)
     bounds = out.flags[out.flags["test"] == "bounds"]
     assert set(bounds["variable"].astype(str)) == {"ue", "vn", "w"}
+
+
+# --- present layer and flagged_<test> counts ----------------------------------------
+
+def _slot_qc_value(out, slot, variable, stat):
+    row = out.slot_qc[(out.slot_qc["slot"] == slot) & (out.slot_qc["variable"] == variable)
+                      & (out.slot_qc["stat"] == stat)]
+    return None if row.empty else float(row["value"].iloc[0])
+
+
+def _coverage_value(out, slot, variable, layer):
+    row = out.coverage[(out.coverage["slot"] == slot) & (out.coverage["variable"] == variable)
+                       & (out.coverage["layer"] == layer)]
+    return float(row["fraction"].iloc[0])
+
+
+def test_present_layer_counts_bounds_removed_samples():
+    from ttu_tower.primary.stage_a import stage_a
+
+    cfg = _cfg()
+    rng = np.random.default_rng(5)
+    raw = {"u": rng.normal(10, 1, N), "v": rng.normal(0, 1, N), "w": rng.normal(0, 0.2, N),
+           "ts": rng.normal(60, 0.5, N), "t": rng.normal(60, 0.1, N), "rh": rng.normal(50, 1, N),
+           "p": rng.normal(26.6, 0.01, N)}
+    raw["u"][1_000:4_000] = 500.0  # out of the sonic bounds, in source units
+    raw["ts"][40_000:40_010] = np.nan  # missing in the source file
+    out = stage_b(build_span({100: stage_a(raw, 1, cfg.qc)}, h=100, margin=30_000), h=100, boom=1, cfg=cfg)
+
+    for var in ("ue", "vn", "w"):
+        assert _coverage_value(out, 300, var, "present") == 1.0
+        assert _slot_qc_value(out, 300, var, "flagged_bounds") == pytest.approx(3_000 / 30_000)
+    assert _coverage_value(out, 301, "ts", "present") == pytest.approx(1 - 10 / 30_000)
+    assert _coverage_value(out, 301, "vpts", "present") == pytest.approx(1 - 10 / 30_000)
+
+
+def test_flags_over_missing_samples_are_not_counted():
+    def inject(values):
+        values = dict(values)
+        values["ts"][30_000:45_000] = np.nan  # 5 min missing: too long for any despiking reference
+        return values
+
+    cfg = _cfg()
+    a100 = _stage_a(seed=100, mutate=inject)
+    out = stage_b(build_span({99: _stage_a(seed=0), 100: a100, 101: _stage_a(seed=200)}, h=100, margin=30_000),
+                  h=100, boom=1, cfg=cfg)
+
+    unchecked = out.flags[(out.flags["test"] == "unchecked") & (out.flags["variable"] == "ts")]
+    assert (unchecked["end"] - unchecked["start"]).sum() > 0  # the flag still covers the gap...
+    assert _slot_qc_value(out, 301, "ts", "flagged_unchecked") is None  # ...but no present sample is in it
+    assert _coverage_value(out, 301, "ts", "present") == 0.5
+
+
+def test_boom_level_flag_counts_present_samples_of_each_variable():
+    from ttu_tower.math.polar import bearing_to_vector
+
+    def inject(values):
+        values = dict(values)
+        for var in ("ue", "vn", "w"):
+            values[var][0:6_000] = np.nan
+        return values
+
+    ue0, vn0 = bearing_to_vector(5.0, 140.0)  # inside the shadow sector: every slot is flagged `direction`
+    a100 = _stage_a(seed=100, ue=ue0, vn=vn0, mutate=inject)
+    cfg = _cfg()
+    out = stage_b(build_span({99: _stage_a(seed=0), 100: a100, 101: _stage_a(seed=200)}, h=100, margin=30_000),
+                  h=100, boom=1, cfg=cfg)
+
+    for var in ("ue", "vn", "w"):
+        assert _slot_qc_value(out, 300, var, "flagged_direction") == pytest.approx(0.8)
+        assert _slot_qc_value(out, 301, var, "flagged_direction") == 1.0
+    assert _slot_qc_value(out, 300, "ts", "flagged_direction") == 1.0
+    assert _slot_qc_value(out, 300, "t", "flagged_direction") is None  # boom-level tests skip the slow sensors

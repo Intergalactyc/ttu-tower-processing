@@ -87,7 +87,7 @@ a slot's results don't depend on the period's limits.
 |---|---|---|---|---|
 | `min_coverage` | float | `0.75` | DES | The coverage threshold *c*: the minimum usable fraction for a partial block or window to count (plan.md §3.5). Range (0, 1]. |
 | `max_fill_gap_samples` | int | `50` | PROD | Interior data gaps up to this many samples (1 s) are filled linearly and count as usable. Old: `max_interpolation_gap`. |
-| `unusable_tests` | list[str] | `["unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce"]` | DES | Tests whose intervals make samples unusable; each must be a `quality` test. `bounds` and `spike` are allowed but not in the default: their samples are already removed and, if the gap is short, filled. Recorded in `run_meta.json`. |
+| `unusable_tests` | list[str] | `["unchecked", "resolution", "skew", "kurt", "direction", "bounce"]` | DES | Tests whose intervals make samples unusable; each must be a `quality` test. `bounds` and `spike` are allowed but not in the default: their samples are already removed and, if the gap is short, filled. `dropouts` is left out too: still computed and recorded in `flags`, but on the full-year data it found no stuck sensors, only quiet or smooth signal and one-count quantization in dead calm. Recorded in `run_meta.json`. |
 
 ### `[qc.bounds]` (SI units, applied after unit conversion)
 
@@ -123,7 +123,7 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 | `max_empty_bin_fraction` | float | `0.8` | PROD | A window is flagged `resolution` when more than this fraction of its bins is empty. Old: `resolution_capacity`. |
 | `dropout_min_run` | int | `10` | PROD | Minimum run of consecutive same-bin sample pairs that counts as a dropout (u, v, w). Old: `dropout_run_length`. |
 | `ts_dropout_min_run` | int | `50` | PROD | The same, for ts. Old: `ts_dropout_run_length`. |
-| `ts_repeat_tolerance` | float | `0.05` | PROD | K. For ts, "same value" means \|Δ\| ≤ this. Old: `ts_dropout_tolerance`. |
+| `ts_repeat_tolerance` | float | `0.005` | DES | K. For ts, "same value" means \|Δ\| ≤ this. Half of ts's 0.01-K quantization step, so only exact repeats count. The old production value, 0.05 K (5 steps), covered 80% of consecutive 50-Hz pairs on the full-year data and flagged about 55% of 100-s windows, mostly smooth or quiet ts rather than stuck values; 0.005 was the old code's default. Old: `ts_dropout_tolerance`. |
 | `max_dropout_fraction` | float | `0.05` | PROD | A window is flagged `dropouts` when more than this fraction of its sample pairs are dropout pairs. Old: `dropout_capacity`, which applied to a whole 30-min record. |
 | `dropout_min_windows` | int | `2` | OLDC | A pair is a dropout only if marked in at least this many overlapping windows. |
 | `skew_range` | [float, float] | `[-2.0, 2.0]` | LIT (VM97), **provisional** | Slot skewness (after a linear detrend) outside this range → `skew`. |
@@ -283,7 +283,7 @@ booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 [qc]
 min_coverage = 0.75
 max_fill_gap_samples = 50
-unusable_tests = ["unchecked", "resolution", "dropouts", "skew", "kurt", "direction", "bounce"]
+unusable_tests = ["unchecked", "resolution", "skew", "kurt", "direction", "bounce"]
 
 [qc.bounds]
 sonic = [-45.0, 45.0]
@@ -307,7 +307,7 @@ ts_resolution_bins = 30
 max_empty_bin_fraction = 0.8
 dropout_min_run = 10
 ts_dropout_min_run = 50
-ts_repeat_tolerance = 0.05
+ts_repeat_tolerance = 0.005
 max_dropout_fraction = 0.05
 dropout_min_windows = 2
 skew_range = [-2.0, 2.0]

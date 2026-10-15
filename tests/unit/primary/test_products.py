@@ -25,7 +25,8 @@ def _stage_a(seed, ue=5.0, vn=0.0, w=0.0, ts=290.0, t=290.0, rh=0.5, p=90.0, n=N
     }
     if mutate is not None:
         values = mutate(values)
-    return StageA(**values, bounds_removed={v: np.zeros(n, dtype=bool) for v in _VARS})
+    return StageA(**values, bounds_removed={v: np.zeros(n, dtype=bool) for v in _VARS},
+                  present={v: ~np.isnan(values[v]) for v in _VARS})
 
 
 def _cfg(**sections):

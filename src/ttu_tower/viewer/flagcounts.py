@@ -21,6 +21,8 @@ def boom_counts(run, index, boom: int, tests=None) -> dict:
     keys: dict[tuple, int] = {}
     totals: list[np.ndarray] = []
     for path in index.table("flags").paths(booms=[boom]):
+        if pq.read_metadata(path).num_rows == 0:
+            continue  # an empty fragment's categorical columns are null-typed, which a string filter rejects
         table = pq.read_table(path, columns=["start", "end", "test", "variable"],
                               filters=[("test", "in", list(tests))] if tests is not None else None)
         if table.num_rows == 0:

@@ -1,11 +1,14 @@
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from ttu_tower import schema
 from ttu_tower.constants import HEIGHTS
-from ttu_tower.flags import FlagStore
+from ttu_tower.flags import FlagRows, FlagStore
+from ttu_tower.io.store import write_fragment
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer import flagcounts, profiles, qcsummary, timeline
 from ttu_tower.viewer.catalog import Quantity
@@ -32,6 +35,20 @@ def test_per_slot_samples_match_a_brute_force_count():
                 s0 = (slot_a + k) * SAMPLES_PER_SLOT
                 expected[r, k] += max(0, min(e, s0 + SAMPLES_PER_SLOT) - max(s, s0))
         assert (flagcounts.per_slot_samples(starts, ends, rows, rows_n, slot_a, n_slots) == expected).all()
+
+
+def test_boom_counts_skip_an_empty_flags_fragment(tmp_path):
+    # an empty fragment's categorical columns are written null-typed
+    empty = schema.cast("flags", pd.DataFrame(columns=["start", "end", "test", "kind", "boom", "variable"]))
+    rows = FlagRows()
+    s0 = 100 * SAMPLES_PER_SLOT
+    rows.add("spike", 1, "ts", np.array([s0 + 10]), np.array([s0 + 13]))
+    paths = [write_fragment(tmp_path, "empty", empty), write_fragment(tmp_path, "one", rows.frame())]
+    index = SimpleNamespace(table=lambda name: SimpleNamespace(paths=lambda booms: paths))
+    run = SimpleNamespace(period=(100, 102))
+
+    counts = flagcounts.boom_counts(run, index, 1, tests=["spike"])
+    assert counts[("spike", "ts")].tolist() == [3, 0]
 
 
 def test_flag_counts_match_the_flag_store(primary_run):

@@ -40,7 +40,7 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.qc.despike.window_s == 300.0
     assert cfg.qc.despike.stride_s == 30.0
     assert cfg.qc.despike.z_threshold == {
-        "ue": 3.5, "vn": 3.5, "w": 3.5, "ts": 3.5, "t": 3.5, "rh": 3.5, "p": 6.0,
+        "ue": 5.0, "vn": 5.0, "w": 5.0, "ts": 5.0, "t": 5.0, "rh": 5.0, "p": 5.0,
     }
     assert cfg.qc.despike.max_spike_samples == 3
     assert cfg.qc.despike.min_mad == {
@@ -159,8 +159,8 @@ def test_z_threshold_overrides_one_variable_and_keeps_the_rest_at_default():
     cfg = config_from_dict(raw, default_tag="t")
 
     assert cfg.qc.despike.z_threshold["p"] == 8.0
-    assert cfg.qc.despike.z_threshold["ue"] == 3.5
-    assert cfg.qc.despike.z_threshold["t"] == 3.5
+    assert cfg.qc.despike.z_threshold["ue"] == 5.0
+    assert cfg.qc.despike.z_threshold["t"] == 5.0
 
 
 def test_unknown_key_in_z_threshold_table_raises():

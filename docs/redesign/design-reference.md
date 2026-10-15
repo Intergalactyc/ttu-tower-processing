@@ -168,8 +168,8 @@ a dependency; the pieces needed are ported.
   *excursion*, kept and recorded for a future discontinuity flag. A sliding reference alone
   would clip genuine extremes in intermittent stable turbulence; the duration rule prevents
   that, and splitting instead at every large jump would undo it (in a prototype that removed a
-  third of a genuine burst's samples). The threshold (3.5 robust σ) is provisional and
-  recalibrated in the first run. The MAD has a floor (`min_mad`): one
+  third of a genuine burst's samples). The threshold (5 robust σ, raised from 3.5 after
+  the first full-year run) is provisional. The MAD has a floor (`min_mad`): one
   quantization step for ts, t, rh and p, measured on real files; 0.001 m/s for the winds, whose
   stored values are effectively continuous. Samples with no valid reference within half a
   window are flagged `unchecked`.

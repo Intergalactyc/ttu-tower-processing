@@ -37,11 +37,18 @@ def _cfg(raw_dir, tag):
     return config_from_dict(raw)
 
 
+def _out_of_bounds_burst(h, boom, df):
+    # every file gets a flag to report, whatever the despike threshold
+    df = df.copy()
+    df.loc[df.index[1000:1003], f"u_{boom}"] = 500.0
+    return df
+
+
 @pytest.fixture(scope="module")
 def raw_dir(tmp_path_factory):
     d = tmp_path_factory.mktemp("post_report") / "raw"
     rng = np.random.default_rng(13)
-    write_raw_dataset(d, _HALF_HOURS, _BOOMS, rng)
+    write_raw_dataset(d, _HALF_HOURS, _BOOMS, rng, mutate=_out_of_bounds_burst)
     return d
 
 

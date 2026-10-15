@@ -30,12 +30,19 @@ def _cfg(raw_dir, tag, start, end, **sections):
     return config_from_dict(raw)
 
 
+def _out_of_bounds_burst(h, boom, df):
+    # every file gets a flag to report, whatever the despike threshold
+    df = df.copy()
+    df.loc[df.index[1000:1003], f"u_{boom}"] = 500.0
+    return df
+
+
 def test_write_primary_reports_produces_all_csvs(tmp_path, monkeypatch):
     monkeypatch.setenv("TTU_TOWER_HOME", str(tmp_path / "home"))
     raw_dir = tmp_path / "raw"
     half_hours = list(range(7000, 7008))
     rng = np.random.default_rng(3)
-    write_raw_dataset(raw_dir, half_hours, [1], rng)
+    write_raw_dataset(raw_dir, half_hours, [1], rng, mutate=_out_of_bounds_burst)
 
     start = half_hour_to_time(7001).strftime("%Y-%m-%d %H:%M")
     end = half_hour_to_time(7007).strftime("%Y-%m-%d %H:%M")

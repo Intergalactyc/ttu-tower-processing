@@ -193,8 +193,8 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 | Key | Type | Default | Prov. | Notes |
 |---|---|---|---|---|
 | `min_coverage` | float | `0.75` | DES | Minimum usable fraction of a value's support. Old: `nan_threshold`, a *maximum* NaN fraction of 0.10. |
-| `max_bounds_fraction` | float | `0.01` | PROD | Maximum fraction of a support's samples with `bounds` rows, per input variable. Old: `bounds_flag`. |
-| `max_spike_fraction` | float | `0.01` | PROD | The same for `spike` rows. Old: `despiking_flag`. |
+| `max_bounds_fraction` | table | `{ ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }` | PROD (sonic) / DES (slow) | Per input variable: maximum fraction of a support's samples with `bounds` rows. The slow sensors allow 5% (since 2026-10): their outliers are typically fast-poll electrical noise that leaves the real signal intact, and they feed slot means and thermodynamics, not flux covariances, so individual sample values matter much less than for the sonic outputs. A single number sets every variable (the form configs used before). Old: `bounds_flag`, 0.01 for all. |
+| `max_spike_fraction` | table | same as `max_bounds_fraction` | PROD (sonic) / DES (slow) | The same for `spike` rows. Old: `despiking_flag`, 0.01 for all. |
 | `veer_reference_boom` | int | `4` | OLDC | Veer is relative to this boom (10.1 m). Old: `veer10m`. |
 
 ### `[tertiary.fits]`: every profile-fit rule
@@ -350,8 +350,8 @@ fallback_tau_s = 600.0
 
 [tertiary]
 min_coverage = 0.75
-max_bounds_fraction = 0.01
-max_spike_fraction = 0.01
+max_bounds_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
+max_spike_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 veer_reference_boom = 4
 
 [tertiary.fits]

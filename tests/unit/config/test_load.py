@@ -78,8 +78,9 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.secondary.selection.priority == ("heat", "momentum")
     assert cfg.secondary.selection.fallback_tau_s == 600.0
     assert cfg.tertiary.min_coverage == 0.75
-    assert cfg.tertiary.max_bounds_fraction == 0.01
-    assert cfg.tertiary.max_spike_fraction == 0.01
+    limits = {"ue": 0.01, "vn": 0.01, "w": 0.01, "ts": 0.01, "t": 0.05, "rh": 0.05, "p": 0.05}
+    assert cfg.tertiary.max_bounds_fraction == limits
+    assert cfg.tertiary.max_spike_fraction == limits
     assert cfg.tertiary.veer_reference_boom == 4
     assert cfg.tertiary.fits.exclude_tau == ("unresolved", "fallback")
     assert cfg.tertiary.fits.min_booms == 2
@@ -167,6 +168,35 @@ def test_unknown_key_in_z_threshold_table_raises():
     raw = _minimal_raw()
     raw["qc"] = {"despike": {"z_threshold": {"bogus": 5.0}}}
     with pytest.raises(ConfigError, match=r"z_threshold\.bogus"):
+        config_from_dict(raw, default_tag="t")
+
+
+def test_flag_fraction_table_overrides_one_variable():
+    raw = _minimal_raw()
+    raw["tertiary"] = {"max_spike_fraction": {"p": 0.1}}
+    cfg = config_from_dict(raw, default_tag="t")
+
+    assert cfg.tertiary.max_spike_fraction["p"] == 0.1
+    assert cfg.tertiary.max_spike_fraction["t"] == 0.05
+    assert cfg.tertiary.max_spike_fraction["ue"] == 0.01
+
+
+def test_flag_fraction_number_sets_every_variable():
+    raw = _minimal_raw()
+    raw["tertiary"] = {"max_bounds_fraction": 0.02}
+    cfg = config_from_dict(raw, default_tag="t")
+
+    assert set(cfg.tertiary.max_bounds_fraction.values()) == {0.02}
+    assert set(cfg.tertiary.max_bounds_fraction) == {"ue", "vn", "w", "ts", "t", "rh", "p"}
+
+
+@pytest.mark.parametrize("value,match", [
+    ({"t": 1.5}, r"max_spike_fraction\.t"), (-0.1, r"max_spike_fraction\.ue"), ({"bogus": 0.1}, r"max_spike_fraction\.bogus"),
+])
+def test_flag_fraction_invalid_raises(value, match):
+    raw = _minimal_raw()
+    raw["tertiary"] = {"max_spike_fraction": value}
+    with pytest.raises(ConfigError, match=match):
         config_from_dict(raw, default_tag="t")
 
 

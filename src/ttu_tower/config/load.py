@@ -47,6 +47,7 @@ _LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
 _MIN_MAD_DEFAULT = {"ue": 0.001, "vn": 0.001, "w": 0.001, "ts": 0.01, "t": 0.002, "rh": 0.00002, "p": 0.0004}
 _Z_THRESHOLD_DEFAULT = {"ue": 5.0, "vn": 5.0, "w": 5.0, "ts": 5.0, "t": 5.0, "rh": 5.0, "p": 5.0}
 _SMOOTHING_WIDTH_DEFAULT = {"t": 20.0, "rh": 20.0, "p": 2.0}
+_MAX_FLAG_FRACTION_DEFAULT = {"ue": 0.01, "vn": 0.01, "w": 0.01, "ts": 0.01, "t": 0.05, "rh": 0.05, "p": 0.05}
 _UNUSABLE_TESTS_DEFAULT = ["unchecked", "resolution", "skew", "kurt", "direction", "bounce"]
 _GUST_PERIODS_DEFAULT = [1, 2, 3, 5, 10, 30, 60]
 _ALL_BOOMS_DEFAULT = list(range(1, 11))
@@ -161,6 +162,22 @@ def _pop_float_dict(d: dict, key: str, defaults: dict[str, float], path: str) ->
         if not _is_number(v):
             _err(f"{path}.{key}.{k}", "must be a number")
         result[k] = float(v)
+    return result
+
+
+def _pop_fraction_dict(d: dict, key: str, defaults: dict[str, float], path: str) -> dict[str, float]:
+    """A per-variable table of fractions in [0, 1]. A single number sets every
+    variable (the form configs and resolved configs used before these were
+    per-variable).
+    """
+    if _is_number(d.get(key)):
+        value = float(d.pop(key))
+        result = {k: value for k in defaults}
+    else:
+        result = _pop_float_dict(d, key, defaults, path)
+    for k, v in result.items():
+        if not 0 <= v <= 1:
+            _err(f"{path}.{key}.{k}", "must be in [0, 1]")
     return result
 
 
@@ -406,8 +423,8 @@ def _parse_fits(d: dict, path: str) -> FitsConfig:
 
 def _parse_tertiary(d: dict, path: str) -> TertiaryConfig:
     min_coverage = _pop_number(d, "min_coverage", 0.75, path, min_=0, min_incl=False, max_=1)
-    max_bounds_fraction = _pop_number(d, "max_bounds_fraction", 0.01, path, min_=0, max_=1)
-    max_spike_fraction = _pop_number(d, "max_spike_fraction", 0.01, path, min_=0, max_=1)
+    max_bounds_fraction = _pop_fraction_dict(d, "max_bounds_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
+    max_spike_fraction = _pop_fraction_dict(d, "max_spike_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
     veer_reference_boom = _pop_number(d, "veer_reference_boom", 4, path, kind=int)
     fits = _parse_fits(_section(d, "fits", path), f"{path}.fits")
     _check_unknown(d, path)

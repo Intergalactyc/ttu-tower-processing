@@ -94,8 +94,8 @@ fallback_tau_s = 600.0
 
 [tertiary]
 min_coverage = 0.75
-max_bounds_fraction = 0.01
-max_spike_fraction = 0.01
+max_bounds_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
+max_spike_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 veer_reference_boom = 4
 
 [tertiary.fits]

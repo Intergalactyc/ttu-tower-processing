@@ -477,7 +477,8 @@ Only failures are stored. Every quantity belongs to one group, defined by its in
 The criteria are evaluated over the value's support: the slot, or the 20-min window when the
 selected τ is 1200 s. A value fails if any required family's coverage is below `min_coverage`
 (ladder coverage for ladder quantities, `coverage.usable` for means), or if any input
-variable's `bounds` or `spike` fraction exceeds `max_bounds_fraction` / `max_spike_fraction`.
+variable's `bounds` or `spike` fraction exceeds that variable's `max_bounds_fraction` /
+`max_spike_fraction`.
 
 A timescale is computed only from blocks with no unusable sample at all, which is stricter than
 coverage, so its block counts (`ladder_coverage` families `its` and `its_vpts`) are reported

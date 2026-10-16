@@ -11,6 +11,16 @@ from ttu_tower.viewer import slotqc
 from ttu_tower.viewer.ui import tables
 
 
+def _per_variable(limits: dict[str, float]) -> str:
+    """{"ue": 0.01, ..., "t": 0.05, ...} -> "0.01 (ue, vn, w, ts), 0.05 (t, rh, p)"."""
+    by_value: dict[float, list[str]] = {}
+    for var, v in limits.items():
+        by_value.setdefault(v, []).append(var)
+    if len(by_value) == 1:
+        return f"{next(iter(by_value)):g}"
+    return ", ".join(f"{v:g} ({', '.join(vs)})" for v, vs in by_value.items())
+
+
 def _box(title: str, *widgets) -> QGroupBox:
     """A titled box; the last widget takes the spare height."""
     box = QGroupBox(title)
@@ -161,8 +171,9 @@ class QCTab(QWidget):
         stored = slotqc.stored_failures(b.table("filter_log"), b.boom)
         n_fail = len({(v, g) for v, g, _, _ in recomputed})
         text = (f"{n_fail} (variant, group) value set{'s' if n_fail != 1 else ''} filtered; "
-                f"limits: coverage ≥ {cfg.tertiary.min_coverage:g}, bounds ≤ {cfg.tertiary.max_bounds_fraction:g}, "
-                f"spike ≤ {cfg.tertiary.max_spike_fraction:g} of the slot (±5 min where τ = 1200 s)")
+                f"limits: coverage ≥ {cfg.tertiary.min_coverage:g}; bounds ≤ "
+                f"{_per_variable(cfg.tertiary.max_bounds_fraction)}; spike ≤ "
+                f"{_per_variable(cfg.tertiary.max_spike_fraction)} of the slot (±5 min where τ = 1200 s)")
         if "filter_log" in b.tables and recomputed != stored:
             text += " · <span style='color:#b00'>differs from the stored filter_log: " \
                     f"only recomputed {sorted(recomputed - stored, key=str)}, only stored {sorted(stored - recomputed, key=str)}</span>"

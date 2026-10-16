@@ -1334,8 +1334,8 @@ lazily, only when
 - `evaluate(batch tables, FlagStore, cfg) -> fail mask + filter_log rows`:
   - supports: the slot `[30000k, 30000(k+1))`, and the 20-min window
     `[30000k − 15000, 30000k + 45000)` for variant rows whose selected τ is 1200 s;
-  - per input variable: `bounds` fraction > `max_bounds_fraction` or `spike` fraction >
-    `max_spike_fraction` → fail;
+  - per input variable: `bounds` fraction > `max_bounds_fraction[variable]` or `spike`
+    fraction > `max_spike_fraction[variable]` → fail;
   - coverage: every required family's coverage ≥ `min_coverage`, taken from
     `ladder_coverage` at the selected rung for variant rows, or `coverage.usable` for `none`
     rows (for the vpt group, all of t, rh, p). The timescales are filtered on their family's

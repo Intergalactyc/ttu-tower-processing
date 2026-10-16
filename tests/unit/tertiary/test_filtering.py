@@ -11,10 +11,13 @@ _BOOM = 1
 _G0 = SAMPLES_PER_SLOT * _SLOT
 
 
+_LIMITS = {"ue": 0.01, "vn": 0.01, "w": 0.01, "ts": 0.01, "t": 0.05, "rh": 0.05, "p": 0.05}
+
+
 class _Cfg:
     min_coverage = 0.75
-    max_bounds_fraction = 0.01
-    max_spike_fraction = 0.01
+    max_bounds_fraction = _LIMITS
+    max_spike_fraction = _LIMITS
 
 
 def _means_row(slot, boom, variable, stat, value):
@@ -130,12 +133,15 @@ def test_bad_ts_bounds_fails_heat_and_ts_not_momentum():
     assert set(bounds_rows["group"]) == {"heat", "ts"}
 
 
-@pytest.mark.parametrize("fraction,expect_fail", [(0.009, False), (0.011, True)])
-def test_spike_fraction_threshold_flips_decision(fraction, expect_fail):
-    candidate = pd.DataFrame([_means_row(_SLOT, _BOOM, "t", "mean", 290.0)])
-    coverage = pd.DataFrame([{"slot": _SLOT, "boom": _BOOM, "variable": "t", "layer": "usable", "fraction": 1.0}])
+@pytest.mark.parametrize("variable,fraction,expect_fail", [
+    ("ts", 0.009, False), ("ts", 0.011, True),  # sonic: 1%
+    ("t", 0.011, False), ("t", 0.049, False), ("t", 0.051, True),  # slow: 5%
+])
+def test_spike_fraction_threshold_flips_decision(variable, fraction, expect_fail):
+    candidate = pd.DataFrame([_means_row(_SLOT, _BOOM, variable, "mean", 290.0)])
+    coverage = pd.DataFrame([{"slot": _SLOT, "boom": _BOOM, "variable": variable, "layer": "usable", "fraction": 1.0}])
     flagged = int(fraction * SAMPLES_PER_SLOT)
-    flag_stores = {_BOOM: _flag_store(_BOOM, "spike", "t", [_G0], [_G0 + flagged])}
+    flag_stores = {_BOOM: _flag_store(_BOOM, "spike", variable, [_G0], [_G0 + flagged])}
 
     fail_keys, _ = filtering.evaluate(candidate, coverage, _empty_tau_selected(), flag_stores, _Cfg())
     filtered = filtering.apply(candidate, fail_keys)

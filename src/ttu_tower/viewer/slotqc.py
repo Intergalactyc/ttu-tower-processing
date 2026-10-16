@@ -100,7 +100,8 @@ def filter_gates(k: int, boom: int, means: pd.DataFrame, slow: pd.DataFrame, boo
         start, end = (s0 - _WINDOW_MARGIN_SAMPLES, s0 + SAMPLES_PER_SLOT + _WINDOW_MARGIN_SAMPLES) if wide else (
             s0, s0 + SAMPLES_PER_SLOT)
         for var in _GROUP_INPUT_VARIABLES[group]:
-            for test, limit in (("bounds", cfg_tertiary.max_bounds_fraction), ("spike", cfg_tertiary.max_spike_fraction)):
+            for test, limits in (("bounds", cfg_tertiary.max_bounds_fraction), ("spike", cfg_tertiary.max_spike_fraction)):
+                limit = limits[var]
                 v = float(store.fraction(test, boom, var, [start], [end])[0])
                 rows.append((variant, group, test, var, v, limit, v > limit))
     return pd.DataFrame(rows, columns=["variant", "group", "criterion", "variable", "value", "limit", "failed"])

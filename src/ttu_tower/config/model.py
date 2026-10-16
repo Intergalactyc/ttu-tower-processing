@@ -141,8 +141,8 @@ class FitsConfig:
 @dataclass(frozen=True)
 class TertiaryConfig:
     min_coverage: float
-    max_bounds_fraction: float
-    max_spike_fraction: float
+    max_bounds_fraction: dict[str, float]  # per input variable (ue, vn, w, ts, t, rh, p)
+    max_spike_fraction: dict[str, float]
     veer_reference_boom: int
     fits: FitsConfig
 

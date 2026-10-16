@@ -1,8 +1,9 @@
 """Boom-level filtering: a value fails when a required family's coverage is
 below `min_coverage`, or when too much of an input variable's support was
-flagged `bounds`/`spike`. Filtering runs before every multi-boom quantity and
-every profile fit, so their NaN propagation from a failing boom is automatic
-- a whole record is never dropped.
+flagged `bounds`/`spike` (each limit set per input variable). Filtering runs
+before every multi-boom quantity and every profile fit, so their NaN
+propagation from a failing boom is automatic - a whole record is never
+dropped.
 """
 import numpy as np
 import pandas as pd
@@ -170,8 +171,8 @@ def evaluate(candidate: pd.DataFrame, coverage: pd.DataFrame,
 
     coverage_fail = _coverage_fail_keys(keys, coverage, _variant_coverage(candidate), cfg_tertiary.min_coverage)
     checks = _flag_fraction_checks(keys, flag_stores)
-    bounds_fail = checks[checks["bounds_fraction"] > cfg_tertiary.max_bounds_fraction]
-    spike_fail = checks[checks["spike_fraction"] > cfg_tertiary.max_spike_fraction]
+    bounds_fail = checks[checks["bounds_fraction"] > checks["input_variable"].map(cfg_tertiary.max_bounds_fraction)]
+    spike_fail = checks[checks["spike_fraction"] > checks["input_variable"].map(cfg_tertiary.max_spike_fraction)]
 
     log_rows = [(slot, boom, variant, grp, "coverage", None) for slot, boom, variant, grp in coverage_fail]
     log_rows += list(zip(bounds_fail["slot"], bounds_fail["boom"], bounds_fail["variant"], bounds_fail["group"],

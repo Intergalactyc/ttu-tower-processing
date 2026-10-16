@@ -385,7 +385,9 @@ a dependency; the pieces needed are ported.
 - **Filtering is boom-level:** a failing value becomes NaN; whole records are never dropped, so
   NaN-safe fits and summaries just work. A value fails if its family's coverage over its
   support is below `min_coverage` (0.75), or if more than `max_bounds_fraction` /
-  `max_spike_fraction` of an input variable's support was removed. Filtering precedes every
+  `max_spike_fraction` of an input variable's support was removed: 1% for the sonic outputs,
+  5% for the slow sensors, whose outliers are mostly fast-poll electrical noise and which feed
+  no flux covariance. Filtering precedes every
   multi-boom quantity. There is no record-level quality class (the old
   good/moderate/poor/shadowed labels); one could be a post helper later.
 - **Profile fits** (power law of speed, TI and wd standard deviation; neutral log law) follow

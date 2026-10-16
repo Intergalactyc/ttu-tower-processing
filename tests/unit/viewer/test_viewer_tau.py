@@ -96,7 +96,7 @@ def test_tau_tab_draws_distributions_heat_vs_momentum_and_a_whatif(window, qtbot
 
     window.set_selection(np.empty(0, dtype=np.int64), "replace")
     view.tabs.setCurrentIndex(2)
-    assert "run's own rules" in view.whatif_note.text() and not view.changed().any()
+    assert "run's own settings" in view.whatif_note.text() and not view.changed().any()
     view.priority.setCurrentIndex(view.priority.findData("momentum,heat"))
     assert view.changed().any() and "run's own" not in view.whatif_note.text()
     assert view.whatif_table.rowCount() == len(FULL_BOOMS)
@@ -104,3 +104,43 @@ def test_tau_tab_draws_distributions_heat_vs_momentum_and_a_whatif(window, qtbot
     assert window.selection.size > 0
     view.reset_whatif()
     assert not view.changed().any()
+
+
+def test_tau_whatif_recomputes_detection_on_every_slot(window, qtbot, data):
+    run, d = data
+    view = window.tau_view
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(view)
+    qtbot.waitUntil(lambda: view.data is not None and _idle(window), timeout=60_000)
+    view.tabs.setCurrentIndex(2)
+    assert not view.recompute.isEnabled() and "the run's (stored)" in view.det_note.text()
+    view.fields["peak_significance_se"].setValue(50.0)
+    assert view.recompute.isEnabled() and "press Recompute" in view.det_note.text()
+    assert not view.changed("heat").any()  # nothing applied yet
+    view.recompute.click()
+    qtbot.waitUntil(lambda: view.applied is not None and _idle(window), timeout=120_000)
+    assert view.changed("heat").any() and "recomputed" in view.det_note.text()
+    assert not view.is_default()
+    view.fields["peak_significance_se"].setValue(run.cfg.secondary.detection.peak_significance_se)
+    view.smoothing.setEditText("1-2-1")  # the run's weights, typed
+    view.recompute.click()  # back to the run's settings: its stored detections again
+    assert view.applied is None and not view.changed("heat").any()
+    view.reset_whatif()
+    assert view.is_default() and not view.changed().any()
+
+
+def test_redetecting_with_the_runs_settings_reproduces_the_stored_detections(data, full_run):
+    run, d = data
+    index = FragmentIndex(run.run_dir)
+    boom = FULL_BOOMS[0]
+    out = taustats.redetect(index, d, boom, run.cfg.secondary.detection)
+    rows = taustats.rows_of(d, boom)
+    for family in taustats.SPECTRA:
+        status, tau, lb = out[family]
+        assert np.array_equal(status, d.status[family][rows])
+        assert np.array_equal(tau, d.tau[family][rows], equal_nan=True)
+        assert np.array_equal(lb, d.tau_lb[family][rows], equal_nan=True)
+    plain = taustats.redetect(index, d, boom, run.cfg.secondary.detection, kernel=(1.0,))
+    assert any((plain[f][0] != d.status[f][rows]).any() or not np.array_equal(plain[f][1], d.tau[f][rows],
+                                                                              equal_nan=True)
+               for f in taustats.SPECTRA)

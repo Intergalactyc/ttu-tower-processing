@@ -1333,15 +1333,21 @@ viewed interval or the whole period like the others.
   - **Heat vs momentum:** a joint matrix, heat category by momentum category, as % of slots. The
     agreement diagonal is blue. Clicking a cell brushes its slots. A per-boom table gives, where
     both have a τ: % equal, % heat longer, % momentum longer, and the median difference in rungs.
-  - **Selection what-if:** rule, priority and fallback τ, applied to every slot.
-    - It reruns secondary's own `select` once per distinct pair of detections: a few hundred
-      cases, about 0.1 s for oneyear. With the run's rules it reproduces all 826,261 stored
-      selections exactly.
-    - It shows the selected τ of the run (solid) against the what-if (dashed), a per-boom table
-      (% changed, medians, % heat / momentum / fallback, run vs what-if), and a button that
-      brushes the changed slots.
-    - Detection parameters stay in the Slot Inspector's τ what-if: redoing detection for every
-      slot means about 25 M MRD rows, too slow to be interactive.
+  - **Selection what-if:** the same settings as the Slot Inspector's τ what-if, applied to every slot.
+    - **Selection** (rule, priority, fallback τ) applies at once. It reruns secondary's own `select`
+      once per distinct pair of detections: a few hundred cases, about 0.1 s for oneyear. With the
+      run's rules it reproduces all 826,261 stored selections exactly.
+    - **Detection** (peak significance, min scale, min/max τ, smoothing) applies on "Recompute
+      detection" (`taustats.redetect`). It reruns secondary's own `detect` on every slot's stored
+      heat and momentum cospectra, one background job per boom: about 9 s a boom, 88 s for
+      oneyear's 10.
+    - Results are cached per (settings, boom), so returning to settings already computed is
+      instant. Rows the run marked no_data stay so. With the run's settings it reproduces the
+      stored detections exactly.
+    - **Comparison:** heat, momentum or selected τ, run (solid) against what-if (dashed). A
+      per-boom table gives % of heat, momentum and selected τ changed, the medians, and %
+      heat / momentum / fallback, run vs what-if. A button brushes the slots whose compared τ
+      changes.
   - The priority boxes, here and in the inspector what-if, keep their choice as a string
     ("heat,momentum"): Qt turns tuple item data into lists, so `findData` with a tuple found
     nothing.

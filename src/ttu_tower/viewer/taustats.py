@@ -5,17 +5,22 @@ joint distribution, and a what-if of the selection rules over every slot.
 
 The what-if reruns secondary's own `select` on each distinct pair of
 detections: tau takes only the rung values, so a year's selections reduce to
-a few hundred distinct cases.
+a few hundred distinct cases. Edited detection parameters rerun secondary's
+own `detect` on every stored heat and momentum cospectrum, a boom at a time
+(about 5 s a boom for a year).
 """
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-from ttu_tower.secondary.detect import STATUSES, Detection
+import pyarrow.dataset as pa_dataset
+
+from ttu_tower.secondary.detect import SMOOTHING, STATUSES, Detection, detect
 from ttu_tower.secondary.select import select
 
 RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
@@ -26,6 +31,7 @@ WHICH = {"heat": "heat τ", "momentum": "momentum τ", "selected": "selected τ"
 FAMILY_EXTRA = ("unresolved", "weak", "no_data")
 SELECTED_EXTRA = ("none",)
 _ACTIVE = ("found", "capped")
+SPECTRA = {"heat": "wvpts", "momentum": "uw"}  # the cospectrum each family's tau is detected on
 
 
 def labels(which: str) -> list[str]:
@@ -165,6 +171,59 @@ def agreement(heat: np.ndarray, momentum: np.ndarray) -> dict:
                 "median rungs h−m": np.nan}
     return {"N both": n, "% equal": 100.0 * float(np.mean(h == m)), "% heat longer": 100.0 * float(np.mean(h > m)),
             "% momentum longer": 100.0 * float(np.mean(h < m)), "median rungs h−m": float(np.median(h - m))}
+
+
+def redetect(index, data: TauData, boom: int, cfg_det, kernel=SMOOTHING) -> dict:
+    """family -> (status index, tau_s, tau_lb_s) for the rows of `boom`
+    (in the order of `rows_of(data, boom)`), detection rerun with `cfg_det`
+    and `kernel` on the stored cospectra. Rows the run marked no_data (no
+    usable samples, so detection never ran) stay so.
+    """
+    rows = rows_of(data, boom)
+    key = data.slot[rows] * len(VARIANTS) + data.variant[rows]
+    out = {f: (data.status[f][rows].copy(), data.tau[f][rows].copy(), data.tau_lb[f][rows].copy()) for f in SPECTRA}
+    f = pa_dataset.field
+    spectra = index.read("mrd", booms=[boom], columns=["slot", "variant", "spectrum", "scale_s", "value", "se", "n_pairs"],
+                         filter=f("spectrum").isin(list(SPECTRA.values())) & (f("boom") == boom))
+    if spectra.empty:
+        return out
+    spectra["variant"] = _codes(spectra["variant"].astype(str), VARIANTS)
+    spectra = spectra[spectra["variant"] >= 0]
+    no_data = STATUSES.index("no_data")
+    for family, name in SPECTRA.items():
+        part = spectra[spectra["spectrum"].astype(str) == name]
+        gkey = part["slot"].to_numpy(np.int64) * len(VARIANTS) + part["variant"].to_numpy(np.int64)
+        order = np.lexsort((part["scale_s"].to_numpy(float), gkey))
+        gkey = gkey[order]
+        value, se, n = (part[c].to_numpy()[order] for c in ("value", "se", "n_pairs"))
+        starts = np.flatnonzero(np.r_[True, np.diff(gkey) != 0])
+        ends = np.r_[starts[1:], gkey.size]
+        pos = np.searchsorted(key, gkey[starts])
+        status, tau, lb = out[family]
+        for s, e, i in zip(starts, ends, pos):
+            if i >= key.size or key[i] != gkey[s] or status[i] == no_data:
+                continue
+            det = detect(value[s:e], se[s:e], n[s:e], True, cfg_det, kernel=kernel)
+            status[i], tau[i], lb[i] = STATUSES.index(det.status), det.tau_s, det.tau_lb_s
+    return out
+
+
+def rows_of(data: TauData, boom: int) -> np.ndarray:
+    return np.flatnonzero(data.boom == boom)
+
+
+def with_detections(data: TauData, detections: dict[int, dict]) -> TauData:
+    """`data` with the heat and momentum detections of some booms replaced
+    (boom -> `redetect`'s result); the stored selection is left as it was.
+    """
+    status = {f: data.status[f].copy() for f in SPECTRA}
+    tau = {f: data.tau[f].copy() for f in SPECTRA}
+    lb = {f: data.tau_lb[f].copy() for f in SPECTRA}
+    for boom, families in detections.items():
+        rows = rows_of(data, boom)
+        for f, (st, t, b) in families.items():
+            status[f][rows], tau[f][rows], lb[f][rows] = st, t, b
+    return dataclasses.replace(data, status=status, tau=tau, tau_lb=lb)
 
 
 def reselect(data: TauData, cfg_sel) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

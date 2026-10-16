@@ -72,11 +72,85 @@ def test_distribution_fits_recover_their_parameters():
     assert weibull.ks < 0.02
     wd = np.degrees(rng.vonmises(np.radians(250.0), 4.0, 20_000)) % 360
     vm = distfits.fit(distfits.CIRCULAR, wd)
-    assert vm.params["mean [deg]"] == pytest.approx(250.0, abs=1.0) and vm.params["κ"] == pytest.approx(4.0, rel=0.05)
+    assert vm.params["μ"] == pytest.approx(250.0, abs=1.0) and vm.params["κ"] == pytest.approx(4.0, rel=0.05)
     grid = np.linspace(0, 360, 3601)
     assert np.trapezoid(vm.pdf(grid), grid) == pytest.approx(1.0, abs=1e-3)
-    assert distfits.available(np.array([-1.0, 2.0]), False) == ["normal"]
+    assert distfits.available(np.array([-1.0, 2.0]), False) == ["normal", "uniform"]
     assert distfits.fit("gamma", np.array([1.0, 2.0])) is None
+
+
+def test_rayleigh_exponential_and_beta_fits_recover_their_parameters():
+    rng = np.random.default_rng(3)
+    samples = {"Rayleigh": rng.rayleigh(3.0, 20_000), "exponential": rng.exponential(1.5, 20_000),
+               "beta": rng.beta(2.0, 5.0, 20_000)}
+    fits = {name: distfits.fit(name, v) for name, v in samples.items()}
+    assert set(fits["Rayleigh"].params) == {"σ"} and fits["Rayleigh"].params["σ"] == pytest.approx(3.0, rel=0.02)
+    assert set(fits["exponential"].params) == {"β"}
+    assert fits["exponential"].params["β"] == pytest.approx(1.5, rel=0.03)
+    beta = fits["beta"]
+    assert set(beta.params) == {"α", "β"}
+    assert beta.params["α"] == pytest.approx(2.0, rel=0.05) and beta.params["β"] == pytest.approx(5.0, rel=0.05)
+    assert all(f.ks < 0.02 for f in fits.values())
+    grid = np.linspace(1e-6, 1 - 1e-6, 10_001)
+    assert np.trapezoid(beta.pdf(grid), grid) == pytest.approx(1.0, abs=1e-3)
+    for (name, f), k in zip(fits.items(), (1, 1, 2)):  # free parameters
+        assert f.aic == pytest.approx(2 * k - 2 * np.sum(np.log(f.pdf(samples[name]))), rel=1e-9)
+    assert "beta" in distfits.available(np.array([0.2, 0.7]), False)
+    assert "beta" not in distfits.available(np.array([0.2, 1.0]), False)
+    assert distfits.fit("beta", np.array([0.1, 0.2, 0.3, 0.4, 1.5])) is None
+    assert {"Rayleigh", "exponential", "beta"} <= set(distfits.names(False))
+    assert distfits.needs("beta") == "every value between 0 and 1" and distfits.needs("normal") == ""
+
+
+def test_chi_family_and_uniform_fits_recover_their_parameters():
+    rng = np.random.default_rng(4)
+    chi = distfits.fit("chi", 2.0 * np.sqrt(rng.chisquare(3, 20_000)))
+    assert chi.params["k"] == pytest.approx(3.0, rel=0.05) and chi.params["σ"] == pytest.approx(2.0, rel=0.03)
+    chi2 = distfits.fit("chi-squared", 0.5 * rng.chisquare(4, 20_000))
+    assert chi2.params["k"] == pytest.approx(4.0, rel=0.05) and chi2.params["σ²"] == pytest.approx(0.5, rel=0.05)
+    v = 0.5 * rng.noncentral_chisquare(3, 6.0, 60_000)
+    ncx2 = distfits.fit("noncentral chi-squared", v)
+    assert set(ncx2.params) == {"k", "λ", "σ²"} and ncx2.params["λ"] == pytest.approx(6.0, rel=0.25)
+    # estimated from 10k values, but scored on the same 50k as any other fit, so the AICs compare
+    gamma = distfits.fit("gamma", v)
+    assert ncx2.n == gamma.n == 50_000 and ncx2.aic < gamma.aic and ncx2.ks < 0.02
+    uniform = distfits.fit("uniform", rng.uniform(-2.0, 3.0, 20_000))
+    assert uniform.params["a"] == pytest.approx(-2.0, abs=0.01) and uniform.params["b"] == pytest.approx(3.0, abs=0.01)
+    assert distfits.about("noncentral chi-squared", "λ") == "noncentrality" and distfits.about("uniform", "a")
+
+
+def test_fit_cdfs_run_from_zero_to_one():
+    rng = np.random.default_rng(5)
+    weibull = distfits.fit("Weibull", 8.0 * rng.weibull(2.2, 5_000))
+    assert weibull.cdf(np.array([0.0, 1e3])) == pytest.approx([0.0, 1.0])
+    wd = np.degrees(rng.vonmises(np.radians(250.0), 4.0, 5_000)) % 360
+    vm = distfits.fit(distfits.CIRCULAR, wd)
+    assert vm.cdf(np.array([0.0, 360.0])) == pytest.approx([0.0, 1.0], abs=1e-9)
+    assert vm.cdf(np.array([250.0]))[0] == pytest.approx(np.mean(wd <= 250.0), abs=0.02)
+    assert np.all(np.diff(vm.cdf(np.linspace(0, 360, 721))) >= 0)
+
+
+def test_formulas_name_the_tables_parameters_and_fill_in_their_values():
+    rng = np.random.default_rng(6)
+    for name in distfits.names(False) + distfits.names(True):
+        assert distfits.formula(name).startswith("f(")
+    assert "B(α, β)" in distfits.formula("beta") and "α: shape" in distfits.formula("beta")
+    expon = distfits.fit("exponential", rng.exponential(1.5, 5_000))
+    b = expon.params["β"]
+    assert distfits.filled(expon) == f"f(x) = {1 / b:.4g} e<sup>−x/{b:.4g}</sup>"
+    normal = distfits.fit("normal", rng.normal(-3.0, 2.0, 5_000))
+    assert f"(x + {-normal.params['μ']:.4g})²" in distfits.filled(normal)  # x − μ for a negative μ
+    lognormal = distfits.fit("log-normal", rng.lognormal(0.5, 0.4, 20_000))
+    assert lognormal.params["μ"] == pytest.approx(0.5, abs=0.02) and lognormal.params["σ"] == pytest.approx(0.4, rel=0.03)
+    gamma = distfits.fit("gamma", rng.gamma(2.5, 1.5, 5_000))
+    k, theta = gamma.params["k"], gamma.params["θ"]
+    c = float(distfits.filled(gamma).split(" = ")[1].split(" ")[0])
+    assert c * 3.0 ** (k - 1) * np.exp(-3.0 / theta) == pytest.approx(gamma.pdf(3.0), rel=2e-3)
+    wd = np.degrees(rng.vonmises(np.radians(250.0), 40.0, 5_000)) % 360
+    vm = distfits.fit(distfits.CIRCULAR, wd)
+    c = float(distfits.filled(vm).split(" = ")[1].split(" ")[0].replace("−", "-"))  # tiny, for a large κ
+    assert c * np.exp(vm.params["κ"] * np.cos(np.radians(250.0 - vm.params["μ"]))) == pytest.approx(
+        vm.pdf(250.0), rel=2e-3)
 
 
 def test_joined_keeps_the_common_slots():

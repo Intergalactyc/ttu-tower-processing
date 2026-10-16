@@ -34,6 +34,7 @@ from ttu_tower.viewer.ui.anisotropy_view import AnisotropyMapView
 from ttu_tower.viewer.ui.bookmarks_panel import BookmarkDialog, BookmarksPanel
 from ttu_tower.viewer.ui.compare_view import CompareView
 from ttu_tower.viewer.ui.composite_view import CompositeSpectraView
+from ttu_tower.viewer.ui.tau_view import TauView
 from ttu_tower.viewer.ui.diurnal_view import DiurnalView
 from ttu_tower.viewer.ui.export_dialog import ExportDialog
 from ttu_tower.viewer.ui.distribution import DistributionView
@@ -138,6 +139,7 @@ class MainWindow(QMainWindow):
         self.bookmark_panel.inspectRequested.connect(
             lambda items, start, label, variant: self.inspect_sequence(items, start, label, variant))
         self.bookmark_panel.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
+        self.bookmark_panel.changed.connect(self._bookmarks_changed)
         tabs.addTab(self.find, "Find")
         tabs.addTab(self.bookmark_panel, "Bookmarks")
         tabs.addTab(self.jets.panel, "Jets")
@@ -187,6 +189,8 @@ class MainWindow(QMainWindow):
         self.qc_summary = QCSummaryView(self.runner)
         self.profiles = ProfilesView()
         self.composite = CompositeSpectraView(self.runner)
+        self.tau_view = TauView(self.runner)
+        self.tau_view.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
         self.diurnal = DiurnalView()
         self.diurnal.cellSelected.connect(lambda slots: self.set_selection(slots, "replace"))
         self.aniso_map = AnisotropyMapView(self.runner)
@@ -195,14 +199,18 @@ class MainWindow(QMainWindow):
         self.dist_tab = dist_split
         self.right_tabs = WrapTabWidget()
         for widget, label in ((dist_split, "Distributions"), (self.scatter, "Scatter"), (self.profiles, "Profiles"),
-                              (self.composite, "Spectra"), (self.diurnal, "Diurnal"), (self.aniso_map, "Anisotropy"),
+                              (self.composite, "Spectra"), (self.tau_view, "τ"), (self.diurnal, "Diurnal"),
+                              (self.aniso_map, "Anisotropy"),
                               (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare"),
                               (self.jets.view, "Jets")):
             self.right_tabs.addTab(widget, label)
-        self.right_tabs.setTabToolTip(3, "composite MRD spectra: each boom's median over the slots")
-        self.right_tabs.setTabToolTip(4, "a panel's quantity by hour of day and month")
-        self.right_tabs.setTabToolTip(8, "this run against another (choose it in the toolbar)")
-        self.right_tabs.setTabToolTip(9, "low-level jet events (set the detection on the left, under Jets)")
+        for widget, tip in ((self.composite, "composite MRD spectra: each boom's median over the slots"),
+                            (self.tau_view, "heat, momentum and selected τ over many slots, heat vs momentum, and "
+                                            "a what-if of the selection rules over every slot"),
+                            (self.diurnal, "a panel's quantity by hour of day and month"),
+                            (self.compare, "this run against another (choose it in the toolbar)"),
+                            (self.jets.view, "low-level jet events (set the detection on the left, under Jets)")):
+            self.right_tabs.setTabToolTip(self.right_tabs.indexOf(widget), tip)
         self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -447,6 +455,7 @@ class MainWindow(QMainWindow):
         self.windrose.set_run(run, self.index, booms)
         self.qc_summary.set_run(run, self.index, booms)
         self.composite.set_run(run, self.index, booms)
+        self.tau_view.set_run(run, self.index, booms)
         self.aniso_map.set_run(run, self.index, booms)
         self._fill_compare_box()
         self._set_other_run(None)
@@ -719,6 +728,8 @@ class MainWindow(QMainWindow):
                                        for data, plot in zip(self.datas, self.plots)], x_range, self.stability)
         elif shown is self.composite:
             self.composite.set_range(x_range, self.stability)
+        elif shown is self.tau_view:
+            self.tau_view.set_range(x_range, self.stability)
         elif shown is self.diurnal:
             self.diurnal.set_sources(self.datas, x_range, self.tz_box.currentData() or self.run.timezone)
         elif shown is self.aniso_map:
@@ -780,6 +791,7 @@ class MainWindow(QMainWindow):
             window.closed.connect(lambda w: self._opened(w, False))
             window.loaded.connect(lambda ok, w=window: self._opened(w, ok))
             window.bookmarkRequested.connect(self._add_bookmark)
+            window.bookmarks_at = lambda slot, boom: self.bookmarks.at(self.run.tag, slot, boom)
             self.inspectors.append(window)
         window.set_sequence(sequence, label)
         self._opening = window
@@ -820,6 +832,7 @@ class MainWindow(QMainWindow):
         self.scatter.set_selection(self.selection)
         self.profiles.set_selection(self.selection)
         self.composite.set_selection(self.selection)
+        self.tau_view.set_selection(self.selection)
         self.aniso_map.set_selection(self.selection)
         self._show_selection()
 
@@ -1011,6 +1024,10 @@ class MainWindow(QMainWindow):
             variant = self.find.variant.currentData()
             self._store_bookmarks([Bookmark(self.run.tag, k, b, variant, note, name) for k, b in items])
 
+    def _bookmarks_changed(self) -> None:
+        for window in self.inspectors:
+            window.show_bookmarked()
+
     def _store_bookmarks(self, marks) -> None:
         try:
             self.bookmarks.add(*marks)
@@ -1018,6 +1035,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "ttu-view", f"couldn't save the bookmarks: {exc}")
             return
         self.bookmark_panel.refresh()
+        self._bookmarks_changed()
         plural = "s" if len(marks) != 1 else ""
         self.statusBar().showMessage(f"saved {len(marks)} bookmark{plural} to '{marks[0].list}'", 6000)
 

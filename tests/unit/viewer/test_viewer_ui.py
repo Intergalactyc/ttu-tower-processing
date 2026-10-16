@@ -6,11 +6,13 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPointF, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 
 from ttu_tower.timegrid import slot_to_time  # noqa: E402
 from ttu_tower.viewer.run import RunHandle  # noqa: E402
 from ttu_tower.viewer.timeaxis import display_offset_s, slot_to_unix  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
+from ttu_tower.viewer.ui.inspector.numbers_tab import ALL  # noqa: E402
 from ttu_tower.viewer.ui.main_window import MainWindow  # noqa: E402
 from ttu_tower.viewer.ui.series_view import MODES as SERIES_MODES, SeriesPanel, rug_differences, rug_rows  # noqa: E402
 
@@ -205,6 +207,50 @@ def test_numbers_tab_lists_stored_rows_and_verify_is_exact(window, qtbot):
     inspector.close()
 
 
+def _shown(numbers, column):
+    return [numbers.proxy.index(r, column).data() for r in range(numbers.shown_rows())]
+
+
+def _double_click(view, row):
+    index = view.model().index(row, 0)
+    view.scrollTo(index)
+    pos = view.visualRect(index).center()
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=pos)  # a real double click starts with a click
+    QTest.mouseDClick(view.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+
+
+def _selected(view, columns):
+    rows = view.selectionModel().selectedRows()
+    assert len(rows) == 1
+    return [view.model().index(rows[0].row(), c).data() for c in columns]
+
+
+def test_numbers_all_tables_finds_a_value_and_jumps_to_its_row(window, qtbot):
+    inspector = _open_series(window, qtbot, 3 * FAULT_HALF_HOUR + 1)
+    qtbot.waitUntil(lambda: inspector.bundle is not None, timeout=60_000)
+    numbers = inspector.numbers
+    inspector.tabs.setCurrentWidget(numbers)
+    numbers.table_box.setCurrentIndex(numbers.table_box.findData(ALL))
+    assert numbers.shown_rows() == len(numbers.current_frame()) > sum(
+        len(df) for df in numbers._tables().values())
+    assert set(_shown(numbers, 0)) >= {"means", "coverage", "slot_qc", "mrd", "ladder"}
+
+    numbers.search.setText("stat=skew")  # only the all-tables key has this text
+    assert set(_shown(numbers, 0)) == {"slot_qc"}
+    _double_click(numbers.view, _shown(numbers, 1).index("variable=w, stat=skew"))
+    assert numbers.table_box.currentData() == "slot_qc"
+    assert numbers.search.text() == ""
+    assert _selected(numbers.view, (2, 3)) == ["w", "skew"]
+
+    numbers.table_box.setCurrentIndex(numbers.table_box.findData(ALL))
+    numbers.search.setText("kurt")
+    _double_click(numbers.view, _shown(numbers, 0).index("slot_qc"))
+    assert numbers.table_box.currentData() == "slot_qc"
+    assert numbers.search.text() == "kurt"  # the row still shows, so the filter stays
+    assert _selected(numbers.view, (3,)) == ["kurt"]
+    inspector.close()
+
+
 def test_pinned_inspector_is_kept(window, qtbot):
     slot = 3 * FAULT_HALF_HOUR
     _open_series(window, qtbot, slot).pin.setChecked(True)
@@ -372,6 +418,54 @@ def test_every_rug_row_keeps_its_label(qtbot):
     drawn = [text for _, _, text in rug.getAxis("left").generateDrawSpecs(painter)[2]]
     painter.end()
     assert drawn == names
+
+
+def test_the_availability_strip_zooms_on_its_own(window, qtbot):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+    strip = window.overview
+    vb = strip.getViewBox()
+    whole, rows = vb.viewRange()[0], vb.viewRange()[1]
+    timeline = window.plots[0].plot_item.getViewBox().viewRange()[0]
+    viewport = strip.viewport()
+    at = QPointF(viewport.width() / 2, viewport.height() / 2)
+    for _ in range(3):  # wheel towards the user: zoom in
+        QApplication.sendEvent(viewport, QWheelEvent(at, QPointF(viewport.mapToGlobal(at.toPoint())), QPoint(0, 0),
+                                                     QPoint(0, 120), Qt.MouseButton.NoButton,
+                                                     Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase,
+                                                     False))
+    qtbot.wait(50)
+    zoomed = vb.viewRange()
+    assert zoomed[0][1] - zoomed[0][0] < 0.9 * (whole[1] - whole[0])
+    assert whole[0] <= zoomed[0][0] and zoomed[0][1] <= whole[1]  # never past the period
+    assert zoomed[1] == rows  # the boom rows stay put
+    assert window.plots[0].plot_item.getViewBox().viewRange()[0] == timeline  # the timelines don't follow
+    qtbot.mouseDClick(viewport, Qt.MouseButton.LeftButton, pos=at.toPoint())
+    assert vb.viewRange()[0] == whole
+
+
+def test_boom_presets_pick_even_and_odd_booms(window):
+    from PySide6.QtWidgets import QToolButton
+    panel = window.panels[0]
+    presets = {b.text(): b for b in panel.findChildren(QToolButton) if b.text() in ("odd", "even", "all")}
+    presets["even"].click()
+    assert [b for b, box in panel.boom_boxes.items() if box.isChecked()] == [b for b in panel.booms if b % 2 == 0]
+    presets["odd"].click()
+    assert [b for b, box in panel.boom_boxes.items() if box.isChecked()] == [b for b in panel.booms if b % 2 == 1]
+    presets["all"].click()
+
+
+def test_only_the_shown_tab_sets_a_panels_minimum_width(window):
+    tabs = window.left_tabs
+    find = next(i for i in range(tabs.count()) if tabs.tabText(i) == "Find")
+    tabs.setCurrentIndex(find)
+    wide = tabs.minimumSizeHint().width()
+    tabs.setCurrentIndex(0)  # Panel A
+    assert tabs.minimumSizeHint().width() < wide
+    assert tabs.widget(find).sizePolicy().horizontalPolicy() != tabs.widget(0).sizePolicy().horizontalPolicy()
+    tabs.setCurrentIndex(find)
+    assert tabs.minimumSizeHint().width() == wide
 
 def test_the_step_arrows_move_by_a_whole_or_half_interval(window):
     _, _, x, _ = _a_point(window.plots[0])

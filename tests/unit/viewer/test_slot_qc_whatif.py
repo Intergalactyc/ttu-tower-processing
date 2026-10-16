@@ -203,3 +203,24 @@ def test_profile_ghosts_the_filtered_boom_and_redraws_the_stored_fits(full):
     np.testing.assert_allclose(np.diff(np.log(f.y)) / np.diff(np.log(f.z)), alpha)
     pairs = profiledata.pair_table(across, run.cfg.post.stability.pair)
     assert len(pairs) == 1 and set(pairs.columns) == {"boom", "boom2", "rib", "lapse_vpt"}
+
+
+def test_smoothing_weights_parse_from_presets_or_typed_text():
+    assert whatif.parse_kernel("1-2-1 (the run's)") == ((1.0, 2.0, 1.0), "")
+    assert whatif.parse_kernel("none") == ((1.0,), "")
+    assert whatif.parse_kernel("1, 3, 1")[0] == (1.0, 3.0, 1.0)
+    assert whatif.parse_kernel(" 1-4-6-4-1 ")[0] == (1.0, 4.0, 6.0, 4.0, 1.0)
+    for bad in ("1-2", "a-b-c", "1 2 x", "1-0-1", ""):
+        weights, problem = whatif.parse_kernel(bad)
+        assert weights is None and problem.startswith("smoothing")
+    assert whatif.kernel_text((1.0, 2.0, 1.0)) == "1-2-1"
+
+
+def test_a_normalized_spectrum_sums_to_one():
+    spec = slotdata.Spectrum(np.array([1.0, 2.0, 4.0]), np.array([1.0, np.nan, 3.0]), np.array([0.5, 0.5, 0.5]),
+                             np.array([4, 2, 1]))
+    out = slotdata.normalized(spec)
+    assert np.nansum(out.value) == pytest.approx(1.0) and out.se[0] == pytest.approx(0.125)
+    assert out.ogive[-1] == pytest.approx(1.0)
+    flat = slotdata.Spectrum(spec.scale_s, np.array([1.0, -1.0, 0.0]), spec.se, spec.n_pairs)
+    assert np.isnan(slotdata.normalized(flat).value).all()  # no sum to divide by

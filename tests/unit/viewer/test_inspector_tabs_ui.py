@@ -5,6 +5,8 @@ import pytest
 pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
+
 from ttu_tower.viewer.run import RunHandle  # noqa: E402
 from ttu_tower.viewer.timeaxis import slot_to_unix  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
@@ -79,6 +81,17 @@ def test_whatif_tab_reproduces_the_run_then_follows_an_edit(window, qtbot):
     assert whatif.problem.text()
     whatif.reset()
     assert whatif.is_default() and not whatif.result["changed"].any() and not whatif.problem.text()
+    whatif.smoothing.setCurrentIndex(whatif.smoothing.findText("none"))
+    assert not whatif.is_default() and "unsmoothed" in whatif.key.text()
+    whatif.smoothing.setEditText("1-2")
+    assert whatif.problem.text().startswith("smoothing")
+    whatif.smoothing.setEditText("1-3-1")
+    assert not whatif.problem.text() and "1-3-1 smoothed" in whatif.key.text()
+    whatif.normalize["momentum"].setChecked(True)
+    assert "normalized" in whatif.plots["momentum"].titleLabel.text
+    assert "normalized" not in whatif.plots["heat"].titleLabel.text
+    whatif.reset()
+    assert whatif.is_default() and not whatif.result["changed"].any()
 
 
 def test_timeline_ghosts_filtered_values_and_a_click_on_one_opens_the_qc_tab(window, qtbot):
@@ -285,8 +298,10 @@ def test_wind_rose_tab_follows_boom_filtering_and_interval(window, qtbot):
     qtbot.waitUntil(lambda: rose.tower is not None and _idle(window), timeout=60_000)
     assert rose.tower_plot.table is not None and rose.tower_plot.table.sum() == pytest.approx(100.0)
     assert rose.mesonet is None and "not merged" in rose.meso_plot.getPlotItem().titleLabel.text
+    assert rose.filtering.currentData() is False and rose.same_slots.isChecked()  # unfiltered, same slots
     rose.boom.setCurrentIndex(rose.boom.findData(SPIKY_BOOM))
-    qtbot.waitUntil(lambda: _idle(window) and rose.tower is not None, timeout=60_000)
+    rose.filtering.setCurrentIndex(0)
+    qtbot.waitUntil(lambda: _idle(window) and rose.loaded_key == (SPIKY_BOOM, True), timeout=60_000)
     filtered = rose.tower.slots.size
     rose.filtering.setCurrentIndex(1)
     qtbot.waitUntil(lambda: _idle(window) and rose.tower.slots.size != filtered, timeout=60_000)
@@ -313,6 +328,51 @@ def test_histograms_take_a_distribution_fit(window, qtbot):
     assert all(f is not None and f.params["k"] > 0 for f in dist.fits.values())
     headers = [dist.table.horizontalHeaderItem(j).text() for j in range(dist.table.columnCount())]
     assert dist.table.rowCount() == len(FULL_BOOMS) and {"N", "k", "KS", "AIC"} <= set(headers)
+    offered = [dist.fit_box.itemData(i) for i in range(dist.fit_box.count())]
+    assert {"Rayleigh", "exponential", "beta"} <= set(offered)
+    dist.fit_box.setCurrentIndex(dist.fit_box.findData("Rayleigh"))
+    qtbot.waitUntil(lambda: bool(dist.fits) and _idle(window) and "σ (fit)" in [
+        dist.table.horizontalHeaderItem(j).text() for j in range(dist.table.columnCount())], timeout=60_000)
+    assert all(f is not None and f.name == "Rayleigh" for f in dist.fits.values())
+    dist.fit_box.setCurrentIndex(dist.fit_box.findData("beta"))  # wind speeds aren't between 0 and 1
+    assert not dist.fits and dist.note.text() == "beta needs every value between 0 and 1"
+    assert not dist.note.isHidden()
+
+
+def test_summary_table_labels_explain_themselves_and_cumulative_reuses_the_fit(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    dist.fit_box.setCurrentIndex(dist.fit_box.findData("gamma"))
+    qtbot.waitUntil(lambda: bool(dist.fits) and _idle(window), timeout=60_000)
+    table = dist.table
+    tips = {table.horizontalHeaderItem(j).text(): table.horizontalHeaderItem(j).toolTip()
+            for j in range(table.columnCount())}
+    assert {"skew", "kurt"} <= set(tips) and tips["kurt"] == "kurtosis (3 for a normal)"
+    assert list(tips)[6:13] == ["min", "p5", "p25", "median", "p75", "p95", "max"]
+    assert tips["p25"] == "25th percentile (lower quartile)" and tips["max"] == "largest value"
+    assert tips["AIC"].startswith("Akaike information criterion") and tips["k"] == "gamma fit: shape"
+    assert tips["θ"] == "gamma fit: scale"
+    assert not table.toolTip() and not table.item(0, 0).toolTip()
+    row = table.verticalHeaderItem(0).toolTip()
+    assert "gamma fit" in row and "f(x) = " in row and "Γ" not in row  # the fitted numbers, not the symbols
+    assert "Γ(k)" in dist.fit_box.toolTip()
+    assert "Γ(k)" in dist.fit_box.itemData(dist.fit_box.findData("gamma"), Qt.ItemDataRole.ToolTipRole)
+    fits = dist.fits
+    dist.cumulative.setChecked(True)
+    assert dist.fits is fits and not dist.bin_count.isEnabled()  # the same fit, drawn as CDFs
+    items = [i for i in dist.plot.getPlotItem().listDataItems() if hasattr(i, "export_label")]
+    cdfs = [i for i in items if i.export_label.endswith("gamma CDF")]
+    assert len(cdfs) == len(FULL_BOOMS)
+    empirical = [i for i in items if i not in cdfs]
+    y = empirical[0].getData()[1]
+    assert np.all(np.diff(y) >= 0) and 0 <= y[0] < y[-1] <= 1
+    spec = dist.figure_spec()
+    assert spec["ylabel"] == "cumulative fraction" and len(spec["cdfs"]) == len(FULL_BOOMS)
+    assert all("cdf" in f for f in spec["fits"])
+    dist.cumulative.setChecked(False)
+    assert dist.fits is fits and dist.figure_spec()["hists"]
 
 
 def test_histograms_take_one_stability_class(window, qtbot):
@@ -597,6 +657,15 @@ def test_bookmarks_are_saved_listed_and_opened(window, qtbot, tmp_path):
     qtbot.waitUntil(lambda: inspector.bundle is not None and _idle(window), timeout=60_000)
     assert (inspector.slot, inspector.boom, inspector.variant()) == (SPIKY_SLOT + 1, 1, "naive")
     assert inspector.seq_info.text().startswith("2 / 2")
+    assert inspector.bookmark_button.text().startswith("★") and "'checks'" in inspector.bookmark_button.toolTip()
+    inspector.go_to(SPIKY_SLOT + 3)  # no bookmark there
+    assert inspector.bookmark_button.text().startswith("☆")
+    inspector.go_to(SPIKY_SLOT + 1)
+    assert inspector.bookmark_button.text().startswith("★")
+    store.remove(b.id for b in store.items)
+    window._bookmarks_changed()
+    assert inspector.bookmark_button.text().startswith("☆")
+    qtbot.waitUntil(lambda: _idle(window), timeout=60_000)
 
 
 def test_composite_spectra_draw_a_median_per_boom(window, qtbot):

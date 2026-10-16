@@ -8,9 +8,35 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower.physics.most import friction_velocity
+from ttu_tower.secondary.detect import SMOOTHING
 from ttu_tower.secondary.derived import materialize_missing_unexcised, tau_tables
 
 LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
+KERNELS = (("1-2-1 (the run's)", SMOOTHING), ("none", (1.0,)), ("1-1-1", (1.0, 1.0, 1.0)),
+           ("1-2-3-2-1", (1.0, 2.0, 3.0, 2.0, 1.0)), ("1-4-6-4-1", (1.0, 4.0, 6.0, 4.0, 1.0)))
+
+
+def parse_kernel(text: str) -> tuple[tuple[float, ...] | None, str]:
+    """Smoothing weights typed as e.g. "1-2-1" or "1, 3, 1": (weights, "") or
+    (None, the problem). A preset's label reads as its weights.
+    """
+    for label, weights in KERNELS:
+        if text.strip() == label:
+            return weights, ""
+    parts = [p for p in text.replace(",", " ").replace("-", " ").split() if p]
+    try:
+        weights = tuple(float(p) for p in parts)
+    except ValueError:
+        return None, "smoothing: weights are numbers, e.g. 1-2-1"
+    if not weights or len(weights) % 2 == 0:
+        return None, "smoothing: an odd number of weights, centred on each mode"
+    if any(w < 0 for w in weights) or weights[len(weights) // 2] <= 0:
+        return None, "smoothing: weights ≥ 0, the centre one > 0"
+    return weights, ""
+
+
+def kernel_text(weights) -> str:
+    return "-".join(f"{w:g}" for w in weights)
 
 
 def edited(cfg_secondary, detection: dict | None = None, selection: dict | None = None):
@@ -35,14 +61,14 @@ def problems(cfg_secondary) -> list[str]:
     return out
 
 
-def rerun(across, cfg_secondary) -> tuple[pd.DataFrame, pd.DataFrame]:
+def rerun(across, cfg_secondary, kernel: tuple[float, ...] = SMOOTHING) -> tuple[pd.DataFrame, pd.DataFrame]:
     """secondary's (tau, tau_selected) for the slot, every boom, as it would
-    compute them with `cfg_secondary`.
+    compute them with `cfg_secondary` and detection smoothing `kernel`.
     """
     mrd = across.mrd
     if mrd is None or mrd.empty:
         return pd.DataFrame(), pd.DataFrame()
-    tau, sel = tau_tables(mrd, across.table("coverage"), cfg_secondary)
+    tau, sel = tau_tables(mrd, across.table("coverage"), cfg_secondary, kernel=kernel)
     tables = materialize_missing_unexcised({"tau": tau, "tau_selected": sel}, across.table("slot_boom"))
     return tables["tau"], tables["tau_selected"]
 
@@ -73,11 +99,11 @@ def _ladder_values(ladder: pd.DataFrame, boom: int, variant: str, rung: float) -
         return float(friction_velocity(get("uw", "cov"), get("vw", "cov"))), float(np.sqrt(get("w", "var")))
 
 
-def compare(across, cfg_secondary) -> pd.DataFrame:
+def compare(across, cfg_secondary, kernel: tuple[float, ...] = SMOOTHING) -> pd.DataFrame:
     """One row per (boom, variant): stored vs what-if heat, momentum and
     selected tau, whether anything changed, and u*/σw at either selected tau.
     """
-    new_tau, new_sel = rerun(across, cfg_secondary)
+    new_tau, new_sel = rerun(across, cfg_secondary, kernel)
     old_tau, old_sel = across.table("tau"), across.table("tau_selected")
     ladder = across.table("ladder")
     rows = []

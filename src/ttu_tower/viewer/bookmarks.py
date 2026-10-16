@@ -74,6 +74,10 @@ class BookmarkStore:
     def for_run(self, run: str | None) -> list[Bookmark]:
         return [b for b in self.items if run is None or b.run == run]
 
+    def at(self, run: str, slot: int, boom: int) -> list[Bookmark]:
+        """Every bookmark of one run's (slot, boom), in any list or variant."""
+        return [b for b in self.items if b.run == run and b.slot == slot and b.boom == boom]
+
     def lists(self, run: str | None = None) -> list[str]:
         names = {b.list for b in self.for_run(run)} | {DEFAULT_LIST}
         return sorted(names, key=lambda n: (n != DEFAULT_LIST, n.lower()))

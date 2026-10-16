@@ -204,3 +204,17 @@ def test_trace_on_no_data_is_left_empty():
     trace = {}
     detect(np.zeros(15), np.zeros(15), _n_default(), False, _CFG, trace=trace)
     assert trace == {}
+
+
+def test_the_default_smoothing_is_1_2_1_and_a_single_weight_smooths_nothing():
+    d = np.asarray(_SIGN_TYPE, dtype=np.float64)
+    se, n = np.full(d.size, 0.05), _n_default()
+    default, explicit, plain = {}, {}, {}
+    det = detect(d, se, n, True, _CFG, trace=default)
+    assert repr(detect(d, se, n, True, _CFG, trace=explicit, kernel=(1, 2, 1))) == repr(det)  # NaN-safe
+    assert default["d_smooth"] == explicit["d_smooth"]
+    i = default["lo"] + 1  # an interior mode: (D[i-1] + 2 D[i] + D[i+1]) / 4
+    assert default["d_smooth"][i] == (2 * d[i - 1] + d[i - 2] + d[i]) / 4
+    detect(d, se, n, True, _CFG, trace=plain, kernel=(1,))
+    assert all(plain["d_smooth"][m] == d[m - 1] for m in plain["d_smooth"])
+    assert all(plain["se_smooth"][m] == se[m - 1] for m in plain["se_smooth"])

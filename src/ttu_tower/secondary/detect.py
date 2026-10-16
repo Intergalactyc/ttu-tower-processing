@@ -10,6 +10,7 @@ from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.primary.mrd import mode_scales_s
 
 STATUSES = ("no_data", "weak", "found", "capped", "unresolved")
+SMOOTHING = (1.0, 2.0, 1.0)  # Vickers & Mahrt's 1-2-1 weights, centred on each mode
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ def _result(status: str, *, tau_s=np.nan, tau_lb_s=np.nan, sign: int = 0, peak_s
 
 
 def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, cfg_det,
-           trace: dict | None = None) -> Detection:
+           trace: dict | None = None, kernel: tuple[float, ...] = SMOOTHING) -> Detection:
     """One cospectrum's status, tau (or its lower bound), sign and peak/reversal
     scales. `D`, `SE`, `N` are the mode 1..K rows of the `mrd` table for this
     (slot, boom, variant, spectrum), ordered by ascending scale. Mode scales
@@ -40,6 +41,9 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
     leaves later keys absent): "scales", "i_lo", "i_top", "u", "lo", "hi"
     (1-indexed modes), "d_smooth"/"se_smooth" (dicts keyed by mode), "k_se",
     "peak" and "reversal" ((mode, type)).
+
+    `kernel`: the smoothing weights, odd in length and centred on each mode,
+    renormalized where the searched range cuts them off; (1,) smooths nothing.
     """
     if trace is None:
         trace = {}
@@ -69,8 +73,11 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
 
     d_smooth: dict[int, float] = {}
     se_smooth: dict[int, float] = {}
+    half = len(kernel) // 2
     for i in range(lo, hi + 1):
-        members = [(2, i)] + [(1, j) for j in (i - 1, i + 1) if lo <= j <= hi]
+        members = [(kernel[half], i)]  # the centre first, then outwards: 1-2-1 sums in its original order
+        for d in range(1, half + 1):
+            members += [(w, j) for w, j in ((kernel[half - d], i - d), (kernel[half + d], i + d)) if lo <= j <= hi]
         wsum = sum(w for w, _ in members)
         d_smooth[i] = sum(w * D[j - 1] for w, j in members) / wsum
         se_smooth[i] = np.sqrt(sum((w * SE[j - 1]) ** 2 for w, j in members)) / wsum

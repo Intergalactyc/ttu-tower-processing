@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -79,12 +79,15 @@ class PanelControls(QWidget):
             self.boom_boxes[b] = box
             grid.addWidget(box, i % 5, i // 5)
         buttons = QHBoxLayout()
+        buttons.setSpacing(2)
         for label, pick in (("all", lambda b: True), ("none", lambda b: False), ("odd", lambda b: b % 2 == 1),
-                            ("1/5/10", lambda b: b in (1, 5, 10))):
-            btn = QPushButton(label)
-            btn.setFlat(True)
+                            ("even", lambda b: b % 2 == 0), ("1/5/10", lambda b: b in (1, 5, 10))):
+            btn = QToolButton()  # a push button's style minimum would hold the panel wide
+            btn.setText(label)
+            btn.setAutoRaise(True)
             btn.clicked.connect(lambda _=False, p=pick: self.set_booms([b for b in self.booms if p(b)]))
             buttons.addWidget(btn)
+        buttons.addStretch(1)
         grid.addLayout(buttons, 5, 0, 1, 2)
 
         self.pair_list = QListWidget()

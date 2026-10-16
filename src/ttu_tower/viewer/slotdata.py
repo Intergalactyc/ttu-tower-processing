@@ -10,7 +10,7 @@ import pandas as pd
 import pyarrow.dataset as pa_dataset
 
 from ttu_tower import schema
-from ttu_tower.secondary.detect import Detection, detect
+from ttu_tower.secondary.detect import SMOOTHING, Detection, detect
 from ttu_tower.secondary.select import select
 from ttu_tower.viewer.fragments import FragmentIndex
 
@@ -99,6 +99,41 @@ def _plain(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_ROW_KEYS = ("boom", "boom2", "variant", "rung_s", "spectrum", "cospectrum", "scale_s", "family", "variable", "stat",
+             "layer", "label", "group", "criterion")
+
+
+def _key_text(v) -> str:
+    return f"{v:g}" if isinstance(v, (float, np.floating)) else str(v)
+
+
+def all_rows(tables: dict[str, pd.DataFrame], boom: int) -> pd.DataFrame:
+    """Every stored value of the slot, one per line: its table, the key that
+    picks its row, its column (`field`), the value, and the row's position in
+    its table. A row with no value columns (filter_log) is one line with an
+    empty field.
+    """
+    parts = []
+    for name, df in tables.items():
+        drop = {"slot", "slot_start"}
+        if "boom" in df.columns and (df["boom"] == boom).all():
+            drop.add("boom")
+        keys = [c for c in df.columns if c in _ROW_KEYS and c not in drop]
+        fields = [c for c in df.columns if c not in drop and c not in keys]
+        key = pd.Series("", index=df.index, dtype=object)
+        for i, col in enumerate(keys):
+            key = key + ("" if i == 0 else ", ") + col + "=" + df[col].astype(object).map(_key_text)
+        row = np.arange(len(df))
+        lines = [pd.DataFrame({"table": name, "key": key.to_numpy(), "field": f, "value": df[f].astype(object).to_numpy(),
+                               "row": row}) for f in fields]
+        if not fields:
+            lines = [pd.DataFrame({"table": name, "key": key.to_numpy(), "field": "", "value": "", "row": row})]
+        parts.append(pd.concat(lines, ignore_index=True).sort_values("row", kind="stable"))
+    if not parts:
+        return pd.DataFrame(columns=["table", "key", "field", "value", "row"])
+    return pd.concat(parts, ignore_index=True)
+
+
 # --- the slot across every boom -------------------------------------------------------------
 
 _ACROSS_TABLES = ("slot_boom", "coverage", "means", "ladder", "tau", "tau_selected", "boom_stats", "slow",
@@ -149,6 +184,25 @@ class Spectrum:
         (co)variance at each scale, where every block is valid.
         """
         return np.nancumsum(self.value)
+
+
+NORMALIZE_TIP = ("divide by the sum over every mode (the within-block (co)variance at the largest scale), "
+                 "as the Summary's composite spectra do; its ± SE and detection curves alike")
+
+
+def normalizing_factor(spec: Spectrum | None) -> float:
+    """1 / the spectrum's sum over modes; NaN where that's 0 or there are no values."""
+    if spec is None:
+        return np.nan
+    total = np.nansum(spec.value)
+    return 1.0 / total if np.isfinite(total) and total != 0 else np.nan
+
+
+def normalized(spec: Spectrum | None) -> Spectrum | None:
+    if spec is None:
+        return None
+    f = normalizing_factor(spec)
+    return Spectrum(spec.scale_s, spec.value * f, spec.se * abs(f), spec.n_pairs)
 
 
 def spectrum(mrd: pd.DataFrame | None, slot: int, boom: int, variant: str, name: str) -> Spectrum | None:
@@ -214,9 +268,11 @@ class DetectionView:
         return same_status and ((np.isnan(a) and np.isnan(b)) or a == b)
 
 
-def rerun_detection(bundle: SlotBundle, variant: str, cfg_secondary) -> tuple[dict[str, DetectionView], tuple]:
+def rerun_detection(bundle: SlotBundle, variant: str, cfg_secondary,
+                    kernel: tuple[float, ...] = SMOOTHING) -> tuple[dict[str, DetectionView], tuple]:
     """Each detected cospectrum's detection (with trace) and the selection,
     rerun on the stored spectra: (views by family, (tau_s, source, source_status)).
+    `kernel`: detection's smoothing weights.
     """
     mrd_variant = spectrum_variant(bundle, variant)
     tau = bundle.table("tau")
@@ -225,10 +281,11 @@ def rerun_detection(bundle: SlotBundle, variant: str, cfg_secondary) -> tuple[di
         spec = spectrum(bundle.mrd, bundle.slot, bundle.boom, mrd_variant, name)
         trace: dict = {}
         if spec is None:
-            det = detect(np.zeros(0), np.zeros(0), np.zeros(0), False, cfg_secondary.detection, trace=trace)
+            det = detect(np.zeros(0), np.zeros(0), np.zeros(0), False, cfg_secondary.detection, trace=trace,
+                         kernel=kernel)
         else:
             det = detect(spec.value, spec.se, spec.n_pairs, family_has_data(bundle, mrd_variant, family),
-                         cfg_secondary.detection, trace=trace)
+                         cfg_secondary.detection, trace=trace, kernel=kernel)
         stored = tau[(tau["variant"] == mrd_variant) & (tau["cospectrum"] == family)]
         views[family] = DetectionView(family, name, det, trace, stored.iloc[0].to_dict() if not stored.empty else None)
     selection = select(views["heat"].detection, views["momentum"].detection, cfg_secondary.selection)

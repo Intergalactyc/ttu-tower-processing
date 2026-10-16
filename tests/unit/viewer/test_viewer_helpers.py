@@ -135,12 +135,27 @@ def test_break_wraps_splits_lines_at_the_0_360_seam():
 
 def test_circular_summary_uses_the_vector_mean():
     pytest.importorskip("PySide6")
-    from ttu_tower.viewer.ui.distribution import summary
+    from ttu_tower.viewer.ui.distribution import _STATS, summary
 
-    n, nan_pct, mean, median, sigma, p5, p95 = summary(np.array([350.0, 10.0, np.nan]), circular=True)
-    assert n == 2 and nan_pct == pytest.approx(100 / 3)
-    assert min(mean, 360 - mean) < 1e-9  # 0°, not the linear 180°
-    assert 0 < sigma < 15 and np.isnan(median)
+    stats = dict(zip(_STATS, summary(np.array([350.0, 10.0, np.nan]), circular=True), strict=True))
+    assert stats["N"] == 2 and stats["NaN %"] == pytest.approx(100 / 3)
+    assert min(stats["mean"], 360 - stats["mean"]) < 1e-9  # 0°, not the linear 180°
+    assert 0 < stats["σ"] < 15
+    assert all(np.isnan(stats[c]) for c in ("skew", "kurt", "min", "p25", "median", "p75", "max"))
+
+
+def test_summary_has_moments_and_quantiles_and_an_ecdf():
+    pytest.importorskip("PySide6")
+    from ttu_tower.viewer.ui.distribution import _STATS, ecdf, summary
+
+    v = np.random.default_rng(0).exponential(2.0, 200_000)
+    stats = dict(zip(_STATS, summary(np.append(v, np.nan)), strict=True))
+    assert stats["skew"] == pytest.approx(2.0, rel=0.05) and stats["kurt"] == pytest.approx(9.0, rel=0.1)  # 2, 9
+    assert stats["min"] == v.min() and stats["max"] == v.max()
+    assert stats["p25"] == pytest.approx(2.0 * np.log(4 / 3), rel=0.02)  # the exponential's quartiles
+    assert stats["p75"] == pytest.approx(2.0 * np.log(4), rel=0.02)
+    assert stats["min"] < stats["p5"] < stats["p25"] < stats["median"] < stats["p75"] < stats["p95"] < stats["max"]
+    assert list(ecdf(np.array([1.0, 2.0, np.nan, 3.0]), np.array([0.0, 2.0, 5.0]))) == [0.0, 2 / 3, 1.0]
 
 
 def test_nearest_on_curve_counts_every_sample_in_the_radius_and_the_lines_between():

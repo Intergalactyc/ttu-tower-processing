@@ -7,7 +7,7 @@ import pandas as pd
 from ttu_tower.constants import HEIGHTS, SITE_ELEVATION, SITE_LATITUDE
 from ttu_tower.physics import most, turbulence
 from ttu_tower.physics.earth import local_gravity
-from ttu_tower.secondary.detect import detect
+from ttu_tower.secondary.detect import SMOOTHING, detect
 from ttu_tower.secondary.select import select
 
 _COSPECTRA = {"heat": "wvpts", "momentum": "uw"}
@@ -31,9 +31,11 @@ def _mode_arrays(spectrum_rows: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, n
     return g["value"].to_numpy(dtype=float), g["se"].to_numpy(dtype=float), g["n_pairs"].to_numpy()
 
 
-def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary) -> tuple[pd.DataFrame, pd.DataFrame]:
+def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary,
+               kernel: tuple[float, ...] = SMOOTHING) -> tuple[pd.DataFrame, pd.DataFrame]:
     """`tau` and `tau_selected` rows for every (slot, boom, variant) present in
     `mrd` (variant in {mrd, mrd_unexcised}, whichever primary computed).
+    `kernel`: detection's smoothing (the viewer's what-if varies it).
     """
     family_has_data: dict[tuple, bool] = {}
     cov = coverage[coverage["variable"].isin(("heat", "momentum")) & coverage["layer"].isin(("usable", "unexcised"))]
@@ -48,7 +50,7 @@ def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary) -> tupl
         for family, spectrum in _COSPECTRA.items():
             D, SE, N = _mode_arrays(group[group["spectrum"] == spectrum])
             has_data = family_has_data.get((slot, boom, variant, family), False)
-            det = detect(D, SE, N, has_data, cfg_secondary.detection)
+            det = detect(D, SE, N, has_data, cfg_secondary.detection, kernel=kernel)
             detections[family] = det
             tau_rows.append((slot, boom, variant, family, det.status, det.tau_s, det.tau_lb_s,
                               det.sign, det.peak_scale_s, det.reversal_scale_s, det.reversal_type))

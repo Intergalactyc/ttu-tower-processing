@@ -293,10 +293,11 @@ class OverviewStrip(pg.PlotWidget):
         self.axis = pg.DateAxisItem(orientation="bottom", utcOffset=display_offset_s(tz))
         super().__init__(parent=parent, axisItems={"bottom": self.axis})
         self.setMinimumHeight(110)
-        self.setMaximumHeight(200)
-        self.setMouseEnabled(x=False, y=False)
-        self.hideButtons()
+        self.setMaximumHeight(600)  # the splitter above it can make it taller, for the boom rows
+        self.setMouseEnabled(x=True, y=False)  # zooms and pans in time on its own, not with the timelines
         self.getPlotItem().setMenuEnabled(False)
+        self.setToolTip("availability over the whole period: drag the box to move the timelines; wheel or "
+                        "right-drag zooms this strip, left-drag pans it; double-click (or A) shows the whole period")
         self.getPlotItem().getAxis("left").setWidth(60)
         self.image = pg.ImageItem(axisOrder="row-major")
         self.addItem(self.image)
@@ -310,6 +311,7 @@ class OverviewStrip(pg.PlotWidget):
         self._quiet = False
         self._slots = np.empty(0, dtype=np.int64)
         self._booms: list[int] = []
+        self._period = (0.0, 1.0)
 
     def set_timezone(self, tz: str) -> None:
         self.axis.utcOffset = display_offset_s(tz)
@@ -327,8 +329,11 @@ class OverviewStrip(pg.PlotWidget):
         x0 = slot_to_unix(slots[0]) if slots.size else 0.0
         self.image.setRect(x0, 0, slots.size * SLOT_SECONDS, rgba.shape[0])
         self.getPlotItem().getAxis("left").setTicks([[(i + 0.5, f"b{b}") for i, b in enumerate(booms)]])
+        self._period = (x0, x0 + max(slots.size, 1) * SLOT_SECONDS)
+        self.getViewBox().setLimits(xMin=self._period[0], xMax=self._period[1], minXRange=6 * SLOT_SECONDS,
+                                    yMin=0, yMax=rgba.shape[0] + 1)  # +1: the selection row
         self.setYRange(0, rgba.shape[0], padding=0)
-        self.setXRange(x0, x0 + slots.size * SLOT_SECONDS, padding=0)
+        self.show_whole_period()
 
     def set_selection(self, selected: np.ndarray) -> None:
         """Mark the brushed slots in a row above the booms, to show where in the
@@ -348,6 +353,13 @@ class OverviewStrip(pg.PlotWidget):
             self.setYRange(0, rows + 1, padding=0)
             ticks.append((rows + 0.5, "sel"))
         self.getPlotItem().getAxis("left").setTicks([ticks])
+
+    def show_whole_period(self) -> None:
+        self.setXRange(*self._period, padding=0)
+
+    def mouseDoubleClickEvent(self, ev) -> None:
+        self.show_whole_period()
+        ev.accept()
 
     def show_range(self, x0: float, x1: float) -> None:
         self._quiet = True

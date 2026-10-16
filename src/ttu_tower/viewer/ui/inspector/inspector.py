@@ -75,9 +75,9 @@ class InspectorWindow(QWidget):
         self.seq_prev.clicked.connect(lambda: self.step_sequence(-1))
         self.seq_next.clicked.connect(lambda: self.step_sequence(1))
         self.seq_info = QLabel()
-        bookmark = QPushButton("☆ Bookmark")
-        bookmark.setToolTip("save this slot, boom and variant, with a note, to a bookmark list")
-        bookmark.clicked.connect(self._request_bookmark)
+        self.bookmark_button = QPushButton("☆ Bookmark")
+        self.bookmark_button.clicked.connect(self._request_bookmark)
+        self.bookmarks_at = None  # (slot, boom) -> this run's bookmarks there; set by the main window
         self.summary = QLabel()
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         self.summary.setWordWrap(True)
@@ -110,7 +110,7 @@ class InspectorWindow(QWidget):
         header = QHBoxLayout()
         header.addWidget(self.title, stretch=1)
         for w in (self.seq_prev, self.seq_info, self.seq_next, prev_btn, next_btn, self.boom_box, self.variant_box,
-                  bookmark, self.pin):
+                  self.bookmark_button, self.pin):
             header.addWidget(w)
         self._show_sequence()
         layout = QVBoxLayout(self)
@@ -232,8 +232,24 @@ class InspectorWindow(QWidget):
 
     # --- stored data ------------------------------------------------------------------------------
 
+    def show_bookmarked(self) -> None:
+        """A filled star while this slot and boom are in any bookmark list."""
+        marks = self.bookmarks_at(self.slot, self.boom) if self.bookmarks_at is not None and self.slot is not None \
+            else []
+        button = self.bookmark_button
+        if marks:
+            button.setText("★ Bookmarked")
+            button.setStyleSheet("QPushButton { color: #b8860b; font-weight: bold; }")
+            where = "; ".join(f"'{b.list}' ({b.variant})" + (f": {b.note}" if b.note else "") for b in marks)
+            button.setToolTip(f"bookmarked in {where} · click to add another bookmark")
+        else:
+            button.setText("☆ Bookmark")
+            button.setStyleSheet("")
+            button.setToolTip("save this slot, boom and variant, with a note, to a bookmark list")
+
     def _load(self) -> None:
         self._show_sequence()
+        self.show_bookmarked()
         self.title.setText(f"<b>Boom {self.boom}</b> ({HEIGHTS[self.boom]:g} m) · slot "
                            f"{format_slot(self.slot, self.run.timezone)} (k = {self.slot})")
         self.summary.setText("loading…")

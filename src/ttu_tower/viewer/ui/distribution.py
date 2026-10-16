@@ -1,6 +1,6 @@
-"""Histograms of what a timeline panel shows - over its visible range, or the
-whole period, in every stability class or one - with a summary table per boom,
-and fitted distributions.
+"""Histograms (or cumulative distributions) of what a timeline panel shows -
+over its visible range, or the whole period, in every stability class or one -
+with a summary table per boom, and fitted distributions.
 """
 import warnings
 
@@ -13,32 +13,50 @@ from PySide6.QtWidgets import (
 )
 
 from ttu_tower.math.polar import yamartino_std
+from ttu_tower.math.stats import moments
 from ttu_tower.viewer import distfits
 from ttu_tower.viewer.decimate import visible_slice
 from ttu_tower.viewer.timeline import in_class
 from ttu_tower.viewer.ui import style, tables
 
-_STATS = ("N", "NaN %", "mean", "median", "σ", "p5", "p95")
+_STATS = ("N", "NaN %", "mean", "σ", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
+_QUANTILES = (0, 5, 25, 50, 75, 95, 100)  # min to max, as percentiles
+# column -> its label's tooltip (for a direction, _ABOUT_CIRCULAR's where it differs)
+_ABOUT = {"N": "number of values", "NaN %": "share of values missing", "mean": "mean",
+          "σ": "standard deviation", "skew": "skewness", "kurt": "kurtosis (3 for a normal)",
+          "min": "smallest value", "p5": "5th percentile", "p25": "25th percentile (lower quartile)",
+          "median": "median", "p75": "75th percentile (upper quartile)", "p95": "95th percentile",
+          "max": "largest value", "KS": "Kolmogorov–Smirnov statistic: lower fits better",
+          "AIC": "Akaike information criterion: lower fits better"}
+_ABOUT_CIRCULAR = {"mean": "mean direction of unit vectors", "σ": "Yamartino standard deviation"}
 TABLE_SHARE = 0.3  # the table's default share of the height it shares with its histogram
 BINS = 60  # the default bin count
+CDF_POINTS = 1000  # where the cumulative view evaluates each boom's distribution
 # with slots brushed: the selection beside the rest, the selection alone, or every slot
 SHOW = (("both", "selection and the rest"), ("selected", "selection only"), ("all", "all slots"))
 
 
 def summary(values: np.ndarray, circular: bool = False) -> list[float]:
-    """N, NaN %, mean, median, σ, p5, p95. For a direction: the vector mean of
-    unit vectors and the Yamartino σ; median and percentiles aren't defined.
+    """The _STATS columns: N, NaN %, mean, σ, skewness, kurtosis, then min, p5,
+    p25, median, p75, p95, max. For a direction: the vector mean of unit vectors
+    and the Yamartino σ; the rest aren't defined.
     """
     finite = values[np.isfinite(values)]
     if finite.size == 0:
-        return [0, 100.0 if values.size else np.nan] + [np.nan] * 5
+        return [0, 100.0 if values.size else np.nan] + [np.nan] * (len(_STATS) - 2)
     nan_pct = 100.0 * (1 - finite.size / values.size)
     if circular:
         s, c = np.sin(np.radians(finite)).mean(), np.cos(np.radians(finite)).mean()
         mean = np.degrees(np.arctan2(s, c)) % 360.0
-        return [finite.size, nan_pct, mean, np.nan, float(yamartino_std(s, c)), np.nan, np.nan]
-    p5, p50, p95 = np.percentile(finite, [5, 50, 95])
-    return [finite.size, nan_pct, finite.mean(), p50, finite.std(), p5, p95]
+        return [finite.size, nan_pct, mean, float(yamartino_std(s, c))] + [np.nan] * (len(_STATS) - 4)
+    skew, kurt = moments(finite)
+    return [finite.size, nan_pct, finite.mean(), finite.std(), skew, kurt] + list(np.percentile(finite, _QUANTILES))
+
+
+def ecdf(values: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """The share of the finite values at or below each x."""
+    v = np.sort(values[np.isfinite(values)])
+    return np.searchsorted(v, x, side="right") / max(v.size, 1)
 
 
 def _fit_all(values: dict, name: str) -> dict:
@@ -93,14 +111,14 @@ class DistributionView(QWidget):
                                  "selection alone, or every slot as if nothing were brushed")
         self.show_box.setEnabled(False)
         self.show_box.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.cumulative = QCheckBox("cumulative")
+        self.cumulative.toggled.connect(lambda *_: self.refresh())
         self.bin_count = QSpinBox()
         self.bin_count.setRange(5, 500)
         self.bin_count.setValue(BINS)
         self.bin_count.setToolTip("how many bins span the range")
         self.bin_auto = QCheckBox("auto range")
         self.bin_auto.setChecked(True)
-        self.bin_auto.setToolTip("the bins span the 0.1st to 99.9th percentiles (0–360° for directions); "
-                                 "untick to set the range (values outside it are left out)")
         self.bin_lo, self.bin_hi = QDoubleSpinBox(), QDoubleSpinBox()
         for box in (self.bin_lo, self.bin_hi):
             box.setRange(-1e9, 1e9)
@@ -111,11 +129,10 @@ class DistributionView(QWidget):
         self.bin_count.valueChanged.connect(lambda *_: self.refresh())
         self.bin_auto.toggled.connect(self._on_bin_auto)
         self.fits: dict = {}
+        self._fitted = None  # (args, inputs, fits) of the last fit, reused while only the view changes
         self.plot = pg.PlotWidget()
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         self.table = tables.new_table()
-        self.table.setToolTip("fit columns: KS is the Kolmogorov–Smirnov statistic (smaller fits better); "
-                              "AIC, lower is better")
         self.note = QLabel()
         self.note.hide()
         layout = QVBoxLayout(self)
@@ -126,6 +143,7 @@ class DistributionView(QWidget):
         head.addWidget(self.stability_box)
         head.addWidget(QLabel("show"))
         head.addWidget(self.show_box)
+        head.addWidget(self.cumulative)
         head.addStretch(1)
         head.addWidget(QLabel("fit"))
         head.addWidget(self.fit_box)
@@ -146,7 +164,6 @@ class DistributionView(QWidget):
         self.split = QSplitter(Qt.Orientation.Vertical)
         self.split.setChildrenCollapsible(False)
         self.sel_table = tables.new_table()
-        self.sel_table.setToolTip(self.table.toolTip())
         self.captions = [QLabel(), QLabel()]
         for c in self.captions:
             c.setStyleSheet("color:#555;")
@@ -175,7 +192,7 @@ class DistributionView(QWidget):
         self._size_table()
 
     def _fit_choices(self, circular: bool) -> None:
-        names = [distfits.CIRCULAR] if circular else [n for n in distfits.available(np.array([1.0]), False)]
+        names = distfits.names(circular)
         current = self.fit_box.currentData()
         if [self.fit_box.itemData(i) for i in range(1, self.fit_box.count())] == names:
             return
@@ -184,6 +201,7 @@ class DistributionView(QWidget):
         self.fit_box.addItem("none", None)
         for n in names:
             self.fit_box.addItem(n, n)
+            self.fit_box.setItemData(self.fit_box.count() - 1, distfits.formula(n), Qt.ItemDataRole.ToolTipRole)
         i = self.fit_box.findData(current)
         self.fit_box.setCurrentIndex(max(i, 0))
         self.fit_box.blockSignals(False)
@@ -253,8 +271,10 @@ class DistributionView(QWidget):
         name = self.stability_box.currentData()
         showing = self.showing()
         split = showing == "both" and not q.categorical
-        note = {"both": " · filled: brushed selection, lines: the rest (each its own density)",
-                "selected": " · the brushed selection only", "all": ""}[showing]
+        cumulative = self.cumulative.isChecked() and not q.categorical
+        both = ("highlighted: brushed selection, plain: the rest (each its own fraction)" if cumulative
+                else "filled: brushed selection, lines: the rest (each its own density)")
+        note = {"both": f" · {both}", "selected": " · the brushed selection only", "all": ""}[showing]
         self.title.setText(f"<b>{q.title}</b> — {scope}" + (f", {name} only" if name else "")
                            + (note if split or showing == "selected" else ""))
         self._fit_choices(q.circular)
@@ -264,6 +284,15 @@ class DistributionView(QWidget):
         self._enable_controls(q, values)
         if q.categorical:
             self._bars(values, data.categories or [])
+        elif cumulative:
+            if self._set_edges(values, q.circular):
+                if split:
+                    self._cumulatives(self.split_values(False), "the rest")
+                    self._cumulatives(self.split_values(True), "brushed selection", selected=True)
+                else:
+                    self._cumulatives(values, "brushed selection" if showing == "selected" else "")
+                self.plot.setLabel("bottom", ("log10 " if self._log else "") + (q.unit or "value"))
+                self.plot.setLabel("left", "cumulative fraction")
         elif split:
             self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values, part="the rest")
             self._selected_histograms()
@@ -288,16 +317,28 @@ class DistributionView(QWidget):
         to directions or values that aren't all positive.
         """
         self.fit_box.setEnabled(not q.categorical)
-        self.fit_box.setToolTip("categories aren't fitted" if q.categorical else
-                                "fit a distribution to each boom's values (maximum likelihood; dashed)")
+        fit = self.fit_box.currentData()
+        self.fit_box.setToolTip(
+            "categories aren't fitted" if q.categorical else
+            f"<b>{fit}</b>, fitted to each boom's values by maximum likelihood (dashed)<br>{distfits.formula(fit)}"
+            if fit is not None else "fit a distribution to each boom's values (maximum likelihood; dashed)")
+        cumulative = self.cumulative.isChecked() and not q.categorical
+        self.cumulative.setEnabled(not q.categorical)
+        self.cumulative.setToolTip("categories have no order to accumulate" if q.categorical else
+                                   "each boom's cumulative distribution, from all its values, with the fit's CDF")
         finite = [v[np.isfinite(v)] for v in values.values()]
         positive = any(v.size for v in finite) and all((v > 0).all() for v in finite)
         why = ("categories have no bins" if q.categorical else "directions are binned over 0–360°" if q.circular
                else None if positive else "needs every value positive")
         self.log_bins.setEnabled(why is None)
-        self.log_bins.setToolTip(why or "logarithmically spaced bins, on a log axis")
-        for w in (self.bin_count, self.bin_auto):
-            w.setEnabled(not q.categorical)
+        self.log_bins.setToolTip(why or ("a log axis" if cumulative else "logarithmically spaced bins, on a log axis"))
+        self.bin_auto.setEnabled(not q.categorical)
+        self.bin_auto.setToolTip(
+            "the view spans the 0.1st to 99.9th percentiles (0–360° for directions); untick to set the range"
+            if cumulative else "the bins span the 0.1st to 99.9th percentiles (0–360° for directions); untick to "
+            "set the range (values outside it are left out)")
+        self.bin_count.setEnabled(not q.categorical and not cumulative)
+        self.bin_count.setToolTip("the cumulative view isn't binned" if cumulative else "how many bins span the range")
         for box in (self.bin_lo, self.bin_hi):
             box.setEnabled(not q.categorical and not self.bin_auto.isChecked())
 
@@ -327,35 +368,35 @@ class DistributionView(QWidget):
                                       "height": counts / max(counts.sum(), 1), "width": width})
             panel.update(xlabel="", ylabel="fraction", xticks=list(enumerate(categories)))
             return panel
+        cumulative = self.cumulative.isChecked()
+        ylabel = "cumulative fraction" if cumulative else "density"
         if self._edges.size < 2:
-            return panel | {"xlabel": q.unit or "value", "ylabel": "density", "log_x": False}
-        for i, (m, v) in enumerate(values.items()):
-            v = v[np.isfinite(v)]
-            if v.size:
-                density, _ = np.histogram(v, bins=self._edges, density=True)
-                label = style.member_label(m) or "value"
-                suffix = ", the rest" if split else ", selected" if showing == "selected" else ""
-                panel["hists"].append({"label": f"{label}{suffix}",
-                                       "color": pg.mkColor(style.member_color(m, i)).name(), "edges": self._edges,
-                                       "density": density})
-        if split:
-            for i, (m, v) in enumerate(self.split_values(True).items()):
+            return panel | {"xlabel": q.unit or "value", "ylabel": ylabel, "log_x": False}
+        cdf_x = self._grid(CDF_POINTS)
+        parts = [(values, False)] + ([(self.split_values(True), True)] if split else [])
+        for by_member, selected in parts:
+            for i, (m, v) in enumerate(by_member.items()):
                 v = v[np.isfinite(v)]
-                if v.size:
+                if not v.size:
+                    continue
+                label = style.member_label(m) or "value"
+                suffix = ", selected" if selected or showing == "selected" else ", the rest" if split else ""
+                entry = {"label": f"{label}{suffix}", "color": pg.mkColor(style.member_color(m, i)).name()}
+                if cumulative:
+                    panel.setdefault("cdfs", []).append(entry | {"x": cdf_x, "y": ecdf(v, cdf_x), "selected": selected})
+                else:
                     density, _ = np.histogram(v, bins=self._edges, density=True)
-                    panel["hists"].append({"label": f"{style.member_label(m) or 'value'}, selected",
-                                           "color": pg.mkColor(style.member_color(m, i)).name(),
-                                           "edges": self._edges, "density": density, "filled": True})
-        lo, hi = self._edges[0], self._edges[-1]
-        grid = np.geomspace(lo, hi, 300) if self._log else np.linspace(lo, hi, 300)
+                    panel["hists"].append(entry | {"edges": self._edges, "density": density, "filled": selected})
+        grid = self._grid()
         members = list(self._args[1])
         for (part, m), f in self.fits.items():
             if f is not None:
                 i = members.index(m) if m in members else 0
                 with np.errstate(all="ignore"):
-                    panel["fits"].append({"label": m, "color": pg.mkColor(style.member_color(m, i)).name(),
-                                          "x": grid, "pdf": f.pdf(grid), "dashdot": part == "selected"})
-        panel.update(xlabel=q.unit or "value", ylabel="density", log_x=bool(self._log))
+                    curve = {"cdf": f.cdf(grid)} if cumulative else {"pdf": f.pdf(grid)}
+                panel["fits"].append({"label": m, "color": pg.mkColor(style.member_color(m, i)).name(), "x": grid,
+                                      "dashdot": part == "selected"} | curve)
+        panel.update(xlabel=q.unit or "value", ylabel=ylabel, log_x=bool(self._log))
         return panel
 
     # --- the table -----------------------------------------------------------------------------
@@ -365,20 +406,22 @@ class DistributionView(QWidget):
         for member, v in values.items():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
-                stats = summary(v, circular) if not categorical else summary(v)[:2] + [np.nan] * 5
+                stats = summary(v, circular) if not categorical else summary(v)[:2] + [np.nan] * (len(_STATS) - 2)
             rows[style.member_label(member) or "value"] = stats
         frame = pd.DataFrame.from_dict(rows, orient="index", columns=list(_STATS))
         return frame.dropna(axis=1, how="all")
 
-    def _show_tables(self, fitted: dict | None = None) -> None:
+    def _show_tables(self, fitted: dict | None = None, formulas: dict | None = None) -> None:
         """The summary per part, with its fit's parameters appended: one table
-        for all slots, or the rest's and the brushed selection's.
+        for all slots, or the rest's and the brushed selection's. `formulas`:
+        part -> row label -> the fitted PDF, for the row label's tooltip.
         """
-        fitted = fitted or {}
+        fitted, formulas = fitted or {}, formulas or {}
         split = "rest" in self._stats
         if split:
-            shown = [("rest", self.table, "the rest (lines)"),
-                     ("selected", self.sel_table, "brushed selection (filled)")]
+            plain, marked = ("plain", "highlighted") if self.cumulative.isChecked() else ("lines", "filled")
+            shown = [("rest", self.table, f"the rest ({plain})"),
+                     ("selected", self.sel_table, f"brushed selection ({marked})")]
         else:
             shown = [("selected" if "selected" in self._stats else "all", self.table, "")]
         for part, table, _ in shown:
@@ -389,12 +432,31 @@ class DistributionView(QWidget):
                 frame = frame.join(extra.rename(columns={c: f"{c} (fit)" for c in extra.columns if c in frame.columns}))
             tables.fill(table, frame, index=True,
                         fmt=lambda col, v: f"{v:.0f}" if col == "N" and np.isfinite(v) else None)
+            self._header_tips(table)
+            for i, label in enumerate(frame.index):
+                if label in formulas.get(part, {}):
+                    table.verticalHeaderItem(i).setToolTip(f"<b>{label}</b>, {self.fit_box.currentText()} fit<br>"
+                                                           f"{formulas[part][label]}")
         self.sel_table.setVisible(split)
         for label, (_, _, text) in zip(self.captions, shown if split else []):
             label.setText(text)
         for label in self.captions:
             label.setVisible(split)
         self._size_table()
+
+    def _header_tips(self, table) -> None:
+        """Each column label's tooltip says what that column is; the cells have none."""
+        q = self._args[0].quantity if self._args is not None and self._args[0] is not None else None
+        fit = self.fit_box.currentData()
+        for j in range(table.columnCount()):
+            item = table.horizontalHeaderItem(j)
+            label = item.text()
+            if fit is not None and (label.endswith(" (fit)") or label not in _ABOUT):
+                words = distfits.about(fit, label.removesuffix(" (fit)"))
+                tip = f"{fit} fit: {words}" if words else ""
+            else:
+                tip = (_ABOUT_CIRCULAR.get(label) if q is not None and q.circular else None) or _ABOUT.get(label, "")
+            item.setToolTip(tip)
 
     def _user_sized(self, *_) -> None:
         self._sized_by_user = True
@@ -436,53 +498,85 @@ class DistributionView(QWidget):
         values = {(part, m): v[np.isfinite(v)] for part, by_member in parts.items() for m, v in by_member.items()}
         if name != distfits.CIRCULAR and name not in distfits.available(
                 np.concatenate(list(values.values())) if values else np.empty(0), False):
-            self.note.setText(f"{name} needs every value positive")
+            self.note.setText(f"{name} needs {distfits.needs(name)}")
             self.note.show()
             return
         args = self._args
+        # the same values and fit as last time (only the view changed): no need to fit again
+        inputs = (name, self.stability_box.currentData(), self.showing(), self.selection.tobytes())
+        if self._fitted is not None and self._fitted[0] is args and self._fitted[1] == inputs:
+            self._fits_ready(args, self._fitted[2])
+            return
+
+        def done(fits):
+            self._fitted = (args, inputs, fits)
+            self._fits_ready(args, fits)
+
         if self.runner is None:
-            self._fits_ready(args, _fit_all(values, name))
+            done(_fit_all(values, name))
         else:
             self.runner.submit(_fit_all, values, name, key=f"distfit-{id(self)}", label=f"fitting {name}",
-                               on_done=lambda fits: self._fits_ready(args, fits))
+                               on_done=done)
 
     def _fits_ready(self, args, fits: dict) -> None:
-        """`fits`: (part, member) -> DistFit; PDFs dashed (the selection's dash-dotted)."""
+        """`fits`: (part, member) -> DistFit; PDFs (or CDFs) dashed, the selection's dash-dotted."""
         if args is not self._args or not self._stats:
             return
         self.fits = fits
         members = list(self._args[1])
+        cumulative = self.cumulative.isChecked()
         rows: dict = {}
+        formulas: dict = {}
         for (part, member), f in fits.items():
             if f is None:
                 continue
-            rows.setdefault(part, {})[style.member_label(member) or "value"] = {**f.params, "KS": f.ks, "AIC": f.aic}
-            lo, hi = self._edges[0], self._edges[-1]
-            x = np.geomspace(lo, hi, 300) if self._log else np.linspace(lo, hi, 300)
+            label = style.member_label(member) or "value"
+            rows.setdefault(part, {})[label] = {**f.params, "KS": f.ks, "AIC": f.aic}
+            formulas.setdefault(part, {})[label] = distfits.filled(f)
+            x = self._grid()
             with np.errstate(all="ignore"):
-                y = f.pdf(x)
+                y = f.cdf(x) if cumulative else f.pdf(x)
             dash = Qt.PenStyle.DashDotLine if part == "selected" else Qt.PenStyle.DashLine
             i = members.index(member) if member in members else 0
             curve = pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
                 style.member_color(member, i), width=1.6, style=dash))
             part_label = {"rest": ", the rest", "selected": ", brushed selection"}.get(part, "")
-            curve.export_label = f"{style.member_label(member) or 'value'}{part_label}: {self.fit_box.currentText()} PDF"
+            curve.export_label = (f"{style.member_label(member) or 'value'}{part_label}: {self.fit_box.currentText()} "
+                                  + ("CDF" if cumulative else "PDF"))
             self.plot.addItem(curve)
-        self._show_tables({part: pd.DataFrame.from_dict(r, orient="index") for part, r in rows.items()})
+        self._show_tables({part: pd.DataFrame.from_dict(r, orient="index") for part, r in rows.items()}, formulas)
 
     # --- plots --------------------------------------------------------------------------------
 
-    def _histograms(self, values: dict, unit: str, circular: bool = False, bins_from: dict | None = None,
-                    part: str = "") -> None:
-        """`bins_from`: the values the bins span (default `values`), so a split's parts share bins;
-        `part`: what the values are, for the CSV export ("the rest", "brushed selection").
+    def _grid(self, n: int = 300) -> np.ndarray:
+        """`n` points across the range, log-spaced with log bins."""
+        lo, hi = self._edges[0], self._edges[-1]
+        return np.geomspace(lo, hi, n) if self._log else np.linspace(lo, hi, n)
+
+    def _cumulatives(self, values: dict, part: str = "", selected: bool = False) -> None:
+        """Each boom's empirical CDF across the range, from all its values (the
+        range only frames it); the brushed selection's highlighted.
         """
-        spanned = values if bins_from is None else bins_from
+        x = self._grid(CDF_POINTS)
+        for i, (member, v) in enumerate(values.items()):
+            if not np.isfinite(v).any():
+                continue
+            halo = pg.mkPen(style.SELECTED_COLOR, width=4.5) if selected else None
+            item = pg.PlotDataItem(np.log10(x) if self._log else x, ecdf(v, x), shadowPen=halo,
+                                   pen=pg.mkPen(style.member_color(member, i), width=1.8 if selected else 1.5))
+            label = style.member_label(member) or "value"
+            item.export_label = f"{label}: {part}" if part else label
+            self.plot.addItem(item)
+
+    def _set_edges(self, spanned: dict, circular: bool) -> bool:
+        """The bins (the cumulative view's range) for `spanned`'s values; False
+        when there are too few to span.
+        """
         pooled = np.concatenate([v[np.isfinite(v)] for v in spanned.values()]) if spanned else np.empty(0)
         self.plot.setLogMode(x=False)
         if pooled.size < 2:
             self._edges = np.empty(0)
-            return
+            return False
         log = self.log_bins.isEnabled() and self.log_bins.isChecked()
         self._log = log
         n = self.bin_count.value() + 1
@@ -503,8 +597,17 @@ class DistributionView(QWidget):
                 lo = pooled.min()
         if hi <= lo:
             lo, hi = lo - 0.5, lo + 0.5
-        edges = np.logspace(np.log10(lo), np.log10(hi), n) if log else np.linspace(lo, hi, n)
-        self._edges = edges
+        self._edges = np.logspace(np.log10(lo), np.log10(hi), n) if log else np.linspace(lo, hi, n)
+        return True
+
+    def _histograms(self, values: dict, unit: str, circular: bool = False, bins_from: dict | None = None,
+                    part: str = "") -> None:
+        """`bins_from`: the values the bins span (default `values`), so a split's parts share bins;
+        `part`: what the values are, for the CSV export ("the rest", "brushed selection").
+        """
+        if not self._set_edges(values if bins_from is None else bins_from, circular):
+            return
+        edges, log = self._edges, self._log
         for i, (member, v) in enumerate(values.items()):
             v = v[np.isfinite(v)]
             if v.size == 0:

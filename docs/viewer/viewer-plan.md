@@ -792,7 +792,7 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
   - A click on a point opens the inspector.
 - **Distribution fits** (`distfits.py`) in each histogram's "fit" menu:
   - normal, log-normal, Weibull and gamma (positive-only where needed), or von Mises for
-    directions
+    directions; Rayleigh, exponential and beta were added later (see "Changes")
   - maximum likelihood per boom on at most 50k values, run in the worker
   - dashed PDFs over the histograms, plus a table of parameters, KS and AIC
 - **Revisions (Elliott, same day):**
@@ -1249,7 +1249,7 @@ viewed interval or the whole period like the others.
   block means, so like the ogive it is cumulative up to that scale.
   - **Slot Inspector → Spectra:** a fifth column holds u'w' TE (top) and w'θv' TE (bottom)
     against rung, with the same overlays (all booms, slots ±3, unexcised) and τ lines. A
-    "transport efficiency" box, on by default, hides it. The bundle's `te` rows cover this slot
+    "transport efficiencies" box hides it (see the plot-group boxes below). The bundle's `te` rows cover this slot
     for every boom, and this boom's ±3 slots.
   - **Summary → Spectra:** "u'w' transport efficiency" and "w'θv' transport efficiency" in the
     spectrum list show the median per boom and rung, with IQR bars, over all slots, a stability
@@ -1272,6 +1272,140 @@ viewed interval or the whole period like the others.
   wider than its axis, and the Series panel's left axes are fixed at 72 px. The panel now widens
   every plot's left axis to the longest rug name, so the labels show and the time axes stay
   aligned.
+- **Right button, 2026-10-15:** a right drag still rescales and a right click still opens the
+  plot menu, but the menu no longer pops up after a hesitant rescale.
+  - pyqtgraph called any release before 5 px of movement a click, however long the hold.
+  - `ui/right_button.py`, installed by `configure_pyqtgraph`, starts a right drag after 3 px.
+  - It opens the menu only on a quick right click: a release within 0.35 s of the press. A
+    longer hold that never became a drag does nothing. Left-button behaviour is unchanged.
+  - **2026-10-15, second pass:** the menu still appeared sometimes, as a drag ended or while the
+    button was still held.
+    - pyqtgraph decides from its own drag bookkeeping, which skips the mouse moves it throttles,
+      so a fast flick or end-of-drag jitter could finish as a "click".
+    - Windows also sends Qt a context-menu event after every right release, drags included.
+    - A right release is now a click only if the pointer never travelled 3 px from the press,
+      over every move including throttled ones, and the button came up within 0.35 s.
+    - The plot menu also never opens while the right button is down.
+- **Availability strip, 2026-10-16:** it zooms and pans in time on its own, not with the
+  timelines: the wheel or a right-drag zooms, a left-drag on the background pans. The boom rows
+  stay fixed and the view never leaves the period. A double-click or the A button shows the
+  whole period again, and dragging the blue box still sets the timelines' range. The splitter can
+  now make it up to 600 px tall (it was capped at 200); its default height is unchanged.
+- **Spectra tab plot groups, 2026-10-16:** a "plots:" row of four boxes, all on by default:
+  heat & momentum (w'θv', u'w'), other covariances (v'w', u'v'), variances (u'u', v'v', w'w',
+  Ts'Ts') and transport efficiencies (u'w' and w'θv' TE).
+  - **Layout:** the grid is rebuilt from the checked groups (`spectra_tab.plot_rows`).
+    Covariances go above variances with the TEs beside them, as before. Otherwise each group gets
+    a row, or everything shares one row when there are four plots or fewer.
+  - **Widths:** rows of different lengths share a grid of equal columns, each plot spanning a
+    share, so the plots in a row are equally wide and fill it.
+  - **"log y":** greyed out while no variances are shown.
+- **Normalize, 2026-10-16:** the Spectra tab has a "normalize:" box for each (co)spectrum plot, and
+  the τ what-if one each for its heat and momentum plots.
+  - A checked plot is divided by its signed sum over modes (`slotdata.normalized`), as the Summary
+    composites are. The same factor applies to its ± SE, overlays and detection curves.
+  - Because the sum is signed, a negative-flux cospectrum such as u'w' comes out positive.
+- **τ what-if smoothing, 2026-10-16:** a "smoothing" box offers the run's 1-2-1, none, 1-1-1,
+  1-2-3-2-1 and 1-4-6-4-1, or typed weights (an odd count, centred).
+  - `secondary.detect.detect` (and `derived.tau_tables`) take an optional `kernel`, whose default
+    `SMOOTHING = (1, 2, 1)` sums in the original order. Pipeline results and config hashes are
+    unchanged.
+  - The rerun of every boom and the drawn detection use the chosen weights.
+- **Boom presets, 2026-10-16:** the panels' boom presets are all · none · odd · even · 1/5/10, as
+  compact tool buttons. Push buttons held the Controls panel about 140 px wider.
+- **Panel minimum width, 2026-10-16:** in the Controls and Summary tab widgets, only the shown page
+  sets the minimum width (`WrapTabWidget._size_to_current`). A wide hidden page, e.g. Find, no
+  longer stops the panel narrowing while a narrower one is shown.
+- **Bookmark indicator, 2026-10-16:** the Slot Inspector's button reads "★ Bookmarked" (gold) while
+  its slot and boom are in any bookmark list. Its tooltip names the lists and notes, and it updates
+  on stepping and when bookmarks are added, edited or deleted.
+- **Wind rose defaults, 2026-10-16:** boom 4 (10.1 m, the mesonet's height), unfiltered, with
+  "mesonet: same slots" on.
+- **Summary τ tab, 2026-10-16** (`viewer/taustats.py`, `ui/tau_view.py`): every (slot, boom, variant)'s
+  heat and momentum detections and selected τ, read once (about 2 s for oneyear) and cached.
+  - **Shared controls:** the variant (mrd, mrd_unexcised); which slots (all, a stability class, the
+    brushed selection or the rest); the visible range or the whole period; and the boom bar.
+  - **Categories:** τ takes only the 8 rung values, so each detection falls in a category: a rung
+    (found or capped), then unresolved, weak or no_data. A selection is a rung or none.
+  - **Distributions:** heat, momentum or selected τ as % of slots per category. There is a line per
+    boom, or a line per stability class for one boom, with a legend. A table per line gives N, %
+    by status (or by source, for the selected τ), and the median, p25 and p75 of τ on the rungs.
+  - **Heat vs momentum:** a joint matrix, heat category by momentum category, as % of slots. The
+    agreement diagonal is blue. Clicking a cell brushes its slots. A per-boom table gives, where
+    both have a τ: % equal, % heat longer, % momentum longer, and the median difference in rungs.
+  - **Selection what-if:** rule, priority and fallback τ, applied to every slot.
+    - It reruns secondary's own `select` once per distinct pair of detections: a few hundred
+      cases, about 0.1 s for oneyear. With the run's rules it reproduces all 826,261 stored
+      selections exactly.
+    - It shows the selected τ of the run (solid) against the what-if (dashed), a per-boom table
+      (% changed, medians, % heat / momentum / fallback, run vs what-if), and a button that
+      brushes the changed slots.
+    - Detection parameters stay in the Slot Inspector's τ what-if: redoing detection for every
+      slot means about 25 M MRD rows, too slow to be interactive.
+  - The priority boxes, here and in the inspector what-if, keep their choice as a string
+    ("heat,momentum"): Qt turns tuple item data into lists, so `findData` with a tuple found
+    nothing.
+- **Numbers tab, all tables, 2026-10-15:** the table list starts with "all tables", so one
+  filter searches every stored table of the slot.
+  - It lists one value per line: `table`, `key` (the columns that pick the row, e.g.
+    `variable=ts, stat=skew`), `field` (the value's column) and `value`. `slotdata.all_rows`
+    builds it. slot and slot_start are left out, and boom is left out where every row is this
+    boom's. A filter_log row, which has no value columns, is one line with an empty field.
+  - Double-clicking a line opens its row in its own table, selected. The filter stays unless it
+    would hide that row, as a key-only filter like `stat=skew` would.
+  - Every table now opens in its stored order rather than sorted on the first column, and cells
+    can't be edited.
+- **More distribution fits, 2026-10-15:** the Distributions "fit" menu adds Rayleigh,
+  exponential and beta (`distfits.py`).
+  - Rayleigh and exponential have loc fixed at 0 and need every value positive. Each fits one
+    parameter, its scale: σ for the Rayleigh, β (the mean) for the exponential.
+  - Beta is the standard beta on (0, 1), with loc 0 and scale 1 fixed. It fits α and β and
+    needs every value strictly between 0 and 1.
+  - The menu now offers every fit. One the values can't take shows a note saying what it needs.
+  - **Same day, second round:**
+    - Chi, chi-squared and noncentral chi-squared are added, each with loc 0 and a free scale.
+      Uniform is added too: a and b are the lowest and highest values.
+      - Chi-squared with a free scale is the gamma family again (k = 2 × gamma's k), so it gets
+        the same AIC. It's offered for its degrees-of-freedom reading.
+      - Noncentral chi-squared is slow (about 1 s per 10k values). It estimates from at most 10k
+        values per boom, starting from the moments. Its KS and AIC use the same ≤50k values as
+        every other fit, so the AICs still compare.
+    - The summary table adds skew and kurt: population skewness, and kurtosis with a normal at
+      3, as the pipeline's `math.stats.moments` computes them. Directions leave them blank.
+    - Only the column labels have tooltips: a few words on that column ("gamma fit: shape",
+      "Akaike information criterion: lower fits better"). The cells and the table have none.
+    - The "cumulative" box switches the histograms to each boom's empirical CDF, with the fit's
+      CDF dashed over it.
+      - Each CDF uses all of the boom's values. The range only frames the view, and the bin
+        count is greyed out.
+      - With slots brushed, the selection's line is highlighted in the selection colour.
+      - Directions run from 0° to 360°.
+      - Switching views reuses the fit: a fit reruns only when its values or distribution change.
+      - Figure export draws the cumulative view too (`cdfs`, and fits with `cdf`).
+    - **2026-10-16:** the summary table adds min, p25, p75 and max. The columns are now N,
+      NaN %, mean, σ, skew, kurt, then the quantiles in order: min, p5, p25, median, p75, p95,
+      max. Median moved there from beside the mean. Directions leave all the quantiles blank.
+    - **Formulas** (Elliott chose tooltips from mockups: a typeset line, a rich-text line, a box
+      in the plot, or tooltips).
+      - Hovering the fit menu, or an entry in its list, shows that distribution's PDF and what
+        each parameter is.
+      - Hovering a boom's row label shows the PDF with that boom's fitted numbers filled in. For
+        von Mises it's per degree, as drawn.
+      - The rich text comes from `distfits.formula` and `distfits.filled`. A check against the
+        fitted PDFs agreed to within the 4-significant-figure rounding.
+    - **Textbook symbols** replace scipy's names in the table:
+      - log-normal: μ and σ of ln x
+      - gamma: k and θ
+      - exponential: β
+      - Rayleigh: σ
+      - chi: k and σ (each component's σ)
+      - chi-squared and noncentral chi-squared: k, λ and σ² (each component's variance)
+      - beta: α and β
+      - uniform: a and b
+      - von Mises: κ and μ (degrees)
+
+      A symbol that's also a summary column gets " (fit)", e.g. "σ (fit)"; its label's tooltip
+      says what it is.
 - **The low-level jet tool** lives in its own Jets tabs; see `docs/llj/llj-plan.md`.
 - **Scatter tab:** with slots brushed, "show: all slots / selection only" picks the points.
   The statistics, lines and fits use only the shown points. A "ring the selection" check box,

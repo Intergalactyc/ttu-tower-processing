@@ -90,7 +90,37 @@ def test_tau_blocks_tile_each_slot_from_its_start():
     assert tau_block_ids(g0, 100, 1200.0) is None
 
 
-# --- full run (slow) --------------------------------------------------------------------------
+def test_all_rows_lists_every_value_with_its_row_key():
+    tables = {
+        "slot_qc": pd.DataFrame({"slot": [5, 5], "boom": [1, 1], "variable": ["ts", "w"], "stat": ["skew", "kurt"],
+                                 "value": [0.2, np.nan]}),
+        "tau": pd.DataFrame({"slot": [5], "boom": [1], "variant": ["mrd"], "cospectrum": ["uw"], "status": ["ok"],
+                             "tau_s": [312.0]}),
+        "ladder": pd.DataFrame({"slot": [5], "boom": [1], "variant": ["mrd"], "rung_s": [9.375], "variable": ["uw"],
+                                "stat": ["te"], "value": [0.4]}),
+        "pairs": pd.DataFrame({"slot": [5, 5], "boom": [1, 2], "boom2": [2, 3], "variant": ["mrd", "mrd"],
+                               "variable": ["ri_b", "ri_b"], "value": [0.1, 0.2]}),
+        "filter_log": pd.DataFrame({"slot": [5], "boom": [1], "variant": ["mrd"], "group": ["g"], "criterion": ["c"],
+                                    "variable": ["x"]}),
+        "slot_stats": pd.DataFrame({"slot": [5], "sun_elevation": [12.5], "night": [False]}),
+    }
+    out = slotdata.all_rows(tables, 1)
+    assert list(out.columns) == ["table", "key", "field", "value", "row"]
+    rows = [tuple(r) for r in out.itertuples(index=False)]
+    assert rows[0] == ("slot_qc", "variable=ts, stat=skew", "value", 0.2, 0)
+    assert rows[1][:3] == ("slot_qc", "variable=w, stat=kurt", "value") and np.isnan(rows[1][3])
+    assert rows[2:4] == [("tau", "variant=mrd, cospectrum=uw", "status", "ok", 0),
+                         ("tau", "variant=mrd, cospectrum=uw", "tau_s", 312.0, 0)]
+    assert rows[4][1] == "variant=mrd, rung_s=9.375, variable=uw, stat=te"
+    assert [r[1] for r in rows[5:7]] == ["boom=1, boom2=2, variant=mrd, variable=ri_b",
+                                         "boom=2, boom2=3, variant=mrd, variable=ri_b"]
+    assert [r[4] for r in rows[5:7]] == [0, 1]
+    assert rows[7] == ("filter_log", "variant=mrd, group=g, criterion=c, variable=x", "", "", 0)
+    assert rows[8:] == [("slot_stats", "", "sun_elevation", 12.5, 0), ("slot_stats", "", "night", False, 0)]
+    assert slotdata.all_rows({}, 1).empty
+
+
+# --- full run (slow)--------------------------------------------------------------------------
 
 @pytest.mark.slow
 def test_detection_rerun_reproduces_every_stored_tau(full_run):
@@ -154,10 +184,40 @@ def test_inspector_spectra_and_scales_tabs_draw(full_run, qtbot):
     assert set(inspector.bundle.te["boom"]) > {1} and set(inspector.bundle.te["slot"]) > {k}  # for the overlays
     for key in ("unexcised", "booms", "neighbours"):
         inspector.spectra.boxes[key].setChecked(True)
-    inspector.spectra.boxes["te"].setChecked(False)
-    assert set(inspector.spectra.plots) == set(slotdata.SPECTRA)
+    spectra = inspector.spectra
+    spectra.normalize["uw"].setChecked(True)
+    curve = next(i for i in spectra.plots["uw"].listDataItems() if i.opts["symbol"] == "o")
+    assert np.nansum(curve.yData) == pytest.approx(1.0) and "normalized" in spectra.plots["uw"].titleLabel.text
+    assert "normalized" not in spectra.plots["wvpts"].titleLabel.text
+    spectra.normalize["uw"].setChecked(False)
+    spectra.groups["transport"].setChecked(False)
+    assert set(spectra.plots) == set(slotdata.SPECTRA)
+    spectra.groups["variances"].setChecked(False)
+    spectra.groups["other_covariances"].setChecked(False)
+    assert set(spectra.plots) == {"wvpts", "uw"} and not spectra.boxes["log"].isEnabled()
+    assert [n for n, box in spectra.normalize.items() if not box.isHidden()] == ["wvpts", "uw"]
+    spectra.groups["transport"].setChecked(True)
+    qtbot.wait(50)
+    widths = {name: plot.width() for name, plot in spectra.plots.items()}
+    assert set(widths) == {"wvpts", "uw", "te_uw", "te_wvpts"}  # one row of four, equal widths
+    assert max(widths.values()) - min(widths.values()) < 3
+    assert sum(widths.values()) > 0.9 * spectra.graphics.width()  # filling the row
+    for box in spectra.groups.values():
+        box.setChecked(False)
+    assert not spectra.plots and "no plots chosen" in spectra.info.text()
     inspector.spectra.mode.setCurrentIndex(1)  # the ogive
     assert inspector.scales.table.rowCount() == 8
     inspector.close()
     window.close()
     window.runner.wait(30_000)
+
+
+def test_spectra_plot_rows_follow_the_checked_groups():
+    from ttu_tower.viewer.ui.inspector.spectra_tab import plot_rows
+    every = {"heat_momentum", "other_covariances", "variances", "transport"}
+    assert plot_rows(every) == [["wvpts", "uw", "vw", "uv", "te_uw"], ["uu", "vv", "ww", "tsts", "te_wvpts"]]
+    assert plot_rows(every - {"transport"}) == [["wvpts", "uw", "vw", "uv"], ["uu", "vv", "ww", "tsts"]]
+    assert plot_rows({"heat_momentum", "variances"}) == [["wvpts", "uw"], ["uu", "vv", "ww", "tsts"]]
+    assert plot_rows({"heat_momentum", "transport"}) == [["wvpts", "uw", "te_uw", "te_wvpts"]]
+    assert plot_rows({"variances", "transport"}) == [["uu", "vv", "ww", "tsts"], ["te_uw", "te_wvpts"]]
+    assert plot_rows(set()) == []

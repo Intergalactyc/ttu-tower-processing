@@ -13,6 +13,8 @@ def configure_pyqtgraph() -> None:
     plot_export.install()  # the right-click Export dialog and a CSV with labelled columns
     from ttu_tower.viewer.ui import axis_units
     axis_units.install()  # computed units on every axis, with a power of ten where needed, never an SI prefix
+    from ttu_tower.viewer.ui import right_button
+    right_button.install()  # a right drag rescales; only a quick right click opens the menu
 
 
 def open_initial_run(tag: str | None, run_dir: str | None, test: bool, settings_tag: str | None) -> RunHandle | None:

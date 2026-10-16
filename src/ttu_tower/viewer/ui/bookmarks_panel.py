@@ -48,6 +48,7 @@ class BookmarkDialog(QDialog):
 class BookmarksPanel(QWidget):
     inspectRequested = Signal(object, int, str, str)  # [(slot, boom)], where to start, label, variant
     selectRequested = Signal(object)  # the listed slots, for linked brushing
+    changed = Signal()  # a bookmark was edited or deleted here
 
     def __init__(self, store: BookmarkStore, parent=None):
         super().__init__(parent)
@@ -141,6 +142,7 @@ class BookmarksPanel(QWidget):
             self.store.update(self.shown[item.row()].id, **{column: value})
             if column == "list":
                 self.refresh()
+            self.changed.emit()
 
     def _this_run(self) -> list:
         return [b for b in self.shown if b.run == self.run_tag]
@@ -178,6 +180,7 @@ class BookmarksPanel(QWidget):
         if answer == QMessageBox.StandardButton.Yes:
             self.store.remove(self.shown[r].id for r in rows)
             self.refresh()
+            self.changed.emit()
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export bookmarks", "bookmarks.csv", "CSV (*.csv);;JSON (*.json)")

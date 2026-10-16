@@ -3,6 +3,8 @@ the detection rerun on the stored spectra (smoothed curve, significance band,
 searched range, peak and reversal) and the run's stored tau lines; beside
 them, the momentum and heat transport efficiencies at each ladder rung.
 """
+import math
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
@@ -11,8 +13,8 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLa
 from ttu_tower.constants import BOOMS
 from ttu_tower.viewer.composite import TE_TIP
 from ttu_tower.viewer.slotdata import (
-    COSPECTRA, DETECTED, NEIGHBOURS, SPECTRA, SPECTRUM_LABELS, SPECTRUM_UNITS, rerun_detection, spectrum,
-    spectrum_variant, stored_selection, transport_efficiency,
+    COSPECTRA, DETECTED, NEIGHBOURS, NORMALIZE_TIP, SPECTRA, SPECTRUM_LABELS, SPECTRUM_UNITS, normalized,
+    normalizing_factor, rerun_detection, spectrum, spectrum_variant, stored_selection, transport_efficiency,
 )
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.axes import Log10Axis
@@ -20,7 +22,26 @@ from ttu_tower.viewer.ui.axes import Log10Axis
 _MAIN = "#1f4e9c"
 _UNEXCISED = "#b3123f"
 _TAU_PENS = {"heat": ("#d62728", "heat τ"), "momentum": ("#2a8a4a", "momentum τ")}
-_TE = ("uw", "wvpts")  # top row (beside the cospectra), bottom row
+GROUPS = (  # key, check box label, the plots it shows
+    ("heat_momentum", "heat & momentum", ("wvpts", "uw")),
+    ("other_covariances", "other covariances", ("vw", "uv")),
+    ("variances", "variances", ("uu", "vv", "ww", "tsts")),
+    ("transport", "transport efficiencies", ("te_uw", "te_wvpts")),
+)
+
+
+def plot_rows(shown: set[str]) -> list[list[str]]:
+    """The checked groups' plots, by row: covariances above variances with the
+    transport efficiencies beside them; otherwise a row per group, or one row
+    for four plots or fewer.
+    """
+    plots = {key: list(names) for key, _, names in GROUPS if key in shown}
+    covs = plots.get("heat_momentum", []) + plots.get("other_covariances", [])
+    variances, te = plots.get("variances", []), plots.get("transport", [])
+    if covs and variances:
+        return [covs + te[:1], variances + te[1:]]
+    rows = [r for r in (covs, variances, te) if r]
+    return [sum(rows, [])] if rows and sum(map(len, rows)) <= 4 else rows
 
 
 def _fmt_s(v) -> str:
@@ -40,28 +61,54 @@ class SpectraTab(QWidget):
         self.boxes = {}
         for key, label, on in (("se", "± SE", True), ("detection", "detection details", True),
                                ("log", "log y (variances)", True), ("unexcised", "unexcised", False),
-                               ("booms", "all booms", False), ("neighbours", f"slots ±{NEIGHBOURS}", False),
-                               ("te", "transport efficiency", True)):
+                               ("booms", "all booms", False), ("neighbours", f"slots ±{NEIGHBOURS}", False)):
             box = QCheckBox(label)
             box.setChecked(on)
             box.toggled.connect(lambda *_: self.redraw())
             self.boxes[key] = box
-        self.boxes["te"].setToolTip("a column of " + TE_TIP)
+        self.groups = {}
+        for key, label, names in GROUPS:
+            box = QCheckBox(label)
+            box.setChecked(True)
+            box.setToolTip(TE_TIP if key == "transport" else
+                           ", ".join(SPECTRUM_LABELS[n] for n in names) + " (co)spectra")
+            box.toggled.connect(lambda *_: self.redraw())
+            self.groups[key] = box
+        self.normalize = {}
+        for name in SPECTRA:
+            box = QCheckBox(SPECTRUM_LABELS[name])
+            box.setToolTip(NORMALIZE_TIP)
+            box.toggled.connect(lambda *_: self.redraw())
+            self.normalize[name] = box
         self.mode.currentIndexChanged.connect(lambda *_: self.redraw())
         controls = QHBoxLayout()
         controls.addWidget(self.mode)
         for box in self.boxes.values():
             controls.addWidget(box)
         controls.addStretch(1)
+        shown = QHBoxLayout()
+        shown.addWidget(QLabel("plots:"))
+        for box in self.groups.values():
+            shown.addWidget(box)
+        shown.addSpacing(16)
+        shown.addWidget(QLabel("normalize:"))
+        for box in self.normalize.values():
+            shown.addWidget(box)
+        shown.addStretch(1)
         self.info = QLabel()
         self.info.setTextFormat(Qt.TextFormat.RichText)
         self.info.setWordWrap(True)
         self.graphics = pg.GraphicsLayoutWidget()
         layout = QVBoxLayout(self)
         layout.addLayout(controls)
+        layout.addLayout(shown)
         layout.addWidget(self.info)
         layout.addWidget(self.graphics, stretch=1)
         self.plots: dict[str, pg.PlotItem] = {}
+        self._columns = 0  # of the grid last drawn
+
+    def shown_groups(self) -> set[str]:
+        return {key for key, box in self.groups.items() if box.isChecked()}
 
     def set_bundle(self, bundle, variant: str, cfg, emphasis: str | None = None) -> None:
         self.bundle, self.variant, self.cfg, self.emphasis = bundle, variant, cfg, emphasis
@@ -73,6 +120,12 @@ class SpectraTab(QWidget):
         for key in ("se", "detection"):
             self.boxes[key].setEnabled(not ogive)
             self.boxes[key].setToolTip("drawn on the per-mode values only" if ogive else "")
+        rows = sum(plot_rows(self.shown_groups()), [])
+        for name, box in self.normalize.items():
+            box.setVisible(name in rows)
+        variances = "variances" in self.shown_groups()
+        self.boxes["log"].setEnabled(variances)
+        self.boxes["log"].setToolTip("" if variances else "no variances shown")
         self.boxes["unexcised"].setEnabled(mrd_variant == "mrd")
         self.boxes["unexcised"].setToolTip("" if mrd_variant == "mrd" else "these already are the unexcised spectra")
 
@@ -91,28 +144,47 @@ class SpectraTab(QWidget):
         stored_sel = stored_selection(b, self.variant)
         self._describe(views, rerun_sel, stored_sel, mrd_variant)
 
-        for i, name in enumerate(SPECTRA):
-            axes = {"bottom": Log10Axis(orientation="bottom")}
-            if name not in COSPECTRA and self.boxes["log"].isChecked():
-                axes["left"] = Log10Axis(orientation="left")
-            plot = self.graphics.addPlot(row=i // 4, col=i % 4, axisItems=axes)
-            plot.showGrid(x=True, y=True, alpha=0.15)
-            title = f"{SPECTRUM_LABELS[name]} [{SPECTRUM_UNITS[name]}]"
-            emphasised = name == self.emphasis
-            plot.setTitle(f"<b>{title}</b>" if emphasised else title, color="#b3123f" if emphasised else "#222")
-            if i // 4 == 1:
-                plot.setLabel("bottom", "scale [s]")
-            self.plots[name] = plot
-            self._draw_spectrum(plot, name, mrd_variant, views, stored_sel)
-        if self.boxes["te"].isChecked():
-            for row, var in enumerate(_TE):
-                plot = self.graphics.addPlot(row=row, col=4, axisItems={"bottom": Log10Axis(orientation="bottom")})
-                plot.showGrid(x=True, y=True, alpha=0.15)
-                plot.setTitle(f"{SPECTRUM_LABELS[var]} transport efficiency", color="#222")
-                if row == 1:
-                    plot.setLabel("bottom", "ladder rung [s]")
-                self.plots[f"te_{var}"] = plot
-                self._draw_te(plot, var, mrd_variant, views, stored_sel)
+        rows = plot_rows(self.shown_groups())
+        if not rows:
+            self.info.setText(self.info.text() + " · <i>no plots chosen</i>")
+            return
+        # rows of different lengths share one grid of equal columns, each plot spanning a share
+        columns = math.lcm(*(len(r) for r in rows))
+        grid = self.graphics.ci.layout
+        for c in range(max(columns, self._columns)):
+            grid.setColumnStretchFactor(c, 1 if c < columns else 0)
+        self._columns = columns
+        for r, names in enumerate(rows):
+            span = columns // len(names)
+            last_row = r == len(rows) - 1
+            for c, name in enumerate(names):
+                if name.startswith("te_"):
+                    var = name[len("te_"):]
+                    plot = self._new_plot(r, c * span, span, False)
+                    plot.setTitle(f"{SPECTRUM_LABELS[var]} transport efficiency", color="#222")
+                    if last_row:
+                        plot.setLabel("bottom", "ladder rung [s]")
+                    self.plots[name] = plot
+                    self._draw_te(plot, var, mrd_variant, views, stored_sel)
+                    continue
+                plot = self._new_plot(r, c * span, span, name not in COSPECTRA and self.boxes["log"].isChecked())
+                title = (f"{SPECTRUM_LABELS[name]} (normalized)" if self.normalize[name].isChecked()
+                         else f"{SPECTRUM_LABELS[name]} [{SPECTRUM_UNITS[name]}]")
+                emphasised = name == self.emphasis
+                plot.setTitle(f"<b>{title}</b>" if emphasised else title, color="#b3123f" if emphasised else "#222")
+                if last_row:
+                    plot.setLabel("bottom", "scale [s]")
+                self.plots[name] = plot
+                self._draw_spectrum(plot, name, mrd_variant, views, stored_sel)
+
+    def _new_plot(self, row: int, col: int, span: int, log_y: bool) -> pg.PlotItem:
+        axes = {"bottom": Log10Axis(orientation="bottom")}
+        if log_y:
+            axes["left"] = Log10Axis(orientation="left")
+        plot = self.graphics.addPlot(row=row, col=col, colspan=span, axisItems=axes)
+        plot.setPreferredWidth(1)  # widths from the equal column stretches, not from each plot's axes
+        plot.showGrid(x=True, y=True, alpha=0.15)
+        return plot
 
     def _describe(self, views, rerun_sel, stored_sel, mrd_variant) -> None:
         parts = []
@@ -152,6 +224,10 @@ class SpectraTab(QWidget):
             return ly, None
         return y, (se, se) if se is not None else None
 
+    def _spectrum(self, name: str, slot: int, boom: int, variant: str):
+        spec = spectrum(self.bundle.mrd, slot, boom, variant, name)
+        return normalized(spec) if self.normalize[name].isChecked() else spec
+
     def _draw_spectrum(self, plot, name, mrd_variant, views, stored_sel) -> None:
         b = self.bundle
         log_y = name not in COSPECTRA and self.boxes["log"].isChecked()
@@ -160,7 +236,7 @@ class SpectraTab(QWidget):
 
         if self.boxes["neighbours"].isChecked():
             for dk in range(-NEIGHBOURS, NEIGHBOURS + 1):
-                other = spectrum(b.mrd, b.slot + dk, b.boom, mrd_variant, name) if dk else None
+                other = self._spectrum(name, b.slot + dk, b.boom, mrd_variant) if dk else None
                 if other is not None:
                     y, _ = self._values(other, log_y)
                     plot.plot(np.log10(other.scale_s), y, pen=pg.mkPen((120, 120, 120, 70), width=1))
@@ -168,21 +244,23 @@ class SpectraTab(QWidget):
             for boom in BOOMS:
                 if boom == b.boom:
                     continue
-                other = spectrum(b.mrd, b.slot, boom, mrd_variant, name)
+                other = self._spectrum(name, b.slot, boom, mrd_variant)
                 if other is not None:
                     y, _ = self._values(other, log_y)
                     c = style.boom_color(boom)
                     c.setAlpha(170)
                     plot.plot(np.log10(other.scale_s), y, pen=pg.mkPen(c, width=1))
         if self.boxes["unexcised"].isChecked() and mrd_variant == "mrd":
-            other = spectrum(b.mrd, b.slot, b.boom, "mrd_unexcised", name)
+            other = self._spectrum(name, b.slot, b.boom, "mrd_unexcised")
             if other is not None:
                 y, _ = self._values(other, log_y)
                 plot.plot(np.log10(other.scale_s), y, pen=pg.mkPen(_UNEXCISED, width=1.2, style=Qt.PenStyle.DashLine))
 
-        spec = spectrum(b.mrd, b.slot, b.boom, mrd_variant, name)
+        raw = spectrum(b.mrd, b.slot, b.boom, mrd_variant, name)
+        spec = self._spectrum(name, b.slot, b.boom, mrd_variant)
         if spec is None:
             return
+        factor = normalizing_factor(raw) if self.normalize[name].isChecked() else 1.0
         x = np.log10(spec.scale_s)
         y, bars = self._values(spec, log_y)
         if self.boxes["se"].isChecked() and bars is not None:
@@ -196,7 +274,7 @@ class SpectraTab(QWidget):
 
         for family, view in views.items():
             if view.spectrum == name and self.boxes["detection"].isChecked() and self.mode.currentData() == "value":
-                self._draw_detection(plot, view, x)
+                self._draw_detection(plot, view, x, factor)
         self._draw_tau_lines(plot, name, views, stored_sel)
 
     def _draw_te(self, plot, var, mrd_variant, views, stored_sel) -> None:
@@ -225,14 +303,15 @@ class SpectraTab(QWidget):
         plot.setYRange(0.0, 1.0, padding=0.03)
         self._draw_tau_lines(plot, var, views, stored_sel)
 
-    def _draw_detection(self, plot, view, x) -> None:
+    def _draw_detection(self, plot, view, x, factor: float = 1.0) -> None:
+        """`factor` scales the smoothed curve and band as the spectrum was (1 / its sum, when normalized)."""
         t = view.trace
         if "d_smooth" not in t or not t["d_smooth"]:
             return
         modes = sorted(t["d_smooth"])
         xs = np.array([x[i - 1] for i in modes])
-        ds = np.array([t["d_smooth"][i] for i in modes])
-        half = t["k_se"] * np.array([t["se_smooth"][i] for i in modes])
+        ds = factor * np.array([t["d_smooth"][i] for i in modes])
+        half = abs(factor) * t["k_se"] * np.array([t["se_smooth"][i] for i in modes])
         upper = pg.PlotCurveItem(xs, ds + half, pen=pg.mkPen(None))
         lower = pg.PlotCurveItem(xs, ds - half, pen=pg.mkPen(None))
         plot.addItem(upper)
@@ -245,14 +324,14 @@ class SpectraTab(QWidget):
         plot.addItem(region)
         if t.get("peak") is not None:
             p = t["peak"]
-            plot.addItem(pg.ScatterPlotItem([x[p - 1]], [t["d_smooth"][p]], symbol="t1", size=13,
+            plot.addItem(pg.ScatterPlotItem([x[p - 1]], [factor * t["d_smooth"][p]], symbol="t1", size=13,
                                             brush=pg.mkBrush("#ff7f0e"), pen=pg.mkPen("k")))
         if t.get("reversal"):
             r, kind = t["reversal"]
-            plot.addItem(pg.ScatterPlotItem([x[r - 1]], [t["d_smooth"][r]], symbol="x", size=14,
+            plot.addItem(pg.ScatterPlotItem([x[r - 1]], [factor * t["d_smooth"][r]], symbol="x", size=14,
                                             brush=pg.mkBrush("#d62728"), pen=pg.mkPen("#d62728", width=2)))
             label = pg.TextItem(f"{kind} reversal", color="#d62728", anchor=(0, 1))
-            label.setPos(x[r - 1], t["d_smooth"][r])
+            label.setPos(x[r - 1], factor * t["d_smooth"][r])
             plot.addItem(label)
 
     def _draw_tau_lines(self, plot, name, views, stored_sel) -> None:

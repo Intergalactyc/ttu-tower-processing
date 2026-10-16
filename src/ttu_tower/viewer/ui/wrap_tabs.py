@@ -134,6 +134,8 @@ class WrapTabWidget(QTabWidget):
         self._group.setExclusive(True)
         self._group.idClicked.connect(self.setCurrentIndex)
         self.currentChanged.connect(self._check)
+        self.currentChanged.connect(self._size_to_current)
+        self._policies = {}  # each page's own size policy, while it's hidden
         self._container = None
 
     def container(self) -> QWidget:
@@ -151,6 +153,22 @@ class WrapTabWidget(QTabWidget):
     def tabInserted(self, index: int) -> None:
         super().tabInserted(index)
         self._rebuild()
+        self._size_to_current(self.currentIndex())
+
+    def _size_to_current(self, index: int) -> None:
+        """Only the shown page sets the minimum size: a hidden wide page would
+        otherwise hold the panel wide (a stack's minimum is its widest page's).
+        """
+        for i in range(self.count()):
+            page = self.widget(i)
+            key = id(page)
+            if i == index:
+                if key in self._policies:
+                    page.setSizePolicy(self._policies.pop(key))
+            elif key not in self._policies:
+                self._policies[key] = page.sizePolicy()
+                page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.updateGeometry()
 
     def tabRemoved(self, index: int) -> None:
         super().tabRemoved(index)

@@ -1,17 +1,20 @@
-"""Every stored row for the slot, table by table, searchable and copyable;
-and Verify, which recomputes the slot's primary products from the raw files
-and compares them with what the run stored.
+"""Every stored row for the slot, table by table or all tables at once,
+searchable and copyable; and Verify, which recomputes the slot's primary
+products from the raw files and compares them with what the run stored.
 """
 import numpy as np
 import pandas as pd
 from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QTableView, QTableWidget,
+    QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QTableView, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from ttu_tower.viewer.slotdata import all_rows
 from ttu_tower.viewer.ui import tables
+
+ALL = "*all*"
 
 
 def _text(v) -> str:
@@ -26,6 +29,7 @@ class NumbersTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.bundle = self.reprocessor = self.runner = None
+        self._all = all_rows({}, 0)
         self.table_box = QComboBox()
         self.table_box.currentIndexChanged.connect(lambda *_: self._show_table())
         self.search = QLineEdit()
@@ -38,8 +42,11 @@ class NumbersTab(QWidget):
         self.search.textChanged.connect(self.proxy.setFilterFixedString)
         self.view = QTableView()
         self.view.setModel(self.proxy)
+        self.view.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)  # stored order until a click
         self.view.setSortingEnabled(True)
+        self.view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.view.verticalHeader().setDefaultSectionSize(18)
+        self.view.doubleClicked.connect(self._jump)
         copy = QPushButton("Copy")
         copy.setToolTip("copy the selected rows (or all shown rows) as tab-separated text")
         copy.clicked.connect(self.copy)
@@ -81,7 +88,13 @@ class NumbersTab(QWidget):
         current = self.table_box.currentData()
         self.table_box.blockSignals(True)
         self.table_box.clear()
-        for name, df in self._tables().items():
+        stored = self._tables()
+        self._all = all_rows(stored, bundle.boom)
+        self.table_box.addItem(f"all tables ({len(self._all)})", ALL)
+        self.table_box.setItemData(0, "every table's values, one per line; double-click a line to open its row in its "
+                                      "own table", Qt.ItemDataRole.ToolTipRole)
+        self.table_box.insertSeparator(1)
+        for name, df in stored.items():
             self.table_box.addItem(f"{name} ({len(df)})", name)
         i = self.table_box.findData(current)
         if i < 0:
@@ -104,15 +117,36 @@ class NumbersTab(QWidget):
 
     def current_frame(self) -> pd.DataFrame:
         name = self.table_box.currentData()
+        if name == ALL:
+            return self._all.drop(columns="row")
         return self._tables().get(name, pd.DataFrame()) if name else pd.DataFrame()
 
     def _show_table(self) -> None:
         df = self.current_frame()
+        sources = zip(self._all["table"], self._all["row"].tolist()) if self.table_box.currentData() == ALL else None
         self.model.clear()
         self.model.setHorizontalHeaderLabels([str(c) for c in df.columns])
         for values in df.itertuples(index=False):
-            self.model.appendRow([QStandardItem(_text(v)) for v in values])
+            items = [QStandardItem(_text(v)) for v in values]
+            if sources is not None:
+                items[0].setData(next(sources), Qt.ItemDataRole.UserRole)
+            self.model.appendRow(items)
         self.view.resizeColumnsToContents()
+
+    def _jump(self, index) -> None:
+        """From a line of all tables to its row in its own table; the filter is
+        cleared only if it would hide that row.
+        """
+        if self.table_box.currentData() != ALL:
+            return
+        name, row = self.model.item(self.proxy.mapToSource(index).row(), 0).data(Qt.ItemDataRole.UserRole)
+        self.table_box.setCurrentIndex(self.table_box.findData(name))
+        target = self.proxy.mapFromSource(self.model.index(row, 0))
+        if not target.isValid():
+            self.search.clear()
+            target = self.proxy.mapFromSource(self.model.index(row, 0))
+        self.view.selectRow(target.row())
+        self.view.scrollTo(target, QAbstractItemView.ScrollHint.PositionAtCenter)
 
     def shown_rows(self) -> int:
         return self.proxy.rowCount()

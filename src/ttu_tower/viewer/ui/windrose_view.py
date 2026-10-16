@@ -121,12 +121,14 @@ class WindRoseView(QWidget):
         self.run = self.index = None
         self.x_range = None
         self.tower = self.mesonet = None
+        self.loaded_key = None
         self.boom = QComboBox()
         self.boom.setToolTip("the boom whose slot-mean wind is shown")
         self.boom.currentIndexChanged.connect(lambda *_: self.reload())
         self.filtering = QComboBox()
         self.filtering.addItem("filtered (final values)", True)
         self.filtering.addItem("unfiltered (first-layer means)", False)
+        self.filtering.setCurrentIndex(1)  # unfiltered by default
         self.filtering.setToolTip("unfiltered: the slot means on the first-layer mask - before the direction "
                                   "(shadow sector) and bounce removals and before tertiary's filtering - so the "
                                   "shadow sector shows what was removed")
@@ -138,6 +140,7 @@ class WindRoseView(QWidget):
         self.bearings.setMaximumWidth(110)
         self.bearings.editingFinished.connect(self.redraw)
         self.same_slots = QCheckBox("mesonet: same slots")
+        self.same_slots.setChecked(True)
         self.same_slots.setToolTip("draw the mesonet rose from only the slots the tower rose has")
         self.same_slots.toggled.connect(lambda *_: self.redraw())
         self.sectors = QComboBox()
@@ -194,7 +197,7 @@ class WindRoseView(QWidget):
         self.boom.clear()
         for b in booms:
             self.boom.addItem(f"boom {b} ({HEIGHTS[b]:g} m)", b)
-        default = 7 if 7 in booms else booms[len(booms) // 2]  # near the mesonet's 10 m
+        default = 4 if 4 in booms else min(booms, key=lambda b: abs(HEIGHTS[b] - 10.0))  # the mesonet's height
         self.boom.setCurrentIndex(max(self.boom.findData(default), 0))
         self.boom.blockSignals(False)
         shadow = run.cfg.qc.second_layer.shadow_sector if run.cfg is not None else ()
@@ -221,6 +224,7 @@ class WindRoseView(QWidget):
         if not shiboken6.isValid(self) or key != (self.boom.currentData(), self.filtering.currentData()):
             return
         self.tower, self.mesonet = result
+        self.loaded_key = key  # (boom, filtered) the shown wind is for
         self.redraw()
 
     def redraw(self) -> None:

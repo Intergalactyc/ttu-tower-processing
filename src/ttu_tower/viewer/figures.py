@@ -77,7 +77,8 @@ def _timelines(spec, size):
 
 def _distributions(spec, size):
     """spec: panels [{title, xlabel, ylabel, bars (categorical: [{label, color, x, height, width}]) or
-    hists [{label, color, edges, density}], fits [{label, color, x, pdf}], xticks [(x, label)]}]."""
+    hists [{label, color, edges, density}] or cdfs [{label, color, x, y, selected}], fits [{label, color, x,
+    pdf or cdf}], xticks [(x, label)]}]."""
     panels = spec["panels"]
     fig, axes = new_figure(size, len(panels), 1)
     for ax, p in zip(axes[:, 0], panels):
@@ -86,10 +87,15 @@ def _distributions(spec, size):
                 ax.stairs(h["density"], h["edges"], color=h["color"], fill=True, alpha=0.35, label=h["label"])
             else:
                 ax.stairs(h["density"], h["edges"], color=h["color"], lw=1.2, label=h["label"])
+        for c in p.get("cdfs", []):
+            if c.get("selected"):
+                ax.plot(c["x"], c["y"], color="#e6007e", lw=3.2, alpha=0.5)
+            ax.plot(c["x"], c["y"], color=c["color"], lw=1.2, label=c["label"])
         for b in p.get("bars", []):
             ax.bar(b["x"], b["height"], width=b["width"], color=b["color"], label=b["label"])
         for f in p.get("fits", []):
-            ax.plot(f["x"], f["pdf"], ls="-." if f.get("dashdot") else "--", lw=1.2, color=f["color"])
+            ax.plot(f["x"], f["cdf"] if "cdf" in f else f["pdf"], ls="-." if f.get("dashdot") else "--", lw=1.2,
+                    color=f["color"])
         if p.get("log_x"):
             ax.set_xscale("log")
         if p.get("xticks"):

@@ -26,6 +26,8 @@ def _load(run, index, booms, variant, spectrum) -> dict:
 
 
 class CompositeSpectraView(QWidget):
+    STATE_FIELDS = ("spectrum", "variant", "group", "normalize", "bars", "log_y", "boom_bar")  # saved in a view, restored in this order
+
     def __init__(self, runner, parent=None):
         super().__init__(parent)
         self.runner = runner

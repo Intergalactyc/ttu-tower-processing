@@ -202,7 +202,7 @@ def test_profile_ghosts_the_filtered_boom_and_redraws_the_stored_fits(full):
     f = fits["alpha"]
     np.testing.assert_allclose(np.diff(np.log(f.y)) / np.diff(np.log(f.z)), alpha)
     pairs = profiledata.pair_table(across, run.cfg.post.stability.pair)
-    assert len(pairs) == 1 and set(pairs.columns) == {"boom", "boom2", "rib", "lapse_vpt"}
+    assert len(pairs) == 1 and set(pairs.columns) == {"boom", "boom2", "rib", "lapse_vpt", "n2_bulk"}
 
 
 def test_smoothing_weights_parse_from_presets_or_typed_text():

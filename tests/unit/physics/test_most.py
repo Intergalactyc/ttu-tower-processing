@@ -15,13 +15,48 @@ def test_obukhov_length_matches_formula():
     assert most.obukhov_length(u_star, vpt, flux) == approx(expected, abs=1e-9)
 
 
-def test_businger_dyer_phi_continuous_at_neutral():
-    assert most.businger_dyer_phi(0.0) == approx(1.0, abs=1e-12)
+def test_temperature_scale():
+    assert most.temperature_scale(0.3, 0.06) == approx(-0.2, abs=1e-12)
+
+
+def test_businger_dyer_functions_at_neutral():
+    for f in (most.businger_dyer_phi_m, most.businger_dyer_phi_h):
+        assert f(0.0) == approx(1.0, abs=1e-12)
+    for f in (most.businger_dyer_psi_m, most.businger_dyer_psi_h):
+        assert f(0.0) == approx(0.0, abs=1e-12)
 
 
 def test_businger_dyer_phi_stable_unstable_branches():
-    assert most.businger_dyer_phi(0.5) == approx(1 + 4.7 * 0.5, abs=1e-12)
-    assert most.businger_dyer_phi(-0.5) == approx((1 - 15.0 * (-0.5)) ** (-0.25), abs=1e-12)
+    assert most.businger_dyer_phi_m(0.5) == approx(1 + 5.0 * 0.5, abs=1e-12)
+    assert most.businger_dyer_phi_h(0.5) == approx(1 + 5.0 * 0.5, abs=1e-12)
+    assert most.businger_dyer_phi_m(-0.5) == approx((1 - 16.0 * (-0.5)) ** (-0.25), abs=1e-12)
+    assert most.businger_dyer_phi_h(-0.5) == approx((1 - 16.0 * (-0.5)) ** (-0.5), abs=1e-12)
+
+
+def test_businger_dyer_no_warning_on_strongly_stable(recwarn):
+    zeta = np.array([-1.0, 0.0, 0.5, 2.0, np.nan])
+    for f in (most.businger_dyer_phi_m, most.businger_dyer_phi_h, most.businger_dyer_psi_m, most.businger_dyer_psi_h):
+        out = f(zeta)
+        assert np.all(np.isfinite(out[:4])) and np.isnan(out[4])
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+
+
+def test_businger_dyer_psi_integrates_phi():
+    # psi(zeta) = integral_0^zeta (1 - phi(x))/x dx
+    for zeta in (-2.0, -0.3, 0.4):
+        x = np.linspace(zeta * 1e-9, zeta, 200_001)
+        for phi, psi in ((most.businger_dyer_phi_m, most.businger_dyer_psi_m),
+                         (most.businger_dyer_phi_h, most.businger_dyer_psi_h)):
+            assert psi(zeta) == approx(np.trapezoid((1 - phi(x)) / x, x), abs=1e-6)
+
+
+def test_most_brunt_vaisala_squared_matches_gradient_form():
+    # N^2 = (g/theta) * theta* phi_h / (kappa z), with L = u*^2 theta / (kappa g theta*)
+    u_star, theta, theta_star, z, g = 0.3, 300.0, 0.1, 10.0, 9.8
+    l = u_star**2 * theta / (KAPPA * g * theta_star)
+    zeta = z / l
+    expected = g / theta * theta_star * most.businger_dyer_phi_h(zeta) / (KAPPA * z)
+    assert most.most_brunt_vaisala_squared(u_star, z, zeta) == approx(expected, rel=1e-12)
 
 
 def test_neutral_loglaw_fit_recovers_known_profile():

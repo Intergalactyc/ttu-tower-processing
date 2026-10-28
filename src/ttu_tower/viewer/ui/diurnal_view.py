@@ -29,6 +29,8 @@ class _CellViewBox(pg.ViewBox):
 
 
 class DiurnalView(QWidget):
+    STATE_FIELDS = ("source", "member", "stat", "category")  # saved in a view, restored in this order
+
     cellSelected = Signal(object)  # the clicked cell's slots
 
     def __init__(self, parent=None):

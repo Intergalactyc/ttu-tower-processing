@@ -15,7 +15,7 @@ _GHOST = "#9a9a9a"
 _FIT_PENS = {"alpha": ("#d62728", Qt.PenStyle.SolidLine), "loglaw": ("#1f77b4", Qt.PenStyle.DashLine),
              "loglaw_c": ("#17becf", Qt.PenStyle.DotLine), "gamma": ("#d62728", Qt.PenStyle.SolidLine),
              "wdgamma": ("#d62728", Qt.PenStyle.SolidLine)}
-_COLUMNS = 7
+_COLUMNS = 8
 
 
 class ProfileTab(QWidget):
@@ -143,7 +143,7 @@ class ProfileTab(QWidget):
         def color(i, col, v):
             return tables.GOOD if i == 0 and len(pairs) and (pairs.iloc[0]["boom"], pairs.iloc[0]["boom2"]) == tuple(pair) else None
 
-        tables.fill(self.pairs, pairs.rename(columns={"rib": "Ri_b", "lapse_vpt": "dθv/dz [K/m]"}), color=color)
+        tables.fill(self.pairs, pairs.rename(columns={"rib": "Ri_b", "lapse_vpt": "dθv/dz [K/m]", "n2_bulk": "N² [1/s²]"}), color=color)
         self.pairs.setToolTip(f"every boom pair; the stability pair b{pair[0]}–b{pair[1]} first")
         prof = a.table("profile")
         prof = prof[prof["variant"].isin(["none", self.variant])][["variant", "variable", "value"]]

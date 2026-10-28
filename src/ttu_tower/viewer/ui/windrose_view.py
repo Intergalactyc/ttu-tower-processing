@@ -1,7 +1,7 @@
 """Wind roses over the viewed interval (or the whole period): one boom's -
 final, or before the shadow-sector removal and any filtering - and the mesonet
 station's, on one radial scale, with lines of constant bearing (by default the
-shadow sector's edges).
+shadow sector's edges). Every boom's rose, stacked by height, in a 3D window.
 """
 import numpy as np
 import pyqtgraph as pg
@@ -9,7 +9,7 @@ import shiboken6
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QBrush, QPen, QPolygonF
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QGraphicsPolygonItem, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QGraphicsPolygonItem, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -115,6 +115,8 @@ def _load(run, index, boom: int, filtered: bool):
 
 
 class WindRoseView(QWidget):
+    STATE_FIELDS = ("boom", "filtering", "bearings", "same_slots", "sectors")  # saved in a view, restored in this order
+
     def __init__(self, runner, parent=None):
         super().__init__(parent)
         self.runner = runner
@@ -122,6 +124,7 @@ class WindRoseView(QWidget):
         self.x_range = None
         self.tower = self.mesonet = None
         self.loaded_key = None
+        self.window3d = None
         self.boom = QComboBox()
         self.boom.setToolTip("the boom whose slot-mean wind is shown")
         self.boom.currentIndexChanged.connect(lambda *_: self.reload())
@@ -148,6 +151,10 @@ class WindRoseView(QWidget):
             self.sectors.addItem(f"{n} sectors", n)
         self.sectors.setCurrentIndex(2)
         self.sectors.currentIndexChanged.connect(lambda *_: self.redraw())
+        self.view3d_button = QPushButton("3D view (every height)…")
+        self.view3d_button.setToolTip("every boom's rose stacked by height, in a window of its own to turn with the "
+                                      "mouse (this tab's filtering, sectors, interval and lines)")
+        self.view3d_button.clicked.connect(self.open_3d)
         self.info = QLabel()
         self.info.setWordWrap(True)
         self.info.setTextFormat(Qt.TextFormat.RichText)
@@ -167,6 +174,7 @@ class WindRoseView(QWidget):
         row2.addWidget(QLabel("°"))
         row2.addWidget(self.same_slots)
         row2.addStretch(1)
+        row2.addWidget(self.view3d_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addLayout(row)
@@ -202,6 +210,10 @@ class WindRoseView(QWidget):
         self.boom.blockSignals(False)
         shadow = run.cfg.qc.second_layer.shadow_sector if run.cfg is not None else ()
         self.bearings.setText(", ".join(f"{b:g}" for b in shadow))
+        if self.window3d is not None:
+            self.window3d.winds, self.window3d.loaded_key = None, None
+            if self.shows_3d():
+                self.window3d.reload()
 
     def set_range(self, x_range) -> None:
         """(x0, x1) unix seconds, or None for the whole period."""
@@ -214,6 +226,8 @@ class WindRoseView(QWidget):
     def reload(self) -> None:
         if self.run is None or self.boom.currentData() is None:
             return
+        if self.shows_3d():
+            self.window3d.reload()
         key = (self.boom.currentData(), self.filtering.currentData())
         self.info.setText("reading the wind…")
         self.runner.submit(_load, self.run, self.index, *key, key=f"windrose-{id(self)}", label="reading the wind",
@@ -227,7 +241,25 @@ class WindRoseView(QWidget):
         self.loaded_key = key  # (boom, filtered) the shown wind is for
         self.redraw()
 
+    def open_3d(self) -> None:
+        if self.window3d is None:
+            try:
+                from ttu_tower.viewer.ui.windrose3d import WindRose3DWindow
+            except ImportError as exc:  # PyOpenGL missing
+                self.info.setText(f"the 3D view needs PyOpenGL ({exc})")
+                return
+            self.window3d = WindRose3DWindow(self)
+        self.window3d.show()
+        self.window3d.raise_()
+        self.window3d.activateWindow()
+        self.window3d.reload()
+
+    def shows_3d(self) -> bool:
+        return self.window3d is not None and shiboken6.isValid(self.window3d) and self.window3d.isVisible()
+
     def redraw(self) -> None:
+        if self.shows_3d():
+            self.window3d.refresh()
         if self.tower is None:
             return
         try:

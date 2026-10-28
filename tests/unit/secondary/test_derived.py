@@ -7,6 +7,7 @@ from pytest import approx
 from ttu_tower.config.model import DetectionConfig, SecondaryConfig, SelectionConfig
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.physics import most
+from ttu_tower.physics.constants import KAPPA
 from ttu_tower.physics.earth import local_gravity
 from ttu_tower.secondary.derived import (
     derived, materialize_missing_unexcised, naive_tau_selected, selected_stats, tau_tables,
@@ -180,10 +181,22 @@ def test_derived_quantities_hand_calculation():
     expected_l = most.obukhov_length(expected_ustar, vpt_slow, wvpts_cov, gravity=g)
     assert value("obukhov_length") == approx(expected_l)
     assert value("zeta") == approx(HEIGHTS[boom] / expected_l)
+    zeta = HEIGHTS[boom] / expected_l
+    assert value("theta_star") == approx(-wvpts_cov / expected_ustar)
+    assert value("phi_m_bd") == approx(most.businger_dyer_phi_m(zeta))
+    assert value("psi_h_bd") == approx(most.businger_dyer_psi_h(zeta))
+    expected_n2 = expected_ustar**2 / (KAPPA * HEIGHTS[boom]) ** 2 * zeta * most.businger_dyer_phi_h(zeta)
+    assert value("n2_most") == approx(expected_n2)
+    # MOST N^2 is (g/theta) * theta* phi_h / (kappa z)
+    assert value("n2_most") == approx(g / vpt_slow * value("theta_star") * value("phi_h_bd") / (KAPPA * HEIGHTS[boom]))
 
     assert value("ils_u") == approx(its_u * u_mean)
     assert value("ils_v") == approx(its_v * abs(u_mean))
     assert value("ils_vpts") == approx(its_vpts * abs(u_mean))
+    factor = math.e / (math.e - 1)
+    assert value("its_corr_w") == approx(its_w * factor)
+    assert value("ils_corr_u") == approx(its_u * u_mean * factor)
+    assert value("ils_corr_vpts") == approx(its_vpts * abs(u_mean) * factor)
     assert value("its_ratio_u") == approx(tau_s / its_u)
     assert value("its_short") == approx(0.0)  # tau_s/its_x >= 10 for u, v, w -> not short
     assert value("w_ratio") == approx(w_mean / ws_mean)

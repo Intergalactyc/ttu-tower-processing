@@ -2,6 +2,7 @@
 over its visible range, or the whole period, in every stability class or one -
 with a summary table per boom, and fitted distributions.
 """
+import html
 import warnings
 
 import numpy as np
@@ -18,6 +19,7 @@ from ttu_tower.viewer import distfits
 from ttu_tower.viewer.decimate import visible_slice
 from ttu_tower.viewer.timeline import in_class
 from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui.axes import SwitchLogAxis
 
 _STATS = ("N", "NaN %", "mean", "σ", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
 _QUANTILES = (0, 5, 25, 50, 75, 95, 100)  # min to max, as percentiles
@@ -91,6 +93,9 @@ def set_stability_names(combo: QComboBox, stability) -> None:
 
 
 class DistributionView(QWidget):
+    STATE_FIELDS = ("stability_box", "show_box", "cumulative", "side", "fit_box", "bin_count", "bin_auto",
+                    "bin_lo", "bin_hi", "log_bins")  # saved in a view, restored in this order
+
     def __init__(self, runner=None, parent=None):
         super().__init__(parent)
         self.runner = runner
@@ -98,6 +103,13 @@ class DistributionView(QWidget):
         self.title.setWordWrap(True)
         self.log_bins = QCheckBox("log bins")
         self.log_bins.toggled.connect(lambda *_: self.refresh())
+        self.side = QComboBox()
+        for label, key in (("all values", "all"), ("x > 0 only", "positive"), ("x < 0 only, as −x", "negative"),
+                           ("|x|", "abs")):
+            self.side.addItem(label, key)
+        self.side.setToolTip("all the values, one side of 0 (the negative side as −x, its magnitudes), or the "
+                             "absolute values: a side or |x| can take log bins and positive-only fits")
+        self.side.currentIndexChanged.connect(lambda *_: self.refresh())
         self.fit_box = QComboBox()
         self.fit_box.setToolTip("fit a distribution to each boom's values (maximum likelihood; dashed)")
         self.fit_box.currentIndexChanged.connect(lambda *_: self.refresh())
@@ -130,7 +142,7 @@ class DistributionView(QWidget):
         self.bin_auto.toggled.connect(self._on_bin_auto)
         self.fits: dict = {}
         self._fitted = None  # (args, inputs, fits) of the last fit, reused while only the view changes
-        self.plot = pg.PlotWidget()
+        self.plot = pg.PlotWidget(axisItems={"bottom": SwitchLogAxis(orientation="bottom")})
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         self.table = tables.new_table()
         self.note = QLabel()
@@ -144,6 +156,7 @@ class DistributionView(QWidget):
         head.addWidget(QLabel("show"))
         head.addWidget(self.show_box)
         head.addWidget(self.cumulative)
+        head.addWidget(self.side)
         head.addStretch(1)
         head.addWidget(QLabel("fit"))
         head.addWidget(self.fit_box)
@@ -228,8 +241,34 @@ class DistributionView(QWidget):
             if name is not None:
                 keep = in_class(stability, slots, name)
                 slots, y = slots[keep], y[keep]
-            out[m] = (slots, y)
+            out[m] = self._side(slots, y)
         return out
+
+    def state_skip(self) -> set:
+        """With auto range on, the from/to boxes show what auto chose: not a setting to keep."""
+        return {"bin_lo", "bin_hi"} if self.bin_auto.isChecked() else set()
+
+    def side_key(self) -> str:
+        """Which values: "all", "positive", "negative" (as −x) or "abs"; all for directions and categories."""
+        data = self._args[0] if self._args is not None else None
+        q = data.quantity if data is not None else None
+        return "all" if q is None or q.categorical or q.circular else self.side.currentData()
+
+    def _side(self, slots, y):
+        key = self.side_key()
+        if key == "positive":
+            keep = y > 0
+            return slots[keep], y[keep]
+        if key == "negative":
+            keep = y < 0
+            return slots[keep], -y[keep]
+        if key == "abs":
+            return slots, np.abs(y)
+        return slots, y
+
+    def x_label(self, unit: str) -> str:
+        what = {"all": "", "positive": "x > 0 · ", "negative": "−x (x < 0) · ", "abs": "|x| · "}[self.side_key()]
+        return f"{what}{unit or 'value'}" + (" (log scale)" if self._log else "")
 
     def values_by_member(self) -> dict:
         return {m: y for m, (_, y) in self.slots_and_values().items()}
@@ -255,7 +294,9 @@ class DistributionView(QWidget):
 
     def refresh(self) -> None:
         self.plot.clear()
+        self._log = False
         self.plot.getPlotItem().getAxis("bottom").setTicks(None)
+        self.plot.getPlotItem().getAxis("bottom").set_log10(False)
         self.plot.setLabel("left", "")
         self.plot.setLabel("bottom", "")
         self.note.hide()
@@ -275,7 +316,9 @@ class DistributionView(QWidget):
         both = ("highlighted: brushed selection, plain: the rest (each its own fraction)" if cumulative
                 else "filled: brushed selection, lines: the rest (each its own density)")
         note = {"both": f" · {both}", "selected": " · the brushed selection only", "all": ""}[showing]
-        self.title.setText(f"<b>{q.title}</b> — {scope}" + (f", {name} only" if name else "")
+        side = {"all": "", "positive": ", values > 0 only", "negative": ", values < 0 only, as −x",
+                "abs": ", absolute values"}[self.side_key()]
+        self.title.setText(f"<b>{q.title}</b>{html.escape(side)} — {scope}" + (f", {name} only" if name else "")
                            + (note if split or showing == "selected" else ""))
         self._fit_choices(q.circular)
         self.show_box.setEnabled(self.selection.size > 0)
@@ -291,7 +334,7 @@ class DistributionView(QWidget):
                     self._cumulatives(self.split_values(True), "brushed selection", selected=True)
                 else:
                     self._cumulatives(values, "brushed selection" if showing == "selected" else "")
-                self.plot.setLabel("bottom", ("log10 " if self._log else "") + (q.unit or "value"))
+                self.plot.setLabel("bottom", html.escape(self.x_label(q.unit)))
                 self.plot.setLabel("left", "cumulative fraction")
         elif split:
             self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values, part="the rest")
@@ -329,8 +372,12 @@ class DistributionView(QWidget):
         finite = [v[np.isfinite(v)] for v in values.values()]
         positive = any(v.size for v in finite) and all((v > 0).all() for v in finite)
         why = ("categories have no bins" if q.categorical else "directions are binned over 0–360°" if q.circular
-               else None if positive else "needs every value positive")
+               else None if positive else "needs every value positive: choose x > 0, x < 0 or |x| beside "
+                                                  "\"cumulative\"")
         self.log_bins.setEnabled(why is None)
+        self.side.setEnabled(not q.categorical and not q.circular)
+        self.side.setToolTip("directions and categories are shown whole" if not self.side.isEnabled()
+                             else self.side.toolTip())
         self.log_bins.setToolTip(why or ("a log axis" if cumulative else "logarithmically spaced bins, on a log axis"))
         self.bin_auto.setEnabled(not q.categorical)
         self.bin_auto.setToolTip(
@@ -396,7 +443,7 @@ class DistributionView(QWidget):
                     curve = {"cdf": f.cdf(grid)} if cumulative else {"pdf": f.pdf(grid)}
                 panel["fits"].append({"label": m, "color": pg.mkColor(style.member_color(m, i)).name(), "x": grid,
                                       "dashdot": part == "selected"} | curve)
-        panel.update(xlabel=q.unit or "value", ylabel=ylabel, log_x=bool(self._log))
+        panel.update(xlabel=self.x_label(q.unit).replace(" (log scale)", ""), ylabel=ylabel, log_x=bool(self._log))
         return panel
 
     # --- the table -----------------------------------------------------------------------------
@@ -579,12 +626,11 @@ class DistributionView(QWidget):
             return False
         log = self.log_bins.isEnabled() and self.log_bins.isChecked()
         self._log = log
+        self.plot.getPlotItem().getAxis("bottom").set_log10(log)  # the axis reads the values, not log10
         n = self.bin_count.value() + 1
         if self.bin_auto.isChecked():
-            if log:
-                lo, hi = pooled.min(), pooled.max()
-            else:
-                lo, hi = np.percentile(pooled, [0.1, 99.9]) if not circular else (0.0, 360.0)
+            # the 0.1st-99.9th percentiles: a side of 0 always has a few tiny magnitudes to stretch a log axis
+            lo, hi = np.percentile(pooled, [0.1, 99.9]) if not circular else (0.0, 360.0)
             for box, v in ((self.bin_lo, lo), (self.bin_hi, hi)):  # what auto chose, to start a range from
                 box.blockSignals(True)
                 box.setValue(float(v))
@@ -596,7 +642,7 @@ class DistributionView(QWidget):
                 self.note.show()
                 lo = pooled.min()
         if hi <= lo:
-            lo, hi = lo - 0.5, lo + 0.5
+            lo, hi = (lo / 2, lo * 2) if log else (lo - 0.5, lo + 0.5)
         self._edges = np.logspace(np.log10(lo), np.log10(hi), n) if log else np.linspace(lo, hi, n)
         return True
 
@@ -618,7 +664,7 @@ class DistributionView(QWidget):
             label = style.member_label(member) or "value"
             item.export_label = f"{label}: {part}" if part else label
             self.plot.addItem(item)
-        self.plot.setLabel("bottom", ("log10 " if log else "") + (unit or "value"))
+        self.plot.setLabel("bottom", html.escape(self.x_label(unit)))
         self.plot.setLabel("left", "density")
 
     def _selected_histograms(self) -> None:

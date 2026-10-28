@@ -271,6 +271,38 @@ class PanelControls(QWidget):
                          show_filtered=can_filter and self.filtered_box.isChecked(),
                          show_tau=can_tau and self.tau_box.isChecked())
 
+    def state(self) -> dict | None:
+        """The panel's choices as plain values, for a saved view; None with no quantity."""
+        spec = self.spec()
+        if spec.quantity is None:
+            return None
+        return {"quantity": spec.quantity.key, "variant": spec.variant,
+                "members": [list(m) if isinstance(m, tuple) else m for m in spec.members],
+                "log_y": self.log_y.isChecked(), "style": self.style.currentText(),
+                "filtered": self.filtered_box.isChecked(), "tau": self.tau_box.isChecked()}
+
+    def restore(self, state: dict) -> str | None:
+        """Choose what a saved view had; why not, where this run can't."""
+        key = state.get("quantity")
+        if self.catalog is None or key not in self.catalog.quantities:
+            return f"{key} isn't in this run"
+        q = self.catalog[key]
+        members = [tuple(m) if isinstance(m, list) else m for m in state.get("members", [])]
+        if q.kind == "boom":
+            members = [b for b in members if b in self.booms]
+            if not members:
+                return f"none of {key}'s booms are in this run"
+        self._quiet = True
+        self.log_y.setChecked(bool(state.get("log_y")))
+        if self.style.findText(state.get("style", "")) >= 0:
+            self.style.setCurrentText(state["style"])
+        self.filtered_box.setChecked(bool(state.get("filtered")))
+        self.tau_box.setChecked(bool(state.get("tau")))
+        self._quiet = False
+        variant = state.get("variant")
+        self.select(key, variant if variant in q.variants else None, tuple(members))
+        return None
+
     def _on_variant_changed(self, *_) -> None:
         if self.variant.count() > 1:
             self._preferred_variant = self.variant.currentData()

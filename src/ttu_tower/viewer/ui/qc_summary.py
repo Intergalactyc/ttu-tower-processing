@@ -32,6 +32,8 @@ def _percent(col, value):
 
 
 class QCSummaryView(QWidget):
+    STATE_FIELDS = ("variant", "coverage_var", "flag_var")  # saved in a view, restored in this order
+
     def __init__(self, runner, parent=None):
         super().__init__(parent)
         self.runner = runner

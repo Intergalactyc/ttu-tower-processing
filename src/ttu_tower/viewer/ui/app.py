@@ -39,7 +39,7 @@ def main(tag: str | None = None, run_dir: str | None = None, test: bool = False)
 
     from ttu_tower.viewer.ui.main_window import MainWindow
 
-    window = MainWindow()
+    window = MainWindow(resume="ask")
     try:
         run = open_initial_run(tag, run_dir, test, window.settings.value("last_run"))
     except RunNotFound as exc:

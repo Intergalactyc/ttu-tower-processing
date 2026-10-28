@@ -418,3 +418,29 @@ def test_zeta_is_a_profile_panel_option(window, qtbot):
     single.choices[1].setCurrentIndex(single.choices[1].findData("zeta"))
     qtbot.waitUntil(lambda: "zeta" in single.values, timeout=60_000)
     assert single.panels[1].getAxis("bottom").labelText == "ζ = z/L"
+
+
+def test_the_aggregate_draws_the_jet_slots_hodograph(window, qtbot):
+    p = window.jets.profiles
+    wd = np.where(np.isfinite(p.ws), 180.0, np.nan)  # from the south: v toward north is the speed
+    window.jets.profiles = Profiles(p.slots, p.booms, p.ws, extra={"wd": wd})
+    window.jets.recompute()
+    qtbot.waitUntil(lambda: _idle(window) and window.jets.result is not None, timeout=60_000)
+    view = window.jets.view
+    window.right_tabs.setCurrentWidget(view)
+    window.full_period.setChecked(True)
+    view.tabs.setCurrentWidget(view.aggregate)
+    agg = view.aggregate
+    agg.which.setCurrentIndex(agg.which.findData(False))
+    title = agg.hodo_plot.getPlotItem().titleLabel.text
+    detected = window.jets.result.detected_in(window.jets.result.events.table.index)
+    assert f"mean of {len(detected)} jet slots" in title and "each event" in title
+    curves = [c for c in agg.hodo_plot.getPlotItem().listDataItems() if isinstance(c, pg.PlotDataItem)]
+    mean = curves[-1]  # drawn last, over each event's
+    u, v = mean.getData()
+    assert len(u) == 4 and u == pytest.approx(0.0, abs=1e-9) and v == pytest.approx(JET)  # booms 1-4, the jet nose
+    assert len(curves) == 1 + window.jets.result.events.table.shape[0]
+    agg.scope.setCurrentIndex(agg.scope.findData("event"))
+    agg.event_id = int(window.jets.result.events.table.index[0])
+    agg.redraw()
+    assert "each slot" in agg.hodo_plot.getPlotItem().titleLabel.text

@@ -14,6 +14,7 @@ from ttu_tower.post.classify import stability_classes
 from ttu_tower.viewer.slotdata import load_across, load_slot, stored_selection
 from ttu_tower.viewer.timeaxis import format_slot
 from ttu_tower.viewer.ui.inspector.anisotropy_tab import AnisotropyTab
+from ttu_tower.viewer.ui.inspector.hodograph_tab import HodographTab
 from ttu_tower.viewer.ui.inspector.numbers_tab import NumbersTab
 from ttu_tower.viewer.ui.inspector.profile_tab import ProfileTab
 from ttu_tower.viewer.ui.inspector.qc_tab import QCTab
@@ -22,7 +23,7 @@ from ttu_tower.viewer.ui.inspector.spectra_tab import SpectraTab
 from ttu_tower.viewer.ui.inspector.whatif_tab import WhatIfTab
 from ttu_tower.viewer.ui.series_view import SeriesPanel
 
-TABS = ("series", "spectra", "scales", "qc", "profile", "anisotropy", "whatif", "numbers")
+TABS = ("series", "spectra", "scales", "qc", "profile", "hodograph", "anisotropy", "whatif", "numbers")
 _VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (10 min)"), ("mrd_unexcised", "mrd unexcised"))
 
 
@@ -89,6 +90,7 @@ class InspectorWindow(QWidget):
         self.qc = QCTab(index, runner)
         self.profile = ProfileTab()
         self.profile.boomClicked.connect(self._set_boom)
+        self.hodograph = HodographTab(index, runner, run.booms)
         self.anisotropy = AnisotropyTab(run, index, runner)
         self.anisotropy.boomClicked.connect(self._set_boom)
         self.anisotropy.slotClicked.connect(self.go_to)
@@ -96,7 +98,8 @@ class InspectorWindow(QWidget):
         self.numbers = NumbersTab()
         self.tabs = QTabWidget()
         for widget, label in ((self.series, "Series"), (self.spectra, "Spectra"), (self.scales, "Scales"),
-                              (self.qc, "QC"), (self.profile, "Profile"), (self.anisotropy, "Anisotropy"),
+                              (self.qc, "QC"), (self.profile, "Profile"), (self.hodograph, "Hodograph"),
+                              (self.anisotropy, "Anisotropy"),
                               (self.whatif, "τ what-if"),
                               (self.numbers, "Numbers")):
             self.tabs.addTab(widget, label)
@@ -310,6 +313,7 @@ class InspectorWindow(QWidget):
         if b is None:
             return
         variant = self.variant()
+        self.hodograph.set_slot(self.slot)
         self.summary.setText(self._summary_text(b, variant))
         sel = stored_selection(b, variant)
         self.series.set_selected_tau(sel["tau_s"] if sel else None)

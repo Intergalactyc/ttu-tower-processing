@@ -44,6 +44,11 @@ def autocovariance(x: np.ndarray, max_lag: int) -> np.ndarray:
     return full[: max_lag + 1]
 
 
+# Total over e-folding-truncated integral of an exponential ACF:
+# integral_0^T exp(-t/T) dt = T(1 - 1/e).
+EFOLDING_TOTAL_FACTOR = np.e / (np.e - 1)
+
+
 def efolding_integral(rho: np.ndarray) -> float:
     """Trapezoid integral of rho (values at lags 0, 1, 2, ...) from lag 0 to
     the first crossing of 1/e, linearly interpolating the crossing point

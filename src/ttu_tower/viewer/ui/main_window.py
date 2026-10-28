@@ -12,11 +12,11 @@ import logging
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDockWidget, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QSplitter, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDockWidget, QFileDialog, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+    QMessageBox, QSplitter, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
@@ -24,6 +24,9 @@ from ttu_tower.timegrid import time_to_slot
 from ttu_tower.viewer import anisotropy, brush, compare, figures, timeline
 from ttu_tower.viewer import stability as criteria
 from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
+from ttu_tower.viewer.views import SavedView, ViewStore
+from ttu_tower.viewer import derived
+from ttu_tower.viewer.ui.derived_panel import DerivedPanel
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
 from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_variables
@@ -34,16 +37,19 @@ from ttu_tower.viewer.ui.anisotropy_view import AnisotropyMapView
 from ttu_tower.viewer.ui.bookmarks_panel import BookmarkDialog, BookmarksPanel
 from ttu_tower.viewer.ui.compare_view import CompareView
 from ttu_tower.viewer.ui.composite_view import CompositeSpectraView
+from ttu_tower.viewer.ui.scales_view import ScalesView
 from ttu_tower.viewer.ui.tau_view import TauView
 from ttu_tower.viewer.ui.diurnal_view import DiurnalView
 from ttu_tower.viewer.ui.export_dialog import ExportDialog
 from ttu_tower.viewer.ui.distribution import DistributionView
 from ttu_tower.viewer.ui.find_panel import FindPanel
+from ttu_tower.viewer.ui.hodograph_view import HodographView
+from ttu_tower.viewer.ui.hover_readout import HoverReadout
 from ttu_tower.viewer.ui.jets_controller import JetsController
 from ttu_tower.viewer.ui.stability_panel import StabilityPanel
 from ttu_tower.viewer.ui.wrap_tabs import WrapTabWidget
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
-from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui import style, view_state
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
 from ttu_tower.viewer.ui.profiles_view import ProfilesView
 from ttu_tower.viewer.ui.qc_summary import QCSummaryView
@@ -65,8 +71,12 @@ _TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "pr
 class MainWindow(QMainWindow):
     runOpened = Signal()
 
-    def __init__(self, run: RunHandle | None = None, runner: JobRunner | None = None):
+    def __init__(self, run: RunHandle | None = None, runner: JobRunner | None = None, resume: str = "never"):
+        """`resume`: "ask" offers, on opening a run, to resume where it was left (and keeps
+        where each run is left); "never" opens on the default panels.
+        """
         super().__init__()
+        self.resume = resume
         self.settings = QSettings()  # the application's organization and name, set in app.main
         self.runner = runner or JobRunner(parent=self)
         self.run: RunHandle | None = None
@@ -83,6 +93,17 @@ class MainWindow(QMainWindow):
         self.other_run = self.other_index = self.other_catalog = None  # the run compared against
         self.others = [None, None]  # its TimelineData per panel, or why it has none
         self.bookmarks = BookmarkStore()
+        self.views = ViewStore()
+        try:
+            self.derived_store = derived.DerivedStore.open()
+        except (OSError, ValueError, KeyError) as exc:  # kept in memory, never written over the unreadable file
+            self.derived_store = derived.DerivedStore()
+            logging.getLogger("ttu_view").error(f"couldn't read the derived quantities: {exc}")
+        self._pending_view = None  # a view to apply once the run's quantities are known
+        self._pending_summary = None  # the Summary tabs' part of one, once stability classes are known
+        self._pending_legend: dict[int, list] = {}  # panel -> the legend entries shown, once it has loaded
+        self._stability_known = False  # the run's stability classes (or that it has none) have arrived
+        self._summary_retry: dict[str, dict] = {}  # tab -> settings it couldn't take until it's shown
         self._opening: InspectorWindow | None = None  # the inspector the busy cursor waits on
         self._also_here = ""  # the other curves at the clicked point, said again once the inspector opens
         self._opening_timer = QTimer(self)
@@ -148,6 +169,10 @@ class MainWindow(QMainWindow):
         self.stability_panel.resetRequested.connect(self._reset_stability)
         tabs.addTab(self.stability_panel, "Stability")
         tabs.setTabToolTip(tabs.count() - 1, "how stability is classified, for every view that uses it")
+        self.derived_panel = DerivedPanel(self.derived_store)
+        self.derived_panel.changed.connect(self._derived_changed)
+        tabs.addTab(self.derived_panel, "Derived")
+        tabs.setTabToolTip(tabs.count() - 1, "quantities defined by a formula of others, for the panels")
         self._stability_timer = QTimer(self)
         self._stability_timer.setSingleShot(True)
         self._stability_timer.setInterval(300)
@@ -184,11 +209,14 @@ class MainWindow(QMainWindow):
         for d in self.dists:
             dist_split.addWidget(d)
         self.scatter = ScatterView(self.runner)
+        self.scatter.z_loader = self._load_scatter_z
         self.scatter.pointClicked.connect(lambda slot, member: QTimer.singleShot(0, lambda: self._on_scatter_point(slot, member)))
         self.windrose = WindRoseView(self.runner)
+        self.hodograph = HodographView(self.runner)
         self.qc_summary = QCSummaryView(self.runner)
         self.profiles = ProfilesView()
         self.composite = CompositeSpectraView(self.runner)
+        self.scales_view = ScalesView(self.runner)
         self.tau_view = TauView(self.runner)
         self.tau_view.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
         self.diurnal = DiurnalView()
@@ -199,12 +227,16 @@ class MainWindow(QMainWindow):
         self.dist_tab = dist_split
         self.right_tabs = WrapTabWidget()
         for widget, label in ((dist_split, "Distributions"), (self.scatter, "Scatter"), (self.profiles, "Profiles"),
-                              (self.composite, "Spectra"), (self.tau_view, "τ"), (self.diurnal, "Diurnal"),
+                              (self.composite, "Spectra"), (self.scales_view, "Scales"), (self.tau_view, "τ"),
+                              (self.diurnal, "Diurnal"),
                               (self.aniso_map, "Anisotropy"),
-                              (self.windrose, "Wind rose"), (self.qc_summary, "QC"), (self.compare, "Compare"),
+                              (self.windrose, "Wind rose"), (self.hodograph, "Hodograph"), (self.qc_summary, "QC"),
+                              (self.compare, "Compare"),
                               (self.jets.view, "Jets")):
             self.right_tabs.addTab(widget, label)
         for widget, tip in ((self.composite, "composite MRD spectra: each boom's median over the slots"),
+                            (self.scales_view, "integral time and length scales at every ladder rung: each "
+                                               "boom's median (or mean) over the slots"),
                             (self.tau_view, "heat, momentum and selected τ over many slots, heat vs momentum, and "
                                             "a what-if of the selection rules over every slot"),
                             (self.diurnal, "a panel's quantity by hour of day and month"),
@@ -212,6 +244,8 @@ class MainWindow(QMainWindow):
                             (self.jets.view, "low-level jet events (set the detection on the left, under Jets)")):
             self.right_tabs.setTabToolTip(self.right_tabs.indexOf(widget), tip)
         self.right_tabs.currentChanged.connect(lambda *_: self._refresh_distributions())
+        self.summary_hover = HoverReadout(self._on_summary_hover)  # the cursor over a Summary plot
+        self.right_tabs.currentChanged.connect(lambda *_: self.summary_hover.watch(self.right_tabs))
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(2, 2, 2, 2)
@@ -227,6 +261,7 @@ class MainWindow(QMainWindow):
         self.warn_label.linkActivated.connect(self._open_log)
         self.warn_label.setToolTip("warnings and Qt messages go to the viewer's log file, not the console")
         self.statusBar().addWidget(self.hover, 1)
+        self.summary_hover.watch(self.right_tabs)
         self.selection_label = QLabel()
         self.selection_label.setToolTip("brushed slots: Shift-drag on a timeline or scatter (or any drag with Brush "
                                         "on); Ctrl adds, Alt removes; Esc clears")
@@ -366,6 +401,15 @@ class MainWindow(QMainWindow):
         bar.addAction(export)
         self.range_label = QLabel()
         self.toolbar = bar
+        self.views_button = QToolButton()
+        self.views_button.setText("Views")
+        self.views_button.setToolTip("save this view (panels, interval, tabs and their settings, the selection) "
+                                     "under a name, or open one saved earlier - from this run or another")
+        self.views_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.views_menu = QMenu(self.views_button)
+        self.views_menu.aboutToShow.connect(self._fill_views_menu)
+        self.views_button.setMenu(self.views_menu)
+        bar.addWidget(self.views_button)
         self.range_action = bar.addWidget(self.range_label)
         self._refresh_run_list()
 
@@ -409,13 +453,15 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.run.run_dir)))
 
     def open_run(self, run: RunHandle) -> None:
+        if self.run is not None:
+            self._save_session()
         if self.reprocessor is not None:
             self.reprocessor.close()
         self.run = run
         self.index = FragmentIndex(run.run_dir)
         self.reprocessor = Reprocessor(run) if run.cfg is not None else None
         self.catalog, self.datas, self.night, self._have_range = None, [None, None], None, False
-        self.stability = None
+        self.stability, self._stability_known = None, False
         self.specs = [PanelSpec(), PanelSpec()]
         self.settings.setValue("last_run", run.tag)
         self.setWindowTitle(f"ttu-view — {run.tag}  ({run.run_dir})")
@@ -441,6 +487,7 @@ class MainWindow(QMainWindow):
             notes.append("Code differs from the run: " + commit + ". Raw-data views show the installed code's result.")
         self.banner.setText("\n".join(notes))
         self.banner.setVisible(bool(notes))
+        self._offer_resume(run)  # before anything loads: the dialog's event loop would deliver it meanwhile
 
         for p in self.plots:
             p.clear("loading…")
@@ -453,9 +500,11 @@ class MainWindow(QMainWindow):
         self.bookmark_panel.set_run(run.tag, run.timezone)
         self.set_selection(brush.EMPTY, "replace")
         self.windrose.set_run(run, self.index, booms)
+        self.hodograph.set_run(run, self.index, booms)
         self.qc_summary.set_run(run, self.index, booms)
         self.composite.set_run(run, self.index, booms)
         self.tau_view.set_run(run, self.index, booms)
+        self.scales_view.set_run(run, self.index, booms)
         self.aniso_map.set_run(run, self.index, booms)
         self._fill_compare_box()
         self._set_other_run(None)
@@ -473,8 +522,16 @@ class MainWindow(QMainWindow):
 
     def _catalog_ready(self, catalog) -> None:
         self.catalog = catalog
+        notes = derived.add_to(catalog, self.derived_store.items)
+        self.derived_panel.set_catalog(catalog, notes)
         for panel in self.panels:
             panel.set_catalog(catalog, self.run.booms)
+        self.scatter.set_catalog(catalog)
+        if self._pending_view is not None:
+            state, self._pending_view = self._pending_view, None
+            self._report_view(self.apply_view_state(state))
+            self.runOpened.emit()
+            return
         defaults = [d for d in _DEFAULTS + _FALLBACKS if d[0] in catalog.quantities]
         for panel, (key, variant, members) in zip(self.panels, defaults):
             q = catalog[key]
@@ -558,12 +615,217 @@ class MainWindow(QMainWindow):
     def _stability_ready(self, run, spec, result) -> None:
         if run is not self.run or spec != self.stability_spec:
             return
-        self.stability = result
+        self.stability, self._stability_known = result, True
         own = criteria.from_config(run.cfg.post) if run.cfg is not None else None
         label = spec.describe() if spec is not None else own.describe() if own is not None else ""
         self.stability_band.set_classes(self._overlay_slots, result, label)
         self.stability_panel.show_counts(result)
+        if self._pending_summary is not None:
+            summary, self._pending_summary = self._pending_summary, None
+            self._report_view(self._restore_summary(summary), quiet=True)
         self._refresh_distributions()
+
+    # --- saved views ------------------------------------------------------------------------------
+
+    def summary_views(self) -> dict:
+        """Summary tab name -> the view whose controls a saved view keeps."""
+        out = {f"Distributions {'AB'[i]}": d for i, d in enumerate(self.dists)}
+        for i in range(self.right_tabs.count()):
+            widget = self.right_tabs.widget(i)
+            if hasattr(widget, "STATE_FIELDS"):
+                out[self.right_tabs.tabText(i)] = widget
+        return out
+
+    def view_state(self) -> dict:
+        """Everything a saved view reopens, as plain values."""
+        tz = self.tz_box.currentData()
+        return {
+            "version": 1, "run": self.run.tag if self.run is not None else None,
+            "panels": [p.state() for p in self.panels],
+            "legend": [view_state.get(plot.legend) for plot in self.plots],  # the entries shown
+            "x_range": list(self.x_range()) if self._have_range else None,
+            "timezone": tz if tz != (self.run.timezone if self.run is not None else None) else None,
+            "toggles": {name: box.isChecked() for name, box in self._view_toggles().items()},
+            "tabs": {"controls": self.left_tabs.tabText(self.left_tabs.currentIndex()),
+                     "summary": self.right_tabs.tabText(self.right_tabs.currentIndex())},
+            "stability": self.stability_spec.to_dict() if self.stability_spec is not None else None,
+            "selection": view_state.pack_slots(self.selection),
+            "summary": {name: view_state.save(view, view.STATE_FIELDS) for name, view in self.summary_views().items()},
+            "layout": bytes(self.saveState().toBase64()).decode("ascii"),
+        }
+
+    def _view_toggles(self) -> dict:
+        return {"night": self.night_box, "stability_band": self.stability_box, "aniso_band": self.aniso_box,
+                "jets_band": self.jets_box, "whole_period": self.full_period}
+
+    def apply_view_state(self, state: dict) -> list[str]:
+        """Reopen a saved view on the open run, as far as the run allows; what couldn't be."""
+        notes = []
+        if state.get("layout"):
+            self.restoreState(QByteArray.fromBase64(state["layout"].encode("ascii")))
+        tz = state.get("timezone")
+        if tz:
+            i = self.tz_box.findData(tz)
+            if i >= 0:
+                self.tz_box.setCurrentIndex(i)
+            else:
+                notes.append(f"time zone {tz}")
+        for name, on in state.get("toggles", {}).items():
+            if name in self._view_toggles():
+                self._view_toggles()[name].setChecked(on)
+        spec = state.get("stability")
+        stability_changes = False
+        if spec is not None and self.run is not None and self.run.cfg is not None:
+            chosen = criteria.StabilitySpec.from_dict(spec)
+            if chosen.errors() or (chosen.variable == "rib" and not set(chosen.booms) <= set(self.run.booms)):
+                notes.append(f"the stability criterion {chosen.describe()}")
+            elif chosen != self.stability_spec:
+                self.stability_panel.set_spec(chosen)
+                self._set_stability(chosen)
+                stability_changes = True
+        elif spec is None and self.stability_spec is not None:
+            self._reset_stability()
+            stability_changes = True
+        for i, (panel, panel_state) in enumerate(zip(self.panels, state.get("panels", []))):
+            if panel_state is None:
+                continue
+            why = panel.restore(panel_state)
+            if why:
+                notes.append(f"panel {'AB'[i]}: {why}")
+            elif state.get("legend") and state["legend"][i]:
+                self._pending_legend[i] = state["legend"][i]
+        if state.get("x_range"):
+            self.set_x_range(*state["x_range"])
+        self.set_selection(np.asarray(view_state.unpack_slots(state.get("selection", [])), dtype=np.int64), "replace")
+        for tabs, name in ((self.left_tabs, state.get("tabs", {}).get("controls")),
+                           (self.right_tabs, state.get("tabs", {}).get("summary"))):
+            if name and not view_state.put(tabs, name):
+                notes.append(f"the {name} tab")
+        summary = state.get("summary", {})
+        if self._stability_known and not stability_changes:
+            notes += self._restore_summary(summary)
+        else:  # its stability-class choices exist once the classes do
+            self._pending_summary = summary
+        return notes
+
+    def _restore_summary(self, summary: dict) -> list[str]:
+        """Settings a tab can't take yet (its lists fill once it's shown) wait for it to be shown."""
+        notes = []
+        views = self.summary_views()
+        for name, fields in summary.items():
+            view = views.get(name)
+            if view is None:
+                notes.append(f"the {name} tab")
+                continue
+            missed = view_state.restore(view, fields, view.STATE_FIELDS)
+            if missed:
+                self._summary_retry[name] = {path: fields[path] for path in missed}
+        self._refresh_distributions()
+        return notes
+
+    def _retry_summary(self) -> None:
+        """The shown tab's settings that had to wait (see `_restore_summary`)."""
+        shown = self.right_tabs.currentWidget()
+        notes = []
+        for name, view in self.summary_views().items():
+            if name not in self._summary_retry or not (view is shown or (shown is self.dist_tab and view in self.dists)):
+                continue
+            fields = self._summary_retry.pop(name)
+            notes += [f"{name}: {path}" for path in view_state.restore(view, fields, view.STATE_FIELDS)]
+        self._report_view(notes, quiet=True)
+
+    def _report_view(self, notes: list[str], quiet: bool = False) -> None:
+        if notes:
+            self.statusBar().showMessage("reopened, except: " + "; ".join(notes), 15_000)
+        elif not quiet:
+            self.statusBar().showMessage("view reopened", 4000)
+
+    def _save_session(self) -> None:
+        if self.resume == "never" or self.run is None or self.catalog is None:
+            return
+        self.settings.setValue(f"session/{self.run.tag}", json.dumps(self.view_state()))
+
+    def _ask_resume(self, tag: str) -> bool:
+        """At start-up the main window isn't shown yet, so the question is a window of its own (with a
+        taskbar entry), brought to the front with the focus; later it sits on the main window.
+        """
+        yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
+        box = QMessageBox(QMessageBox.Icon.Question, f"ttu-view — {tag}", f"Resume {tag} where you left off?",
+                          yes | no, self if self.isVisible() else None)
+        box.setInformativeText("No opens it on the default panels.")
+        box.setDefaultButton(yes)
+        box.setWindowModality(Qt.WindowModality.ApplicationModal)
+        if not self.isVisible():
+            box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        QTimer.singleShot(0, lambda: (box.raise_(), box.activateWindow()))
+        box.exec()
+        return box.standardButton(box.clickedButton()) == yes
+
+    def _offer_resume(self, run) -> None:
+        if self.resume != "ask":
+            return
+        raw = self.settings.value(f"session/{run.tag}")
+        if not raw or not self._ask_resume(run.tag):
+            return
+        try:
+            state = json.loads(raw)
+        except ValueError:
+            return
+        if self.catalog is None:
+            self._pending_view = state
+        else:  # the quantities came while the dialog was open
+            self._report_view(self.apply_view_state(state))
+
+    def open_view(self, view: SavedView) -> None:
+        if self.catalog is None:
+            self._pending_view = view.state
+            return
+        notes = self.apply_view_state(view.state)
+        if view.run != self.run.tag:
+            notes = [f"saved from {view.run}"] + notes if notes else notes
+        self._report_view(notes)
+
+    def _fill_views_menu(self) -> None:
+        menu = self.views_menu
+        menu.clear()
+        save = menu.addAction("Save this view…")
+        save.setEnabled(self.run is not None and self.catalog is not None)
+        save.triggered.connect(self._save_view_dialog)
+        run = self.run.tag if self.run is not None else None
+        views = self.views.ordered(run)
+        if views:
+            menu.addSeparator()
+        for v in views:
+            label = v.name if v.run == run else f"{v.name}  (from {v.run})"
+            act = menu.addAction(label)
+            act.setToolTip(v.note or f"saved {v.created[:16].replace('T', ' ')} UTC from {v.run}")
+            act.triggered.connect(lambda _=False, v=v: self.open_view(v))
+        if views:
+            delete = menu.addMenu("Delete")
+            for v in views:
+                act = delete.addAction(v.name if v.run == run else f"{v.name}  (from {v.run})")
+                act.triggered.connect(lambda _=False, v=v: self._delete_view(v))
+        menu.setToolTipsVisible(True)
+        if self.views.path is None:
+            menu.addSeparator()
+            menu.addAction("(no ttu-tower home: views last only this session)").setEnabled(False)
+
+    def _save_view_dialog(self) -> None:
+        name, ok = QInputDialog.getText(self, "Save this view", "Name:")
+        if not ok or not name.strip():
+            return
+        note, ok = QInputDialog.getText(self, "Save this view", "Note (optional):")
+        try:
+            self.views.add(SavedView(name.strip(), self.run.tag, self.view_state(), note.strip() if ok else ""))
+        except OSError as exc:
+            QMessageBox.warning(self, "ttu-view", f"couldn't save the view: {exc}")
+            return
+        self.statusBar().showMessage(f"saved the view '{name.strip()}'", 6000)
+
+    def _delete_view(self, view: SavedView) -> None:
+        answer = QMessageBox.question(self, "ttu-view", f"Delete the view '{view.name}' (from {view.run})?")
+        if answer == QMessageBox.StandardButton.Yes:
+            self.views.remove(view.id)
 
     def _report_error(self, exc, tb) -> None:
         self.statusBar().showMessage(f"error: {exc}", 15_000)
@@ -594,6 +856,8 @@ class MainWindow(QMainWindow):
             return
         self.datas[i] = data
         self.plots[i].set_data(data, spec)
+        if i in self._pending_legend:
+            view_state.put(self.plots[i].legend, self._pending_legend.pop(i))
         self._load_other(i, spec)
         self._load_overlays(i, spec)
         self._sync_axis_widths()
@@ -717,10 +981,16 @@ class MainWindow(QMainWindow):
         """Whichever right-hand tab is showing (the others catch up when shown)."""
         x_range = None if self.full_period.isChecked() else self.x_range()
         shown = self.right_tabs.currentWidget()
+        if shown is not self.scatter and self.scatter.shows_3d():  # its 3D window follows with the tab hidden
+            self.scatter.set_sources(self.datas, x_range, self.stability)
+        if shown is not self.windrose and self.windrose.shows_3d():
+            self.windrose.set_range(x_range)
         if shown is self.scatter:
             self.scatter.set_sources(self.datas, x_range, self.stability)
         elif shown is self.windrose:
             self.windrose.set_range(x_range)
+        elif shown is self.hodograph:
+            self.hodograph.set_range(x_range, self.stability)
         elif shown is self.qc_summary:
             self.qc_summary.set_range(x_range)
         elif shown is self.profiles:
@@ -730,6 +1000,8 @@ class MainWindow(QMainWindow):
             self.composite.set_range(x_range, self.stability)
         elif shown is self.tau_view:
             self.tau_view.set_range(x_range, self.stability)
+        elif shown is self.scales_view:
+            self.scales_view.set_range(x_range, self.stability)
         elif shown is self.diurnal:
             self.diurnal.set_sources(self.datas, x_range, self.tz_box.currentData() or self.run.timezone)
         elif shown is self.aniso_map:
@@ -745,6 +1017,17 @@ class MainWindow(QMainWindow):
                     dist.set_data(None, [], None)
                 else:
                     dist.set_data(data, plot.visible_members(), x_range, self.stability)
+        if self._summary_retry:
+            self._retry_summary()
+        self.summary_hover.watch(self.right_tabs)  # plots a view made as it redrew
+
+    def _load_scatter_z(self, q, variant, on_done) -> None:
+        """Scatter's z quantity, every member the run has."""
+        run = self.run
+        members = tuple(run.booms) if q.kind == "boom" else q.pairs if q.kind == "pair" else (None,)
+        self.runner.submit(timeline.load, run, self.index, q, variant, members, key="scatter-z",
+                           label=f"loading {q.label}", on_error=self._report_error,
+                           on_done=lambda data: run is self.run and on_done(data))
 
     def _on_scatter_point(self, slot: int, member) -> None:
         data = self.scatter._data(0)
@@ -764,6 +1047,9 @@ class MainWindow(QMainWindow):
         if self.run is not None:
             self.hover.setText(f"{format_slot(slot, self.tz_box.currentData() or self.run.timezone)}"
                                f"  (slot {slot})   {values}")
+
+    def _on_summary_hover(self, text: str) -> None:
+        self.hover.setText(f"{self.right_tabs.tabText(self.right_tabs.currentIndex())}:   {text}")
 
     def _on_point(self, i: int, slot: int, member, filtered: bool = False) -> None:
         q = self.specs[i].quantity
@@ -833,6 +1119,8 @@ class MainWindow(QMainWindow):
         self.profiles.set_selection(self.selection)
         self.composite.set_selection(self.selection)
         self.tau_view.set_selection(self.selection)
+        self.scales_view.set_selection(self.selection)
+        self.hodograph.set_selection(self.selection)
         self.aniso_map.set_selection(self.selection)
         self._show_selection()
 
@@ -892,9 +1180,26 @@ class MainWindow(QMainWindow):
                            on_done=lambda catalog: self._other_catalog_ready(run, catalog),
                            on_error=self._report_error)
 
+    def _derived_changed(self) -> None:
+        """A definition saved or deleted: the panels' quantities again, each panel kept as it was."""
+        if self.catalog is None:
+            return
+        states = [p.state() for p in self.panels]  # before the catalog changes under them
+        notes = derived.add_to(self.catalog, self.derived_store.items)
+        self.derived_panel.set_catalog(self.catalog, notes)
+        if self.other_catalog is not None:
+            derived.add_to(self.other_catalog, self.derived_store.items)
+        for panel, state in zip(self.panels, states):
+            panel.set_catalog(self.catalog, self.run.booms)
+            why = panel.restore(state) if state is not None else None
+            if why:  # its derived quantity was deleted
+                self.statusBar().showMessage(why, 8000)
+        self.scatter.set_catalog(self.catalog)
+
     def _other_catalog_ready(self, run, catalog) -> None:
         if run is not self.other_run:
             return
+        derived.add_to(catalog, self.derived_store.items)
         self.other_catalog = catalog
         for i, spec in enumerate(self.specs):
             if spec.quantity is not None and self.datas[i] is not None:
@@ -1072,9 +1377,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, ev) -> None:
         self.settings.setValue("geometry", self.saveGeometry())
+        self._save_session()
         self._opened(self._opening, True)
         for w in list(self.inspectors):
             w.close()
+        for view in (self.scatter, self.windrose):
+            if view.window3d is not None:
+                view.window3d.close()
         self.runner.wait(5000)
         self.runner.shutdown()
         if self.reprocessor is not None:

@@ -71,8 +71,18 @@ def load(run, index: FragmentIndex, q: Quantity, variant: str, members=None) -> 
     quantity, ignored for a slot quantity. Cached per run.
     """
     members = tuple(members) if members is not None else ()
+    if q.table == "derived":
+        members = members if q.kind != "slot" else (None,)
+        key = (q.key, q.extra, members)  # the definition too: an edited one is computed afresh
+        return run.cache("timeline", 32).get(key, lambda: _load_derived(run, index, q, members))
     key = (q.key, variant, members)
     return run.cache("timeline", 32).get(key, lambda: _load(run, index, q, variant, members))
+
+
+def _load_derived(run, index: FragmentIndex, q: Quantity, members: tuple) -> TimelineData:
+    from ttu_tower.viewer import derived
+    curves = {m: Curve(slots, y) for m, (slots, y) in derived.load(run, index, q, members).items()}
+    return TimelineData(quantity=q, variant="none", curves=curves)
 
 
 def _load(run, index: FragmentIndex, q: Quantity, variant: str, members: tuple) -> TimelineData:

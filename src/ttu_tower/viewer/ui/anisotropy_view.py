@@ -56,6 +56,8 @@ class HexbinItem(pg.GraphicsObject):
 
 
 class AnisotropyMapView(QWidget):
+    STATE_FIELDS = ("boom", "variant", "display", "split", "log_color", "regions")  # saved in a view, restored in this order
+
     def __init__(self, runner, parent=None):
         super().__init__(parent)
         self.runner = runner

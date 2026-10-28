@@ -28,8 +28,9 @@ def factor_text(power: int) -> str:
 
 def _scalable(axis: pg.AxisItem) -> bool:
     """Plain value axes with a label to carry the factor: not times, decades or fixed ticks."""
+    decades = isinstance(axis, Log10Axis) and getattr(axis, "log10", True)  # a SwitchLogAxis may be plain
     return (axis.label.isVisible() and not axis.logMode and axis._tickLevels is None
-            and not isinstance(axis, (pg.DateAxisItem, Log10Axis)))
+            and not isinstance(axis, pg.DateAxisItem) and not decades)
 
 
 def _update(self) -> None:

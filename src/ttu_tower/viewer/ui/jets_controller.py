@@ -17,6 +17,7 @@ from ttu_tower.jets import data
 from ttu_tower.jets.analysis import JetResult, JetSettings, analyse, sweep, sweep_values
 from ttu_tower.jets.edits import EditStore, new_edit
 from ttu_tower.jets.filters import context_needs
+from ttu_tower.viewer import hodograph
 from ttu_tower.viewer.timeaxis import slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.jets_panel import JetsPanel
@@ -92,6 +93,10 @@ class JetsController(QObject):
                                   label="loading wind profiles for the jets",
                                   on_done=lambda p: self._profiles_ready(run, p), on_error=self._failed)
         self._ensure_context(self.panel.settings())
+        self.view.aggregate.set_mesonet(None)
+        self.window.runner.submit(hodograph.mesonet_uv, run, self.window.index, key="jets-mesonet",
+                                  label="loading the mesonet wind", on_error=self._failed,
+                                  on_done=lambda uv: run is self.run and self.view.aggregate.set_mesonet(uv))
 
     def set_timezone(self, tz: str) -> None:
         self.tz = tz

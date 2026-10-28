@@ -13,6 +13,8 @@ from ttu_tower.viewer.ui import style, tables
 
 
 class CompareView(QWidget):
+    STATE_FIELDS = ("source", "member")  # saved in a view, restored in this order
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.datas = [None, None]

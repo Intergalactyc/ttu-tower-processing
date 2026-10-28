@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower.constants import HEIGHTS, SITE_ELEVATION, SITE_LATITUDE
+from ttu_tower.math.stats import EFOLDING_TOTAL_FACTOR
 from ttu_tower.physics import most, turbulence
 from ttu_tower.physics.earth import local_gravity
 from ttu_tower.secondary.detect import SMOOTHING, detect
@@ -129,7 +130,8 @@ def _short_flag(its_values: list[float], tau_s: float, blocks_used: float, min_r
 
 
 def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame, cfg) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Every scalar derived quantity (TI, TKE, u*, L, zeta, ILS, ITS ratios and
+    """Every scalar derived quantity (TI, TKE, u*, L, zeta, theta*, the
+    Businger-Dyer functions, MOST N^2, ILS, corrected ITS/ILS, ITS ratios and
     the anisotropy tensor/class) from `stats` (ladder rows at the selected
     rung, pressure-converted, from `selected_stats`), the selected tau (for
     the ITS ratios) and `slow` (t/rh/p thermodynamics, for the slow-sensor vpt
@@ -174,10 +176,18 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             vpt_slow = vpt_by_group.get((slot, boom), np.nan)
             obukhov_length = most.obukhov_length(ustar, vpt_slow, wvpts_cov, gravity=_GRAVITY[boom])
             zeta = HEIGHTS[boom] / obukhov_length if obukhov_length else np.nan
+            theta_star = most.temperature_scale(ustar, wvpts_cov) if ustar else np.nan
+            phi_m_bd, phi_h_bd = most.businger_dyer_phi_m(zeta), most.businger_dyer_phi_h(zeta)
+            psi_m_bd, psi_h_bd = most.businger_dyer_psi_m(zeta), most.businger_dyer_psi_h(zeta)
+            n2_most = most.most_brunt_vaisala_squared(ustar, HEIGHTS[boom], zeta)
             ils_u = its_u * u_mean
             ils_v = its_v * abs(u_mean)
             ils_w = its_w * abs(u_mean)
             ils_vpts = its_vpts * abs(u_mean)
+            its_corr_u, its_corr_v, its_corr_w, its_corr_vpts = (
+                x * EFOLDING_TOTAL_FACTOR for x in (its_u, its_v, its_w, its_vpts))
+            ils_corr_u, ils_corr_v, ils_corr_w, ils_corr_vpts = (
+                x * EFOLDING_TOTAL_FACTOR for x in (ils_u, ils_v, ils_w, ils_vpts))
             ils_ratio_vu = ils_v / ils_u if ils_u else np.nan
             ils_ratio_wu = ils_w / ils_u if ils_u else np.nan
             its_ratio_u = tau_s / its_u if its_u else np.nan
@@ -195,8 +205,14 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             "ti": ti, "ti_u": ti_u, "ti_v": ti_v, "ti_w": ti_w,
             "ti_ratio_vu": ti_ratio_vu, "ti_ratio_wu": ti_ratio_wu,
             "tke": tke, "ctke": ctke, "ustar": ustar,
-            "obukhov_length": obukhov_length, "zeta": zeta,
+            "obukhov_length": obukhov_length, "zeta": zeta, "theta_star": theta_star,
+            "phi_m_bd": phi_m_bd, "phi_h_bd": phi_h_bd, "psi_m_bd": psi_m_bd, "psi_h_bd": psi_h_bd,
+            "n2_most": n2_most,
             "ils_u": ils_u, "ils_v": ils_v, "ils_w": ils_w, "ils_vpts": ils_vpts,
+            "its_corr_u": its_corr_u, "its_corr_v": its_corr_v, "its_corr_w": its_corr_w,
+            "its_corr_vpts": its_corr_vpts,
+            "ils_corr_u": ils_corr_u, "ils_corr_v": ils_corr_v, "ils_corr_w": ils_corr_w,
+            "ils_corr_vpts": ils_corr_vpts,
             "ils_ratio_vu": ils_ratio_vu, "ils_ratio_wu": ils_ratio_wu,
             "its_ratio_u": its_ratio_u, "its_ratio_v": its_ratio_v,
             "its_ratio_w": its_ratio_w, "its_ratio_vpts": its_ratio_vpts,

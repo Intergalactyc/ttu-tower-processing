@@ -1,16 +1,21 @@
 """The stability classification the viewer uses: five classes split by four
 boundaries of one variable - Ri_b between two booms, or ζ = z/L at one boom.
 It starts as the run's own (`post.stability`) and can be changed in the viewer;
-the run's outputs are never changed.
+the run's outputs are never changed. Named schemes are kept in the ttu-tower
+home, for every run.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import json
+import os
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as pa_dataset
 
+from ttu_tower.io.runs import locate_home
 from ttu_tower.post.classify import IntervalClassifier, _parse_interval
 
 NAMES = ("strongly unstable", "unstable", "neutral", "stable", "strongly stable")
@@ -104,3 +109,46 @@ def classify(series: pd.Series, classes) -> pd.Series:
     """slot -> class name (None for NaN or no class)."""
     names = IntervalClassifier(list(classes)).classify(series.to_numpy())
     return pd.Series(names, index=series.index, name="stability_class")
+
+
+# --- named schemes, kept in the ttu-tower home --------------------------------------------------
+
+def schemes_path() -> Path | None:
+    home = locate_home()
+    return home / "viewer" / "stability_schemes.json" if home is not None else None
+
+
+@dataclass
+class SchemeStore:
+    """name -> StabilitySpec. Every change is written through; `path` None keeps them in memory only."""
+    path: Path | None = None
+    items: dict[str, StabilitySpec] = field(default_factory=dict)
+
+    @classmethod
+    def open(cls, path: Path | None = None, load: bool = True) -> SchemeStore:
+        store = cls(Path(path) if path is not None else (schemes_path() if load else None))
+        if store.path is not None and store.path.exists():
+            raw = json.loads(store.path.read_text(encoding="utf-8"))
+            store.items = {name: StabilitySpec.from_dict(spec) for name, spec in raw.get("schemes", {}).items()}
+        return store
+
+    def save(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"version": 1, "schemes": {n: s.to_dict() for n, s in self.items.items()}},
+                                  indent=1, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    def put(self, name: str, spec: StabilitySpec) -> None:
+        self.items[name] = spec
+        self.save()
+
+    def remove(self, name: str) -> None:
+        self.items.pop(name, None)
+        self.save()
+
+    def name_of(self, spec: StabilitySpec) -> str | None:
+        """The scheme that is exactly this spec, if any."""
+        return next((n for n, s in sorted(self.items.items()) if s == spec), None)

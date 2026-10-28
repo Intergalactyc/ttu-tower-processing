@@ -145,6 +145,8 @@ class ProfilePlot(QWidget):
 
 
 class ProfilesView(QWidget):
+    STATE_FIELDS = ("method", "error_bars", "lines", "log_z", "grouping")  # saved in a view, restored in this order
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.method = QComboBox()

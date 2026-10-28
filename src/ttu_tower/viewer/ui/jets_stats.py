@@ -1,5 +1,5 @@
 """The jets in aggregate (what the events look like, when they happen, their
-composite profile and direction) and the diagnostics for tuning the detection
+composite profile, direction and hodograph) and the diagnostics for tuning the detection
 (the status of every slot, and how the counts move as one setting sweeps its
 range).
 """
@@ -15,10 +15,11 @@ from ttu_tower.constants import HEIGHTS
 from ttu_tower.jets.analysis import JetResult
 from ttu_tower.jets.events import EventParams
 from ttu_tower.jets.identify import ALGORITHMS, Profiles, describe
-from ttu_tower.viewer import diurnal, windrose
+from ttu_tower.viewer import diurnal, hodograph, windrose
 from ttu_tower.timegrid import slot_to_time
 from ttu_tower.viewer.timeline import Curve
 from ttu_tower.viewer.ui import tables
+from ttu_tower.viewer.ui.hodograph_view import draw_hodograph, draw_origin, prepare_plot
 from ttu_tower.viewer.ui.jets_event import duration_text
 from ttu_tower.viewer.ui.windrose_view import RosePlot
 
@@ -169,13 +170,21 @@ class AggregateView(QWidget):
         self.composite_plot.getPlotItem().export_layout = "per curve"
         self.rose_plot = RosePlot()
         self.rose_plot.setMinimumHeight(_PLOT_HEIGHT)
+        self.hodo_plot = pg.PlotWidget()
+        self.hodo_plot.setMinimumHeight(_PLOT_HEIGHT)
+        prepare_plot(self.hodo_plot)
+        self.hodo_plot.setToolTip("each boom's mean wind vector over the jet slots (slots with wind at every boom), "
+                                  "joined bottom to top; ★ the mesonet's 10 m wind over the same slots; faint: each "
+                                  "event's (all events) or each slot's (one event)")
+        self.mesonet = None  # the mesonet's UV over the whole period, once loaded
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addLayout(head)
         layout.addLayout(head2)
         layout.addWidget(self.summary)
         layout.addWidget(_grid([self.height_plot, self.speed_plot, self.falloff_plot, self.duration_plot,
-                                self.hour_plot, self.share_plot, self.composite_plot, self.rose_plot]), stretch=1)
+                                self.hour_plot, self.share_plot, self.composite_plot, self.rose_plot,
+                                self.hodo_plot]), stretch=1)
         self.result: JetResult | None = None
         self.profiles: Profiles | None = None
         self.slot_range = None
@@ -190,6 +199,11 @@ class AggregateView(QWidget):
         self.result, self.profiles, self.slot_range, self.tz = result, profiles, slot_range, tz
         self.nose_from, self.event_id = nose_from, event_id
         self.redraw()
+
+    def set_mesonet(self, uv) -> None:
+        self.mesonet = uv
+        if self.result is not None:
+            self.redraw()
 
     def _on_scope(self) -> None:
         self.which.setEnabled(self.scope.currentData() == "events")
@@ -212,6 +226,7 @@ class AggregateView(QWidget):
                  self.composite_plot)
         for plot in plots:
             plot.clear()
+        self.hodo_plot.clear()
         self.share_image.clear()
         r, p = self.result, self.profiles
         if r is None or p is None:
@@ -246,6 +261,7 @@ class AggregateView(QWidget):
         self._share(r, detected if self.nose_from == "jets" else members.to_frame())
         self._composite(p, members, detected)
         self._rose(p, detected)
+        self._hodograph(p, detected, by_event=True)
         for plot in plots:
             _fit(plot)
 
@@ -275,6 +291,7 @@ class AggregateView(QWidget):
         self.share_plot.setTitle("share by hour and month: all events only", size="9pt")
         self._composite(p, members, detected)
         self._rose(p, detected)
+        self._hodograph(p, detected, by_event=False)
         for plot in plots:
             _fit(plot)
 
@@ -346,6 +363,39 @@ class AggregateView(QWidget):
         ok = np.isfinite(direction) & np.isfinite(speed)
         table = windrose.rose(speed[ok], direction[ok], sectors=16) if ok.any() else None
         self.rose_plot.draw(table, f"direction and speed at the peak, {int(ok.sum())} slots")
+
+
+    def _hodograph(self, p: Profiles, detected: pd.DataFrame, by_event: bool) -> None:
+        """The mean wind vector at each boom over the jet slots; faintly, each event's (or each slot's)."""
+        wd = p.extra.get("wd")
+        if detected.empty or wd is None:
+            self.hodo_plot.setTitle("hodograph: no jet slots" if detected.empty else "hodograph: no wind directions",
+                                    size="9pt")
+            return
+        slots = detected.index.to_numpy()
+        rows = np.searchsorted(p.slots, slots)
+        uvs = hodograph.from_profiles(slots, p.booms, p.ws[rows], wd[rows])
+        kept = next(iter(uvs.values())).slots if uvs else np.empty(0, dtype=np.int64)
+        if kept.size == 0:
+            self.hodo_plot.setTitle("hodograph: no jet slot has wind at every boom used", size="9pt")
+            return
+        booms = list(uvs)
+        if self.mesonet is not None:
+            uvs[hodograph.MESONET] = self.mesonet.only(np.isin(self.mesonet.slots, kept))
+        draw_origin(self.hodo_plot)
+        faint = pg.mkColor("#333333")
+        faint.setAlpha(45)
+        if by_event:
+            event_of = detected["event_id"].reindex(kept).to_numpy() if "event_id" in detected else None
+            groups = [kept[event_of == e] for e in pd.unique(event_of)] if event_of is not None else []
+        else:
+            groups = [kept[i:i + 1] for i in range(kept.size)]
+        for part in groups[:300]:
+            rows_ = hodograph.summary({b: uvs[b].only(np.isin(uvs[b].slots, part)) for b in booms})
+            self.hodo_plot.plot(rows_["u"].to_numpy(float), rows_["v"].to_numpy(float), pen=pg.mkPen(faint, width=1))
+        draw_hodograph(self.hodo_plot, hodograph.summary(uvs), labels="all")
+        what = "each event's mean faintly" if by_event else "each slot faintly"
+        self.hodo_plot.setTitle(f"hodograph: mean of {kept.size} jet slots ({what})", size="9pt")
 
 
 # --- diagnostics -------------------------------------------------------------------------------

@@ -1351,6 +1351,197 @@ viewed interval or the whole period like the others.
   - The priority boxes, here and in the inspector what-if, keep their choice as a string
     ("heat,momentum"): Qt turns tuple item data into lists, so `findData` with a tuple found
     nothing.
+- **Summary Scales tab, 2026-10-16** (`ui/scales_view.py`, `composite.scales_matrices`): the integral
+  scales at every ladder rung, composited over slots like the Spectra tab.
+  - **Quantities:** ITS of u, v, w or θv, from primary's `ladder` table; ILS = ITS × |u mean at that
+    rung|, as secondary and the inspector's Scales tab define it.
+  - **Plot:** a line per boom against rung, as the median with interquartile bars or the mean with
+    ± SD bars, log y by default. On ITS, a dashed guide ITS = rung / min_tau_its_ratio.
+  - **Table:** the plotted value per boom and rung, with N.
+  - **Shared controls:** the variant, which slots (all, a stability class, selection, rest), the
+    visible range or the whole period, and the boom bar.
+  - **Loading:** one read per boom covers all eight quantities (about 15 s for oneyear's 10 booms,
+    then cached).
+  - **Export:** the figure uses the composite layout, which now takes an optional `xlabel`.
+- **Log axes show values, 2026-10-26:** Scatter's log x/y and Distributions' log bins plotted log10
+  values on a plain axis, labelled "log10 …". Both now use `axes.SwitchLogAxis`: decade ticks
+  labelled with the values themselves, and "(log scale)" added to the axis label.
+- **Scatter log bins, 2026-10-26:** a "log bins" box on the fit's binning
+  (`curvefits.bin_average(log=True)`): bins equal in log x with geometric centres, positive x only.
+  The "binned" central line uses log bins whenever the x axis is log.
+- **Either side of zero, 2026-10-26:**
+  - **Scatter:** each log axis has a side box: > 0, or < 0 shown as −x (the magnitudes). The
+    points, lines, statistics and fits all use those values, and the axis label gains a "−".
+  - **Distributions:** a values box: all values, x > 0 only, x < 0 only as −x, or |x|. A side or
+    |x| allows log bins and positive-only fits, and the title and axis label say which values.
+    It is off for directions and categories.
+  - **Log-bin auto range:** it now spans the 0.1st-99.9th percentiles, as linear bins do. It used
+    to run from the minimum, and a side of zero always has tiny magnitudes to stretch it.
+  - **HTML labels:** labels and titles are HTML, so "<" is escaped there.
+- **Power-law weighting (open, 2026-10-26):** the Scatter power-law fit uses `math.fits.power_fit`
+  (log space, weighted by y²), so the largest y values steer it.
+  - On oneyear b5, σw against ws: b = 0.52, with the curve about 2× above the binned medians at
+    low and mid wind. Unweighted log: b = 1.12. Least squares in y: b = 1.00. 20 log bins, then
+    unweighted: b = 0.83.
+  - Options were set out for Elliott; on hold at his request. Don't change `power_fit` itself:
+    the pipeline's α uses it.
+- **Saved views, 2026-10-26** (`viewer/views.py`, `ui/view_state.py`).
+  - **Contents:** a view holds both panels' choices (quantity, variant, booms or pairs, log y,
+    style, the filtered/τ toggles, the legend entries shown), the time window and time zone, the
+    overlay toggles, "whole period", the open Controls and Summary tabs, the dock layout, the
+    stability criterion, the brushed selection (as slot runs), and every Summary tab's settings.
+  - **Summary tab settings:** each tab lists its controls in `STATE_FIELDS`, and `view_state`
+    reads and sets them by widget type. `state_skip()` leaves out values that are only derived,
+    e.g. Distributions' from/to boxes while auto range is on.
+  - **Named views:** "Views" in the toolbar can save this view (name and optional note), open
+    any saved view, or delete one. They are kept in `<home>/viewer/views.json` with the run they
+    came from, and open on any run.
+  - **On another run:** what the run lacks (a quantity, its booms, a tab, a time zone, a stability
+    pair) is skipped and listed in the status bar.
+  - **Restore timing:**
+    - Panels wait for the run's quantity catalogue: a view opened at start-up is applied
+      instead of the default panels.
+    - Legend entries wait for each panel's data.
+    - Summary settings wait for the stability classes to be settled.
+    - A tab whose lists fill only once it's shown (Diurnal, Compare) gets the rest of its
+      settings when it's next shown.
+  - **Where you left off:** `MainWindow(resume="ask")`, which is how `ttu-view` starts, keeps
+    each run's state in the viewer settings (`session/<tag>`). It saves on closing or switching
+    run, and on opening a run asks whether to resume; "No" opens the default panels. Windows
+    made with the default `resume="never"` (the tests) neither ask nor save.
+    - Fixed 2026-10-26: the question is asked before the run's quantities start loading. It was
+      asked after, so the dialog's event loop delivered them while it waited: the default panels
+      went in, and "Yes" left a view no one applied. A "Yes" after they've come applies at once.
+    - Also 2026-10-26: at start-up the main window isn't shown yet, so the question
+      (`_ask_resume`) is a window of its own, titled with the run, kept on top and given the focus,
+      "Yes" the default. Once the viewer is showing (switching runs) it sits on the main window.
+- **Scatter: power law with a fixed exponent, 2026-10-26.** A "power law, fixed exponent" fit
+  (`curvefits._power_fixed`) takes its exponent b in the fit's settings row (default 0.5).
+  - It fits only a, by least squares in y: a = Σ y·x^b / Σ x^2b, over the positive x. With b = 1 it
+    is the fit through the origin.
+  - On oneyear b5, σw against ws: b = 0.5 gives a = 0.184 (RMSE 0.183); b = 1 gives a = 0.069
+    (RMSE 0.159). The free power law, y²-weighted in log space, has RMSE 0.205 (see the open
+    weighting question).
+- **Scatter: a third quantity z, and a 3D view, 2026-10-26.**
+  - **z's source:** panel A, panel B, any of the run's quantities (`set_catalog`, loaded through
+    `z_loader` with every member, a searchable list), or the boom height. By height, every boom
+    both panels have is stacked, one point per slot and boom; a slot quantity's value sits at every
+    boom, a pair quantity can't. The member pickers are then off, and a clicked point opens its
+    own boom.
+  - **Coloring by z:** "z" in the color choice colors the points over z's 2nd-98th percentiles, or
+    symmetrically about 0 ("diverging about 0", linear z only). Points without z are grey. A color
+    bar beside the plot uses the same axis as x and y (log decades, ×10ⁿ factor). Figure export
+    draws it with matplotlib's colorbar.
+  - **3D view** (`ui/scatter3d.py`, pyqtgraph's OpenGL items; PyOpenGL is now in the viewer
+    extras): a window of its own that follows Scatter (points shown, log axes and sides,
+    selection), even with the tab hidden.
+    - Each axis spans its 1st-99th percentiles, scaled to a unit cube. Ticks, titles and grids on
+      the three back walls of the starting view.
+    - Colors by z, stability class or one color; point size; face-on views of each plane.
+    - Text drawn on the GL widget is missed by `QWidget.grab()`; screenshots use
+      `grabFramebuffer()`.
+  - **Saved views:** z's source, quantity, variant and member are kept. z's member combo is a
+    `view_state.LateCombo`, which holds a choice until the loaded quantity's members arrive.
+- **Scatter: x percentile lines, 2026-10-26.** "show" beside the fit's x percentiles marks them with
+  dashed vertical lines (percentiles of the x shown, as the fit uses).
+- **Scatter: one side of 0 on any axis, 2026-10-26.** Each of x, y and z has "all", "> 0" or "< 0".
+  - On a linear axis the chosen side keeps its values as they are, and the axis label says so.
+  - A log axis shows one side, the negative one as −x. Turning log on with "all" chosen picks the
+    positive side, or the negative one where there are no positive values.
+  - The statistics, lines and fits use the same points; for z, the other side is "no z".
+- **Scatter: double power law fit, 2026-10-26.** A smoothly broken power law,
+  a·(x/x_b)^b1·(1 + (x/x_b)^(1/Δ))^((b2−b1)·Δ), fitted in log space (positive x and y only, each
+  decade alike): slopes b1 → b2 about the break x_b, over a width Δ in ln x, all four fitted
+  (Δ bounded to 1/200 to 1 of the ln x range).
+  - On oneyear b5, σw against ws: raw points give 0.36 → 1.46 about 3.6 m/s; 30 log-binned
+    medians give 0.69 → 1.07 about 3.9 m/s. Both choose a sharp break (Δ near its lower bound).
+- **3D wind rose, 2026-10-26** (`ui/windrose3d.py`): "3D view (every height)…" on the Wind rose tab
+  stacks every boom's rose (and the mesonet's at 10 m) in a GL window, one radial scale for all.
+  - It follows the tab's filtering, sectors, interval and lines of constant bearing. Its own
+    choices: layers spaced evenly, by height or by log height; only the slots every layer has;
+    the mesonet layer; views turned, from above, from the south.
+  - Every boom's wind is read once per filtering (`load_all`), about 16 s cold on oneyear.
+- **Hodograph, 2026-10-26** (`viewer/hodograph.py`, `ui/hodograph_view.py`,
+  `ui/inspector/hodograph_tab.py`).
+  - **The vectors:** (u, v) = (east, north) "blows-toward" components of each slot's vector-mean
+    wind (boom_final ws vector_mean, wd mean); the mesonet's from its slot means.
+  - **Summary → Hodograph:** each boom's mean of the slots' vectors, joined bottom to top, the
+    mesonet's 10 m wind a star apart. Slots: all, a stability class, each class overlaid, or the
+    selection (or the rest). "only slots every boom has" (on by default) averages every height and
+    the mesonet over the same slots. A group of up to 500 slots can show each slot's hodograph
+    faintly. The table: N, ū, v̄, |mean|, from-bearing, mean speed, and steadiness
+    (|mean vector| / mean speed). Figure export: the "hodograph" kind.
+  - On oneyear the whole year's steadiness is about 0.2 at every height (the wind turns all the
+    way round); one stable night's is 0.8-0.96 with height.
+  - **Inspector → Hodograph:** the slot's hodograph and the mesonet's point, with the 3 slots
+    either side faintly (before blue, after red). It reads boom_final and slot_final for those
+    slots only (`slot_window`).
+- **Derived quantities, 2026-10-26** (`viewer/derived.py`, `ui/derived_panel.py`, Controls → Derived).
+  - **A definition:** a name, a unit, variables and a formula. Each variable is one of the catalog's
+    quantities (not categorical, not another derived one) with its own variant, at "each boom" (the
+    derived quantity's own member) or one fixed boom (pair). Formulas use the variables' names and,
+    for a per-boom quantity, z (the boom's height, m); the same safe parser as the Scatter overlay
+    (`compile_expression(..., x=False)`).
+  - **Its kind:** per boom if an "each boom" variable is per boom (a slot quantity's value holds at
+    every boom), per pair if one is per pair (the pairs every such variable has), else per slot;
+    "each" variables can't mix booms and pairs.
+  - **In the viewer:** the "Derived" group of every run whose catalog has the variables (others are
+    greyed in the list, with the reason). `timeline.load` computes it over the slots every variable
+    has; the cache key holds the definition, so an edit is computed afresh. Saving or deleting keeps
+    each panel's choice (a deleted one's panel says so). Inspector clicks open no drill target.
+  - **Kept** in `<home>/viewer/derived.json`, for every run.
+- **Summary: the cursor in the bottom bar, 2026-10-28** (`ui/hover_readout.py`). Over any Summary
+  plot the bottom bar reads "<tab>: <axis title> = <value> · …" for each axis shown: real values on
+  log axes (not their logs), a tick's label where the axis is labelled (months, booms; within half a
+  unit or half the spacing, else the number), a color bar's value. Every pyqtgraph view in the dock
+  is watched (again on tab changes and refreshes, for plots made later); the cursor's plot is found
+  from the scene items under it.
+- **Stability schemes, 2026-10-28.** Controls → Stability saves what's set as a named scheme and
+  loads one again (every view reclassifies), on any run. The list shows the scheme that is exactly
+  what's set, or "(unsaved changes)" after an edit; Save offers that name and asks before replacing a
+  different scheme of the same name; Delete removes the one shown. Kept as `SchemeStore` in
+  `<home>/viewer/stability_schemes.json`.
+- **Scatter: several fits, and fitting with or without the selection, 2026-10-26.**
+  - **Fit to:** every point shown, only the selected (brushed) points, or all but them. The
+    selection is part of such a fit's inputs, so a new lasso marks it earlier (or refits it with
+    "auto"); with nothing selected it says so.
+  - **Several fits:** a list above the form (`FitSpec` options + `FitEntry` result each), each in
+    its own color with a box to show it and its RMSE. "+ fit" adds a copy of the fit being edited;
+    picking one loads it into the form; "remove" drops it. Fit fits the edited one and every other
+    whose inputs changed; "auto" keeps them all current. The legend names each fit's options; the
+    one being edited is drawn thicker. `fit_result`/`fit_inputs` are the edited one's (the overlay's
+    "from fit" uses it). Saved views keep every fit's options (`fits_state`).
+- **Scatter: automatic fit, 2026-10-26.** "auto" beside Fit refits (300 ms after the last change)
+  whenever the fit's inputs change: the quantities or booms, the interval, axes, sides, class,
+  selection, or the fit's settings. A failed automatic fit isn't retried until the inputs change;
+  the status says so. The inputs now include the axes' quantities (key, variant, definition): the
+  same slots can hold another quantity, which used to leave the old fit unmarked as earlier.
+- **Scatter: one stability class, 2026-10-26.** "all classes" or one class of the stability
+  criterion, beside "show": it filters the slots as the selection does, so the statistics, lines,
+  fits, z colors and the 3D view use only that class; a fit made before is marked earlier. Kept in
+  saved views (a `LateCombo`, as the classes come with the criterion).
+- **Jets → Aggregate: a hodograph, 2026-10-26.** Each boom's mean wind vector over the jet slots,
+  from the jet profiles (each slot's ws mean and wd mean; `hodograph.from_profiles`), with the
+  mesonet's 10 m wind over the same slots as a star (the controller loads it once per run).
+  - Booms with wind in fewer than half the jet slots are left out; the rest are averaged over the
+    slots they all have.
+  - Faintly: each event's mean hodograph (all events), or each slot's (one event, slot by slot).
+- **Scatter: a function overlay, 2026-10-26** (`viewer/expression.py`, `ui/function_overlay.py`).
+  The "overlay" tab under the plot (beside "curve fit") draws y(x) typed by hand, not fitted.
+  - **Formulas:** numbers, x, + - * / ^ (or **), brackets, pi, e and exp, ln/log, log10, sqrt,
+    abs, tanh, sin, cos, tan, arctan, sinh, cosh. The text is parsed to a syntax tree and checked
+    node by node, so only arithmetic runs; what can't be read is marked, with the reason.
+  - **Pieces:** each over from ≤ x < to (blank: unbounded); where pieces overlap the first one
+    listed wins; the line breaks between pieces.
+  - **"from fit"** replaces the pieces with the current fit's formulas (`curvefits.fit_formula`):
+    ζ(Ri) gives two pieces, α-Ri three. Every fit's formulas redraw its own curve (tested).
+  - The overlay is in the values plotted (as the fits are), shows its RMSE over the points where
+    it's defined, and is kept in saved views (`get_state`/`put_state` hooks in `view_state`).
+  - **Boom heights, 2026-10-26:** formulas may use zA and zB, the heights (m) of the booms Scatter
+    shows from panel A and panel B (x's boom where both axes use one panel). By boom height (z), each
+    point uses its own boom's height: one curve per boom in its color, the RMSE against each point's
+    own. A formula using one that isn't a single boom (a pair or slot quantity, or no axis from that
+    panel) says so instead of drawing. `compile_expression(text, variables)` takes the names.
 - **Numbers tab, all tables, 2026-10-15:** the table list starts with "all tables", so one
   filter searches every stored table of the slot.
   - It lists one value per line: `table`, `key` (the columns that pick the row, e.g.

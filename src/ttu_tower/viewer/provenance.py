@@ -25,6 +25,8 @@ _SCALES = {"u": _WIND, "v": _WIND, "w": ("w",), "vpts": ("vpts",)}
 
 def drill_target(q: Quantity) -> DrillTarget:
     v, stat = q.variable, q.stat
+    if q.table == "derived":
+        return DrillTarget("none", ())
     if q.kind != "boom" or q.table in ("slot_final",):
         return DrillTarget("profile" if q.table in ("pairs", "profile") else "none", ())
     if q.table in ("tau_final", "tau"):
@@ -71,7 +73,7 @@ def scale_variables(q: Quantity) -> tuple[str, ...]:
     v = q.variable
     if q.stat == "its" and v in ("u", "v", "w", "vpts"):
         return (v,)
-    if v.startswith(("ils_", "its_ratio_")):
+    if v.startswith(("ils_", "its_ratio_", "its_corr_")):
         suffix = v.split("_")[-1]
         if suffix in ("u", "v", "w", "vpts"):
             return (suffix,)

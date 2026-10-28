@@ -228,3 +228,28 @@ def test_alpha_ri_fit_recovers_its_branches_and_honours_its_settings():
     assert shifted.func(np.array([0.22]))[0] == pytest.approx(shifted.params["alpha_critical"])  # held above Ri_c
     with pytest.raises(ValueError, match="stable"):
         curvefits.fit(curvefits.ALPHA_RI, x[x <= 0], y[x <= 0])
+
+
+def test_a_power_law_of_fixed_exponent_fits_only_its_constant():
+    rng = np.random.default_rng(1)
+    x = np.r_[rng.uniform(0.5, 20.0, 400), -1.0, 0.0]  # x <= 0 is left out
+    y = np.r_[3.0 * np.sqrt(x[:400]) + rng.normal(0.0, 0.05, 400), 99.0, 99.0]
+    res = curvefits.fit("power law, fixed exponent", x, y, b=0.5)
+    assert res.params["b"] == 0.5 and res.params["a"] == pytest.approx(3.0, rel=1e-2)
+    assert res.func(np.array([4.0]))[0] == pytest.approx(2 * res.params["a"])
+    line = curvefits.fit("power law, fixed exponent", x[:400], y[:400], b=1.0)
+    origin = curvefits.fit("linear through origin", x[:400], y[:400])
+    assert line.params["a"] == pytest.approx(origin.params["b"])  # exponent 1: the fit through the origin
+
+
+def test_a_double_power_law_finds_both_exponents_and_the_break():
+    rng = np.random.default_rng(2)
+    x = np.geomspace(0.05, 200.0, 600)
+    y = 2.0 * x ** 0.5 * (1 + (x / 4.0) ** (1 / 0.2)) ** ((1.5 - 0.5) * 0.2) * np.exp(rng.normal(0.0, 0.05, x.size))
+    x, y = np.r_[x, -1.0, 2.0], np.r_[y, 5.0, -3.0]  # non-positive x or y is left out
+    res = curvefits.fit("double power law", x, y)
+    assert res.params["b1"] == pytest.approx(0.5, abs=0.05) and res.params["b2"] == pytest.approx(1.5, abs=0.05)
+    assert res.params["x_b"] == pytest.approx(4.0, rel=0.25) and res.n == 602
+    assert np.isnan(res.func(np.array([-1.0]))[0])
+    far = np.array([0.1, 100.0])  # the asymptotes' slopes
+    assert np.log(res.func(far * 2) / res.func(far)) / np.log(2) == pytest.approx([0.5, 1.5], abs=0.08)

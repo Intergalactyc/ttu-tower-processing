@@ -6,9 +6,13 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
+import pyqtgraph as pg  # noqa: E402
 
+from ttu_tower.constants import HEIGHTS  # noqa: E402
+from ttu_tower.viewer import figures  # noqa: E402
 from ttu_tower.viewer.run import RunHandle  # noqa: E402
 from ttu_tower.viewer.timeaxis import slot_to_unix  # noqa: E402
+from ttu_tower.viewer.ui import view_state  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
 from ttu_tower.viewer.ui.main_window import MainWindow  # noqa: E402
 
@@ -58,7 +62,7 @@ def test_profile_tab_ghosts_the_filtered_boom_and_switches_boom_on_click(window,
     inspector = _inspect(window, qtbot, "profile")
     profile = inspector.profile
     qtbot.waitUntil(lambda: bool(profile.plots), timeout=60_000)
-    assert len(profile.plots) == 14 and {"tke", "zeta", "uw", "ils_u"} <= set(profile.plots)
+    assert len(profile.plots) == 16 and {"tke", "zeta", "uw", "ils_u", "theta_star", "n2_most"} <= set(profile.plots)
     assert all(profile.points[k]["value"].notna().any() for k in ("uw", "ils_u"))
     points = profile.points["sigma_w"].set_index("boom")
     assert points.loc[SPIKY_BOOM, "filtered"]
@@ -409,6 +413,19 @@ def test_scatter_alpha_ri_fit_takes_its_own_settings(window, qtbot):
     assert scatter.fit_settings == {}
 
 
+def test_scatter_fixes_a_power_laws_exponent(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("power law, fixed exponent"))
+    assert set(scatter.fit_settings) == {"b"} and scatter.fit_settings["b"].text() == "0.5"
+    scatter.fit_settings["b"].setText("0.33")
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.params["b"] == 0.33 and "x^0.33" in scatter.fit_result.label
+
+
 class _Click:
     def __init__(self, scene_pos):
         self._pos = scene_pos
@@ -599,6 +616,7 @@ def test_a_lasso_on_the_scatter_selects_the_points_inside(window, qtbot):
     window.right_tabs.setCurrentWidget(window.scatter)
     scatter = window.scatter
     qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    qtbot.wait(300)  # the plot laid out at its size, as it is under a real drag
     slots, x, y = scatter._shown()
     vx, vy = scatter._to_view(x, y)
     lo_x, hi_x = np.percentile(vx, [20, 80])
@@ -787,3 +805,571 @@ def test_a_selection_gets_its_own_statistics_table(window, qtbot):
     assert "μ" in [dist.sel_table.horizontalHeaderItem(c).text() for c in range(dist.sel_table.columnCount())]
     window.set_selection(np.empty(0, dtype=np.int64), "replace")
     assert dist.sel_table.isHidden() and not dist.captions[0].isVisible()
+
+
+def test_scatter_log_axes_show_the_values_themselves(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    axis = scatter.axes["bottom"]
+    assert not axis.log10
+    scatter.log_x.setChecked(True)
+    assert axis.log10 and "(log scale)" in scatter.plot.getPlotItem().getAxis("bottom").labelText
+    assert axis.tickStrings([0.0, 1.0, 2.0], 1.0, 1.0) == ["1", "10", "100"]  # data is log10(x); ticks read x
+    scatter.log_x.setChecked(False)
+    assert not axis.log10 and "(log scale)" not in scatter.plot.getPlotItem().getAxis("bottom").labelText
+    scatter.fit_bins.setValue(10)
+    scatter.fit_bin_log.setChecked(True)
+    assert scatter._options().bin_log == scatter.fit_bin_log.isEnabled()
+
+
+def test_distributions_show_one_side_of_zero_or_absolute_values(window, qtbot):
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    for key, variant in (("boom_final|wvpts|cov", "mrd"), ("boom_final|vw|cov", "mrd"), ("boom_final|w|mean", "none"),
+                         ("boom_final|uv|cov", "mrd")):  # one whose values cross 0
+        if key not in {q.key for q in window.catalog}:
+            continue
+        window.panels[0].select(key, variant, tuple(FULL_BOOMS))
+        qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == key, timeout=60_000)
+        raw = np.concatenate(list(dist.values_by_member().values()))
+        raw = raw[np.isfinite(raw)]
+        if (raw < 0).any() and (raw > 0).any():
+            break
+    assert (raw < 0).any() and (raw > 0).any() and not dist.log_bins.isEnabled()  # both signs: no log bins
+    dist.side.setCurrentIndex(dist.side.findData("negative"))
+    neg = np.concatenate(list(dist.values_by_member().values()))
+    assert neg.size == (raw < 0).sum() and (neg > 0).all()  # the negative side, as −x
+    assert dist.log_bins.isEnabled() and "values &lt; 0 only" in dist.title.text()  # escaped: the title is HTML
+    dist.log_bins.setChecked(True)
+    axis = dist.plot.getPlotItem().getAxis("bottom")
+    assert axis.log10 and "−x" in axis.labelText and "(log scale)" in axis.labelText
+    dist.side.setCurrentIndex(dist.side.findData("abs"))
+    absolute = np.concatenate(list(dist.values_by_member().values()))
+    assert np.isfinite(absolute).sum() == raw.size and (absolute[np.isfinite(absolute)] >= 0).all()
+    dist.side.setCurrentIndex(dist.side.findData("all"))
+    assert not dist.log_bins.isEnabled() and not axis.log10
+
+
+def test_scatter_log_axes_show_either_side_of_zero(window, qtbot):
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    scatter.slots = np.arange(5)
+    scatter.x = np.array([-2.0, -1.0, 0.0, 1.0, 3.0])
+    scatter.y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    scatter.z = np.full(5, np.nan)
+    assert scatter.side("x") == 0 and scatter._shown()[0].size == 5  # every value by default
+    scatter.log_x.setChecked(True)
+    assert scatter.sides["x"].currentData() == 1  # a log axis shows one side
+    slots, x, _ = scatter._shown()
+    assert list(slots) == [3, 4] and list(x) == [1.0, 3.0]
+    scatter.sides["x"].setCurrentIndex(scatter.sides["x"].findData(-1))
+    slots, x, _ = scatter._shown()
+    assert list(slots) == [0, 1] and list(x) == [2.0, 1.0]  # the negative side, as −x
+    assert scatter.sign("x") == -1 and scatter.sign("y") == 1
+
+
+def test_scatter_shows_one_side_of_zero_on_linear_axes_too(window, qtbot):
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    scatter.slots = np.arange(5)
+    scatter.x = np.array([-2.0, -1.0, 0.0, 1.0, 3.0])
+    scatter.y = np.array([-1.0, 2.0, 3.0, 4.0, -5.0])
+    scatter.z = np.full(5, np.nan)
+    scatter.sides["x"].setCurrentIndex(scatter.sides["x"].findData(-1))
+    slots, x, _ = scatter._shown()
+    assert list(slots) == [0, 1] and list(x) == [-2.0, -1.0] and scatter.sign("x") == 1  # as they are
+    assert "(< 0 only)" in scatter.axis_title(0)
+    assert "&lt; 0 only" in scatter.plot.getPlotItem().getAxis("bottom").labelText  # escaped: labels are HTML
+    scatter.sides["x"].setCurrentIndex(scatter.sides["x"].findData(1))
+    scatter.sides["y"].setCurrentIndex(scatter.sides["y"].findData(1))
+    assert list(scatter._shown()[0]) == [3]  # x > 0 and y > 0
+    assert scatter._inputs()[-4:-2] == (1, 1)  # a fit made before is stale once a side changes
+    scatter.sides["y"].setCurrentIndex(scatter.sides["y"].findData(0))
+    assert list(scatter._shown()[0]) == [3, 4]
+    assert not scatter.log_x.isChecked() and scatter.sides["x"].model().item(0).isEnabled()
+
+
+def _wind_and_ustar(window, qtbot):
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    window.panels[1].select("boom_final|ustar|", "mrd", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[1] is not None
+                    and window.datas[1].quantity.key == "boom_final|ustar|", timeout=60_000)
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    return window.scatter
+
+
+def _choose_z(window, qtbot, key):
+    scatter = window.scatter
+    scatter.z_quantity.setCurrentIndex(scatter.z_quantity.findData(key))
+    qtbot.waitUntil(lambda: scatter.z_data is not None and _idle(window), timeout=60_000)
+
+
+class _Point:
+    def __init__(self, i):
+        self.i = i
+
+    def data(self):
+        return self.i
+
+
+def test_scatter_colors_points_by_a_third_quantity_and_keeps_it_in_a_view(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    assert not scatter.has_z() and not scatter.color_by.model().item(2).isEnabled()  # no z chosen yet
+    _choose_z(window, qtbot, "boom_final|sigma_w|")
+    assert scatter.member[2].currentData() == scatter.member[0].currentData()  # x's boom by default
+    assert scatter.has_z() and scatter.z.size == scatter.x.size
+    scatter.color_by.setCurrentIndex(scatter.color_by.findData("z"))
+    lo, hi, name = scatter.drawn_z
+    assert name == "viridis" and lo < hi and scatter.zbar.isVisible()
+    assert scatter.zbar.getPlotItem().getAxis("right").labelText == scatter.axis_title(2)
+    spec = scatter.figure_spec()[1]
+    assert spec["z"]["cmap"] == "viridis" and any("c" in g for g in spec["groups"])
+    figures.render("scatter", spec, (6, 4))  # with a color bar
+    scatter.log_z.setChecked(True)
+    assert scatter.zbar_axis.log10 and np.nanmin(scatter.shown_z()) > 0
+    scatter.z_map.setCurrentIndex(scatter.z_map.findData("diverging"))
+    assert scatter.z_colormap() == "viridis"  # diverging only about the 0 of a linear z
+    scatter.log_z.setChecked(False)
+    assert scatter.z_colormap() == "RdBu_r" and scatter.drawn_z[0] == -scatter.drawn_z[1]
+
+    state = view_state.save(scatter, scatter.STATE_FIELDS)
+    member = scatter.member[2].currentData()
+    scatter.z_quantity.setCurrentIndex(0)
+    assert scatter.z_data is None and not scatter.has_z()
+    assert view_state.restore(scatter, state, scatter.STATE_FIELDS) == []  # z's boom waits for its data
+    qtbot.waitUntil(lambda: scatter.z_data is not None and _idle(window), timeout=60_000)
+    assert scatter.z_quantity.currentData() == "boom_final|sigma_w|" and scatter.member[2].currentData() == member
+    assert scatter.drawn_z is not None
+
+
+def test_scatter_z_can_be_the_boom_height(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    single = scatter.x.size
+    scatter.source[2].setCurrentIndex(scatter.source[2].findData(3))
+    booms = set(window.datas[0].curves) & set(window.datas[1].curves)
+    stacked = set(int(b) for b in np.unique(scatter.point_member))
+    assert stacked <= booms and len(stacked) > 1 and scatter.x.size > single
+    assert np.array_equal(scatter.z, [HEIGHTS[int(b)] for b in scatter.point_member])
+    assert not scatter.member[0].isEnabled() and "each boom" in scatter.axis_title(0)
+    assert scatter.axis_title(2) == "height [m]"
+    caught = []
+    scatter.pointClicked.connect(lambda slot, member: caught.append((slot, member)))
+    scatter._on_click(None, [_Point(7)], None)
+    assert caught == [(int(scatter._drawn_slots[7]), int(scatter._drawn_members[7]))]  # the point's own boom
+    scatter.source[2].setCurrentIndex(0)
+    assert scatter.point_member is None and scatter.member[0].isEnabled() and scatter.x.size == single
+
+
+def test_scatter_marks_the_fits_x_percentiles(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+
+    def marks():
+        return sorted(i.value() for i in scatter.plot.getPlotItem().items if isinstance(i, pg.InfiniteLine))
+    assert marks() == []
+    scatter.pct[0].setValue(10.0)
+    scatter.pct[1].setValue(90.0)
+    scatter.pct_show.setChecked(True)
+    assert marks() == pytest.approx(sorted(np.percentile(scatter._shown()[1], [10, 90])))
+    assert [v["label"] for v in scatter.figure_spec()[1]["vlines"]] == ["10 %", "90 %"]
+    if scatter.log_x.isEnabled():
+        scatter.log_x.setChecked(True)
+        assert marks() == pytest.approx(sorted(np.log10(np.percentile(scatter._shown()[1], [10, 90]))))
+    scatter.pct_show.setChecked(False)
+    assert marks() == []
+
+
+def test_the_3d_view_follows_scatter(window, qtbot):
+    pytest.importorskip("OpenGL")
+    from ttu_tower.viewer.ui.scatter3d import ticks
+    assert ticks(-0.25, 1.1, False)[1] == ["-0.2", "0", "0.2", "0.4", "0.6", "0.8", "1"]
+    assert ticks(-0.3, 2.2, True)[1] == ["1", "10", "100"]
+    scatter = _wind_and_ustar(window, qtbot)
+    _choose_z(window, qtbot, "boom_final|sigma_w|")
+    scatter.open_3d()
+    view = scatter.window3d
+    assert view.isVisible() and scatter.shows_3d()
+    have = int(np.isfinite(scatter.shown_z()).sum())
+    assert view.points.pos.shape == (have, 3)
+    inside = (view.points.pos >= 0) & (view.points.pos <= 1)
+    assert inside.mean() > 0.9  # the box spans the 1st-99th percentiles
+    texts = [label.text for label in view.labels]
+    assert any(scatter.axis_title(2) in t for t in texts)
+    scatter.log_x.setChecked(True)
+    assert any("(log scale)" in label.text for label in view.labels)
+    window.set_selection(scatter.slots[:20], "replace")
+    assert view.chosen.visible() and view.chosen.pos.shape[0] > 0
+    scatter.source[2].setCurrentIndex(scatter.source[2].findData(3))
+    assert any(label.text.startswith("height [m]") for label in view.labels)
+    view.color_by.setCurrentIndex(view.color_by.findData("stability"))
+    view.look("x–y")
+    view.close()
+    assert not scatter.shows_3d()
+
+
+def test_the_3d_wind_rose_stacks_every_booms_rose(window, qtbot):
+    pytest.importorskip("OpenGL")
+    from ttu_tower.viewer.ui import windrose3d
+    assert list(windrose3d.layer_heights([1.0, 10.0, 100.0], "log height")) == pytest.approx([0.0, 0.45, 0.9])
+    assert list(windrose3d.layer_heights([1.0, 10.0, 100.0], "even")) == pytest.approx([0.0, 0.45, 0.9])
+    assert windrose3d.layer_heights([0.0, 50.0, 200.0], "height")[1] == pytest.approx(0.9 * 50 / 200)
+    table = np.zeros((4, 2))
+    table[0] = [10.0, 5.0]
+    verts, faces, colors = windrose3d.wedges(table, 20.0, 0.3)
+    assert len(faces) == len(colors) == 2 * 2 * 7 and np.allclose(verts[:, 2], 0.3)
+    assert np.hypot(verts[:, 0], verts[:, 1]).max() == pytest.approx(0.75)  # 15 % of a 20 % rim
+
+    window.right_tabs.setCurrentWidget(window.windrose)
+    rose = window.windrose
+    window.full_period.setChecked(True)
+    qtbot.waitUntil(lambda: rose.tower is not None and _idle(window), timeout=60_000)
+    rose.open_3d()
+    view = rose.window3d
+    qtbot.waitUntil(lambda: view.winds is not None and _idle(window), timeout=60_000)
+    layers = view.layers()
+    assert [label.split()[0] for label, _, _ in layers] == [f"b{b}" for b in sorted(FULL_BOOMS)]  # no mesonet here
+    assert not view.with_mesonet.isEnabled() and view.mesh.visible()
+    texts = [label.text for label in view.labels]
+    assert any(t.startswith(f"b{FULL_BOOMS[0]} (") for t in texts) and "N" in texts
+    view.common.setChecked(True)
+    sizes = {w.ws.size for _, _, w in view.layers()}
+    assert len(sizes) == 1  # the same slots in every layer
+    rose.filtering.setCurrentIndex(0)  # the tab's filtering reloads every boom
+    qtbot.waitUntil(lambda: _idle(window) and view.loaded_key[1] is True, timeout=60_000)
+    view.spacing.setCurrentIndex(view.spacing.findData("height"))
+    view.look("from above")
+    view.close()
+    assert not rose.shows_3d()
+
+
+def test_the_hodograph_tab_follows_the_group_selection_and_interval(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.hodograph)
+    hodo = window.hodograph
+    qtbot.waitUntil(lambda: hodo.uvs is not None and _idle(window), timeout=60_000)
+    assert set(hodo.uvs) == set(FULL_BOOMS)  # no mesonet in the fixture
+    label, _, rows = hodo.drawn[0]
+    assert label == "all slots" and list(rows["member"]) == sorted(FULL_BOOMS, key=lambda b: HEIGHTS[b])
+    assert rows["n"].nunique() == 1 and hodo.table.rowCount() == len(FULL_BOOMS)  # the same slots at every boom
+    whole = int(rows["n"].iloc[0])
+    hodo.common.setChecked(False)
+    assert hodo.drawn[0][2]["n"].max() >= whole
+    hodo.common.setChecked(True)
+
+    chosen = hodo.uvs[FULL_BOOMS[0]].slots[:5]
+    window.set_selection(chosen, "replace")
+    hodo.group.setCurrentIndex(hodo.group.findData("selected"))
+    assert hodo.drawn[0][2]["n"].max() <= 5 and hodo.each_slot.isEnabled()
+    hodo.each_slot.setChecked(True)
+    if hodo.stability is not None:
+        hodo.group.setCurrentIndex(hodo.group.findData("classes"))
+        assert len(hodo.drawn) == len(hodo.stability[1]) and not hodo.each_slot.isEnabled()
+    figures.render(*hodo.figure_spec(), (5, 5))
+    hodo.group.setCurrentIndex(0)
+    window.full_period.setChecked(False)
+    k = int(chosen[0])
+    window.set_x_range(slot_to_unix(k), slot_to_unix(k + 2))
+    window._refresh_distributions()
+    assert hodo.drawn[0][2]["n"].max() <= 2
+
+
+def test_the_inspector_hodograph_shows_the_slot_and_the_hour_around(window, qtbot):
+    inspector = _inspect(window, qtbot, "hodograph")
+    tab = inspector.hodograph
+    qtbot.waitUntil(lambda: tab.uvs is not None and _idle(window), timeout=60_000)
+    have = [b for b in FULL_BOOMS if b in tab.uvs and SPIKY_SLOT in tab.uvs[b].slots]
+    assert tab._loaded_slot == SPIKY_SLOT and have and tab.table.rowCount() == len(have)
+    missing = sorted(set(FULL_BOOMS) - set(have))  # e.g. a boom whose wind tertiary filtered
+    assert ("no wind at" in tab.info.text()) == bool(missing) and "slots before" in tab.info.text()
+    curves = len(tab.plot.getPlotItem().listDataItems())
+    tab.around.setChecked(False)
+    assert len(tab.plot.getPlotItem().listDataItems()) < curves
+    inspector.step(1)
+    qtbot.waitUntil(lambda: tab._loaded_slot == SPIKY_SLOT + 1 and _idle(window), timeout=60_000)
+
+
+def test_scatter_overlays_a_typed_piecewise_function_and_takes_the_fit(window, qtbot):
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    overlay = scatter.overlay
+
+    def drawn():
+        return next((line for line in scatter.drawn_lines if line["label"] == "overlay"), None)
+    assert not scatter.overlay_on.isChecked() and drawn() is None
+    scatter.overlay_on.setChecked(True)
+    overlay.pieces[0].formula.setText("2*x")
+    overlay.pieces[0].formula.editingFinished.emit()
+    line = drawn()
+    assert line["y"][np.isfinite(line["y"])] == pytest.approx(2 * line["x"][np.isfinite(line["y"])])
+    assert overlay.status.text().startswith("RMSE") and f"{scatter.x.size} points" in overlay.status.text()
+    mid = float(np.median(scatter.x))
+    overlay.pieces[0].hi.setText(f"{mid:.6g}")
+    overlay.add_piece("1", f"{mid:.6g}", "")
+    overlay.changed.emit()
+    line = drawn()
+    assert np.isnan(line["y"]).sum() == 1  # one break, between the two pieces
+    assert (line["y"][line["x"] > mid * 1.01] == 1.0).all()
+    overlay.pieces[1].formula.setText("3x")
+    overlay.changed.emit()
+    assert "piece 2" in overlay.status.text() and overlay.pieces[1].formula.styleSheet()
+
+    state = view_state.save(scatter, scatter.STATE_FIELDS)
+    assert state["overlay"][0][0] == "2*x" and state["overlay_on"] is True
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    assert not overlay.from_fit.isEnabled()
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    overlay.from_fit.click()
+    assert len(overlay.pieces) == 1 and "*x" in overlay.pieces[0].formula.text()
+    line, fit = drawn(), scatter.fit_result
+    finite = np.isfinite(line["y"])
+    assert line["y"][finite] == pytest.approx(fit.func(line["x"][finite]), rel=1e-4)
+    view_state.restore(scatter, state, scatter.STATE_FIELDS)
+    assert [p.formula.text() for p in overlay.pieces] == ["2*x", "3x"]
+
+
+def test_scatter_can_show_and_fit_one_stability_class(window, qtbot):
+    from ttu_tower.viewer.timeline import Curve, in_class
+    scatter = _wind_and_ustar(window, qtbot)
+    names = ["unstable", "neutral", "stable"]  # the fixture's booms make no Ri_b pair
+    stability = (Curve(slots=scatter.slots, y=(scatter.slots % 3).astype(float)), names)
+    scatter.set_sources(window.datas, None, stability)
+    assert [scatter.only_class.itemData(i) for i in range(scatter.only_class.count())] == [None, *names]
+    counts = {n: int(in_class(scatter.stability, scatter.slots, n).sum()) for n in names}
+    name = max(counts, key=counts.get)
+    assert 2 < counts[name] < scatter.slots.size
+    scatter.only_class.setCurrentIndex(scatter.only_class.findData(name))
+    shown = scatter._shown()[0]
+    assert sorted(shown) == sorted(scatter.slots[in_class(scatter.stability, scatter.slots, name)])
+    assert scatter.stats.text().startswith(f"{name} only · N {counts[name]}")
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.n == counts[name]  # only that class's points
+    state = view_state.save(scatter, scatter.STATE_FIELDS)
+    scatter.only_class.setCurrentIndex(0)
+    assert scatter._shown()[0].size == scatter.slots.size and "earlier" in scatter.fit_status.text()
+    view_state.restore(scatter, state, scatter.STATE_FIELDS)
+    assert scatter.class_shown() == name
+
+
+def test_the_overlay_can_use_the_booms_heights(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    overlay = scatter.overlay
+    scatter.overlay_on.setChecked(True)
+    b = scatter.member[0].currentData()
+    overlay.set_pieces([("x*zA/zB", "", "")])
+    assert scatter.overlay_heights() == {"zA": HEIGHTS[b], "zB": HEIGHTS[scatter.member[1].currentData()]}
+    line = next(line for line in scatter.drawn_lines if line["label"] == "overlay")
+    finite = np.isfinite(line["y"])
+    ratio = HEIGHTS[b] / HEIGHTS[scatter.member[1].currentData()]
+    assert line["y"][finite] == pytest.approx(line["x"][finite] * ratio) and overlay.status.text().startswith("RMSE")
+
+    scatter.source[2].setCurrentIndex(scatter.source[2].findData(3))  # z: each boom at its height
+    lines = [line for line in scatter.drawn_lines if line["label"] in ("overlay, each boom", None)]
+    booms = sorted(set(int(m) for m in scatter.point_member), key=HEIGHTS.get)
+    assert len(lines) == len(booms) and [line["label"] for line in lines][0] == "overlay, each boom"
+    first = lines[0]
+    ok = np.isfinite(first["y"])
+    assert first["y"][ok] == pytest.approx(first["x"][ok])  # zA = zB: each boom's own height
+    assert overlay.status.text().startswith("RMSE")
+    scatter.source[2].setCurrentIndex(scatter.source[2].findData(2))
+
+    scatter.source[0].setCurrentIndex(scatter.source[0].findData(1))  # x and y both from panel B: no zA
+    overlay.set_pieces([("zA*x", "", "")])
+    assert "zA: Scatter shows no single boom from panel A" in overlay.status.text()
+    assert not any(line["label"] == "overlay" for line in scatter.drawn_lines)
+    overlay.set_pieces([("zB*x", "", ""), ("3x", "", "")])  # a bad piece: the good one still drawn
+    assert "piece 2" in overlay.status.text() and any(line["label"] == "overlay" for line in scatter.drawn_lines)
+
+
+def test_an_automatic_fit_follows_the_quantities_and_booms(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    qtbot.wait(500)
+    assert scatter.fit_result is None  # nothing until asked, or "auto"
+    scatter.fit_auto.setChecked(True)
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    first = scatter.fit_result
+    assert scatter.fit_inputs == scatter._inputs()
+    other = next(b for b in FULL_BOOMS if b != scatter.member[0].currentData())
+    scatter.member[0].setCurrentIndex(scatter.member[0].findData(other))  # another boom on x
+    qtbot.waitUntil(lambda: scatter.fit_result is not first and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_inputs == scatter._inputs() and "earlier" not in scatter.fit_status.text()
+    second = scatter.fit_result
+    window.panels[1].select("boom_final|sigma_w|", "mrd", tuple(FULL_BOOMS))  # another quantity on y
+    qtbot.waitUntil(lambda: _idle(window) and scatter.fit_result is not second and not scatter._fitting,
+                    timeout=60_000)
+    assert scatter.fit_inputs == scatter._inputs()
+    scatter.fit_auto.setChecked(False)
+    third = scatter.fit_result
+    scatter.member[0].setCurrentIndex(0 if scatter.member[0].currentIndex() else 1)
+    qtbot.wait(600)
+    assert scatter.fit_result is third and "press Fit" in scatter.fit_status.text()  # off: kept, marked earlier
+
+
+def test_an_automatic_fit_that_fails_is_not_retried_until_something_changes(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("power law, fixed exponent"))
+    scatter.fit_settings["b"].setText("0.5")
+    scatter.sides["x"].setCurrentIndex(scatter.sides["x"].findData(-1))  # no x < 0: nothing to fit
+    calls = []
+    real = scatter.run_fit
+    scatter.run_fit = lambda **kw: (calls.append(1), real(**kw))
+    scatter.fit_auto.setChecked(True)
+    qtbot.wait(1500)
+    assert len(calls) <= 1 and scatter.fit_result is None
+
+
+def test_a_fit_can_take_only_the_selected_points_or_all_but_them(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    scatter.fit_subset.setCurrentIndex(scatter.fit_subset.findData("selected"))
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result is None and "nothing is selected" in scatter.fit_status.text()
+    outliers = scatter.slots[np.argsort(scatter.y)[-5:]]  # as if lassoed
+    window.set_selection(outliers, "replace")
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.n == 5
+    scatter.fit_subset.setCurrentIndex(scatter.fit_subset.findData("unselected"))
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result.n != 5 and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.n == scatter._shown()[0].size - 5
+    window.set_selection(outliers[:2], "replace")  # another selection: the fit is earlier
+    assert "earlier" in scatter.fit_status.text()
+
+
+def test_several_fits_are_drawn_together_and_kept_in_a_view(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    scatter.add_fit()  # a copy, then changed
+    assert len(scatter.fits) == 2 and scatter.current == 1 and scatter.fits[1].color != scatter.fits[0].color
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear through origin"))
+    scatter.fit_bins.setValue(8)
+    assert scatter.fits[0].spec.name == "linear" and scatter.fits[1].spec.bins == 8
+    scatter.run_fit()  # every fit
+    qtbot.waitUntil(lambda: all(e.result is not None for e in scatter.fits) and not scatter._fitting,
+                    timeout=60_000)
+    labels = [line["label"] for line in scatter.drawn_lines]
+    assert "1. linear" in labels and "2. linear through origin, 8 mean bins" in labels
+    assert scatter.fit_list.count() == 2 and "RMSE" in scatter.fit_list.item(1).text()
+    assert scatter.fits[1].result.n <= 8
+    scatter.fit_list.setCurrentRow(0)  # edit the first
+    assert scatter.current == 0 and scatter.fit_name.currentData() == "linear" and scatter.fit_bins.value() == 0
+    scatter.fit_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+    assert not scatter.fits[1].shown and not any(line["label"].startswith("2.") for line in scatter.drawn_lines)
+
+    state = view_state.save(scatter, scatter.STATE_FIELDS)
+    scatter.remove_current_fit()
+    assert len(scatter.fits) == 1 and scatter.fits[0].spec.name == "linear through origin"
+    view_state.restore(scatter, state, scatter.STATE_FIELDS)
+    assert [e.spec.name for e in scatter.fits] == ["linear", "linear through origin"]
+    assert [e.shown for e in scatter.fits] == [True, False] and scatter.fits[1].spec.bins == 8
+
+    scatter.fit_auto.setChecked(True)  # every fit refits by itself
+    qtbot.waitUntil(lambda: all(e.result is not None for e in scatter.fits) and not scatter._fitting,
+                    timeout=60_000)
+    before = [e.result for e in scatter.fits]
+    other = next(b for b in FULL_BOOMS if b != scatter.member[0].currentData())
+    scatter.member[0].setCurrentIndex(scatter.member[0].findData(other))
+    qtbot.waitUntil(lambda: all(e.result is not r for e, r in zip(scatter.fits, before)) and not scatter._fitting,
+                    timeout=60_000)
+
+
+def test_stability_schemes_are_saved_and_loaded_by_name(window, qtbot, tmp_path):
+    from ttu_tower.viewer import stability as criteria
+    panel = window.stability_panel
+    panel.schemes = criteria.SchemeStore.open(tmp_path / "schemes.json")
+    panel._fill_schemes()
+    assert panel.scheme.itemText(0) == "(no saved schemes)" and not panel.delete_scheme_button.isEnabled()
+
+    rib = criteria.StabilitySpec("rib", (1, 2), "mrd", (-0.5, -0.1, 0.1, 0.5))
+    panel.set_spec(rib)
+    panel.save_scheme("near surface")
+    zeta = criteria.StabilitySpec("zeta", (2, 2), "mrd", (-1.0, -0.1, 0.1, 1.0))
+    panel.set_spec(zeta)
+    panel.save_scheme("zeta wide")
+    assert panel.scheme.currentData() == "zeta wide" and panel.delete_scheme_button.isEnabled()
+    panel.edges[3].setValue(2.0)  # an edit: no saved scheme is what's set now
+    assert panel.scheme.currentData() is None and panel.scheme.currentText() == "(unsaved changes)"
+
+    panel.load_scheme("near surface")  # every view follows
+    qtbot.waitUntil(lambda: _idle(window) and window.stability_spec == rib, timeout=60_000)
+    assert panel.scheme.currentData() == "near surface" and panel.spec() == rib
+    again = criteria.SchemeStore.open(tmp_path / "schemes.json")  # kept, for every run
+    assert again.items == {"near surface": rib, "zeta wide": zeta}
+    with pytest.raises(ValueError, match="name"):
+        panel.save_scheme("  ")
+    panel.delete_scheme()
+    assert set(criteria.SchemeStore.open(tmp_path / "schemes.json").items) == {"zeta wide"}
+    assert panel.scheme.currentData() is None
+    panel.reset.click()
+    qtbot.waitUntil(lambda: _idle(window) and window.stability_spec is None, timeout=60_000)
+
+
+def _hover_at(plot_widget, x, y):
+    """Move the cursor to view point (x, y) of a PlotWidget, as the mouse would."""
+    from PySide6.QtCore import QPointF
+    vb = plot_widget.getPlotItem().getViewBox()
+    plot_widget.scene().sigMouseMoved.emit(vb.mapViewToScene(QPointF(x, y)))
+
+
+def test_hovering_a_summary_plot_reads_the_cursor_in_the_bottom_bar(window, qtbot):
+    from ttu_tower.viewer.ui.hover_readout import axis_value
+    window.full_period.setChecked(True)
+    window.right_tabs.setCurrentWidget(window.dist_tab)
+    dist = window.dists[0]
+    qtbot.wait(300)
+    (x0, x1), (y0, y1) = dist.plot.getPlotItem().getViewBox().viewRange()
+    _hover_at(dist.plot, (x0 + x1) / 2, (y0 + y1) / 2)
+    text = window.hover.text()
+    assert text.startswith("Distributions:") and f"= {(x0 + x1) / 2:.4g}" in text and "density" in text
+
+    window.right_tabs.setCurrentWidget(window.scatter)
+    scatter = window.scatter
+    qtbot.waitUntil(lambda: scatter.x.size > 10, timeout=60_000)
+    qtbot.wait(300)
+    (x0, x1), (y0, y1) = scatter.vb.viewRange()
+    _hover_at(scatter.plot, (x0 + x1) / 2, (y0 + y1) / 2)
+    text = window.hover.text()
+    assert text.startswith("Scatter:") and f"= {(x0 + x1) / 2:.4g}" in text and f"= {(y0 + y1) / 2:.4g}" in text
+    assert scatter.axis_title(0) in text
+    if scatter.log_x.isEnabled():
+        scatter.log_x.setChecked(True)
+        qtbot.wait(200)
+        (x0, x1), (y0, y1) = scatter.vb.viewRange()
+        _hover_at(scatter.plot, (x0 + x1) / 2, (y0 + y1) / 2)
+        assert f"= {10 ** ((x0 + x1) / 2):.4g}" in window.hover.text()  # the value, not its log
+        assert "(log scale)" not in window.hover.text()
+
+    axis = pg.AxisItem("bottom")
+    axis.setTicks([[(0.0, "Jan"), (1.0, "Feb"), (2.0, "Mar")]])
+    assert axis_value(axis, 1.2) == "Feb" and axis_value(axis, 7.0) == "7"  # far from any label: the number
+    sparse = pg.AxisItem("left")
+    sparse.setTicks([[(h + 0.5, f"{h:02d}") for h in range(0, 24, 3)]])
+    assert axis_value(sparse, 3.3) == "03" and axis_value(sparse, 4.6) == "4.6"  # between labels: the hour itself
+
+
+def test_stability_boundaries_take_five_decimals(window, tmp_path):
+    from ttu_tower.viewer import stability as criteria
+    panel = window.stability_panel
+    panel.schemes = criteria.SchemeStore.open(tmp_path / "schemes.json")
+    fine = criteria.StabilitySpec("rib", (1, 2), "mrd", (-0.01234, -0.00125, 0.00125, 0.04321))
+    panel.set_spec(fine)
+    assert panel.spec() == fine and panel.edges[1].text().endswith("0.00125")
+    panel.edges[2].lineEdit().selectAll()
+    from PySide6.QtTest import QTest
+    QTest.keyClicks(panel.edges[2].lineEdit(), "0.00375")
+    panel.edges[2].interpretText()
+    assert panel.spec().edges[2] == 0.00375
+    panel.save_scheme("fine")
+    assert criteria.SchemeStore.open(tmp_path / "schemes.json").items["fine"].edges[2] == 0.00375

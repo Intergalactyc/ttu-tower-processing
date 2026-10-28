@@ -27,6 +27,8 @@ QUANTITY_GROUPS: dict[str, str] = {
     "ti_ratio_vu": "momentum", "ti_ratio_wu": "momentum",
     "tke": "momentum", "ctke": "momentum", "ustar": "momentum",
     "ils_u": "momentum", "ils_v": "momentum", "ils_w": "momentum",
+    "its_corr_u": "momentum", "its_corr_v": "momentum", "its_corr_w": "momentum",
+    "ils_corr_u": "momentum", "ils_corr_v": "momentum", "ils_corr_w": "momentum",
     "ils_ratio_vu": "momentum", "ils_ratio_wu": "momentum",
     "its_ratio_u": "momentum", "its_ratio_v": "momentum", "its_ratio_w": "momentum",
     "its_short": "momentum",
@@ -34,10 +36,12 @@ QUANTITY_GROUPS: dict[str, str] = {
     "aniso_beta": "momentum", "aniso_phi": "momentum", "w_ratio": "momentum",
     "momentum": "momentum", "its": "momentum",
     # heat family: needs both heat and momentum (obukhov_length needs ustar).
-    "wvpts": "heat", "obukhov_length": "heat", "zeta": "heat", "ils_vpts": "heat", "heat": "heat",
+    "wvpts": "heat", "obukhov_length": "heat", "zeta": "heat", "ils_vpts": "heat", "ils_corr_vpts": "heat",
+    "theta_star": "heat", "phi_m_bd": "heat", "phi_h_bd": "heat", "psi_m_bd": "heat", "psi_h_bd": "heat",
+    "n2_most": "heat", "heat": "heat",
     # ts family: ts/vpts statistics, their ITS/ratio, and the pressure factor
     # that travels with the vpts values it converted.
-    "ts": "ts", "vpts": "ts", "its_ratio_vpts": "ts", "its_short_vpts": "ts",
+    "ts": "ts", "vpts": "ts", "its_ratio_vpts": "ts", "its_short_vpts": "ts", "its_corr_vpts": "ts",
     "p_factor": "ts", "p_measured": "ts", "its_vpts": "ts",
     # slow sensors, each its own group.
     "t": "t", "rh": "rh", "p": "p",

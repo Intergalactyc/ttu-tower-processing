@@ -347,8 +347,14 @@ It contains:
 | `ustar` | (cov_uw² + cov_vw²)^¼ |
 | `obukhov_length` | −u*³ θv / (κ g w'θv'), θv = slow-sensor VPT, g = local gravity, κ = 0.41 |
 | `zeta` | z / L |
+| `theta_star` | θ* = −w'θv'/u\* (K), positive when stable |
+| `phi_m_bd`, `phi_h_bd` | Businger-Dyer φm(ζ), φh(ζ) (Dyer 1974: α = 5, β = 16; φh = φm² when unstable) |
+| `psi_m_bd`, `psi_h_bd` | Their integrated forms ψm(ζ), ψh(ζ) (Paulson 1970) |
+| `n2_most` | N² = u\*²/(κz)² · ζ · φh(ζ) (1/s²), i.e. (g/θv) dθv/dz from MOST |
 | `ils_u`, `ils_v`, `ils_w`, `ils_vpts` | ITS × (u mean), with \|u mean\| for v, w and vpts |
-| `ils_ratio_vu`, `ils_ratio_wu` | |
+| `its_corr_u`, `its_corr_v`, `its_corr_w`, `its_corr_vpts` | ITS × e/(e−1): the full integral of an exponential ACF, from its integral up to the 1/e crossing (the ACF beyond it isn't integrated) |
+| `ils_corr_u`, `ils_corr_v`, `ils_corr_w`, `ils_corr_vpts` | ILS × e/(e−1), likewise |
+| `ils_ratio_vu`, `ils_ratio_wu` | (the corrected ILS ratios would be identical) |
 | `its_ratio_u`, `its_ratio_v`, `its_ratio_w`, `its_ratio_vpts` | τ / ITS (NaN where the ITS is) |
 | `its_short` | 1.0 if any of u, v, w has `its_ratio` < `min_tau_its_ratio`, or has usable blocks but an ITS of NaN (its ACF never crossed 1/e, the extreme case of the same problem); else 0.0; NaN only if none of the three had a usable block |
 | `its_short_vpts` | the same for vpts, kept separate so that a long temperature scale doesn't discredit the velocity scales |
@@ -418,7 +424,8 @@ Columns: `slot`, `slot_start`, `boom`, `boom2`, `variant`, `variable`, `value`.
 |---|---|---|
 | `rib` | none | Bulk Richardson number between `boom` < `boom2` (all 45 pairs); vector wind difference from ue/vn means; slow VPT; local g. |
 | `lapse_vpt` | none | (VPT₂ − VPT₁)/(z₂ − z₁), K/m, all pairs. |
-| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. Includes the reference boom's own row (`boom == boom2`, value 0 unless the reference's own `wd` was filtered) - unlike `rib`/`lapse_vpt`, `veer` doesn't follow the `boom < boom2` convention, since `boom2` here is a fixed reference rather than a pair partner. |
+| `n2_bulk` | none | N² = g/mean(VPT₁, VPT₂) · `lapse_vpt` (1/s²), with Ri_b's g; Ri_b = N² Δz²/ΔU². All pairs. |
+| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. Includes the reference boom's own row (`boom == boom2`, value 0 unless the reference's own `wd` was filtered) - unlike `rib`/`lapse_vpt`/`n2_bulk`, `veer` doesn't follow the `boom < boom2` convention, since `boom2` here is a fixed reference rather than a pair partner. |
 
 ### 5.4 `profile`: profile fits per slot
 

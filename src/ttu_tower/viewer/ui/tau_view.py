@@ -79,6 +79,10 @@ def _draw_categories(plot: pg.PlotWidget, which: str, lines, legend: bool = Fals
 
 
 class TauView(QWidget):
+    STATE_FIELDS = ("variant", "group", "boom_bar", "which", "lines", "class_boom", "fields.peak_significance_se",
+                    "fields.min_scale_s", "fields.min_tau_s", "fields.max_tau_s", "smoothing", "rule", "priority",
+                    "fallback", "compare_which", "tabs")  # saved in a view, restored in this order
+
     selectRequested = Signal(object)  # slots to brush
 
     def __init__(self, runner, parent=None):

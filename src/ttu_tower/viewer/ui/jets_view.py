@@ -222,6 +222,8 @@ class JetsView(QWidget):
     aggregate, and the diagnostics. Only the sub-tab showing is drawn; the
     others catch up when shown.
     """
+    STATE_FIELDS = ("events.kept_only", "every_slot", "tabs")  # saved in a view, restored in this order
+
 
     eventSelected = Signal(int)
     eventActivated = Signal(int)

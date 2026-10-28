@@ -33,18 +33,29 @@ class FitOptions:
     bin_count: int | None = None  # fit to binned centres instead of the raw points
     bin_method: str = "mean"
     bin_min_count: int = 1
+    bin_log: bool = False  # bins equal in log x (only positive x is binned)
 
 
-def bin_average(x, y, bin_count: int, method: str = "mean", bin_range=None, min_count: int = 1):
-    """Centres and mean/median of y in `bin_count` equal x bins (sparse bins dropped)."""
+def bin_average(x, y, bin_count: int, method: str = "mean", bin_range=None, min_count: int = 1, log: bool = False):
+    """Centres and mean/median of y in `bin_count` equal x bins (sparse bins
+    dropped); with `log`, bins equal in log x with geometric centres, over the
+    positive x only.
+    """
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    if log:
+        keep = x > 0
+        x, y = x[keep], y[keep]
     if x.size == 0:
         return np.empty(0), np.empty(0)
     lo, hi = bin_range if bin_range is not None else (np.nanmin(x), np.nanmax(x))
-    edges = np.linspace(lo, hi, bin_count + 1)
+    if log:
+        lo = max(lo, np.nanmin(x))
+        edges = np.geomspace(lo, hi, bin_count + 1) if hi > lo else np.array([lo, lo * 1.0001])
+    else:
+        edges = np.linspace(lo, hi, bin_count + 1)
     stat, edges, _ = sp_stats.binned_statistic(x, y, statistic=method, bins=edges)
     count, _, _ = sp_stats.binned_statistic(x, y, statistic="count", bins=edges)
-    centres = edges[:-1] + np.diff(edges) / 2
+    centres = np.sqrt(edges[:-1] * edges[1:]) if log else edges[:-1] + np.diff(edges) / 2
     keep = np.isfinite(stat) & (count >= min_count)
     return centres[keep], stat[keep]
 
@@ -61,7 +72,7 @@ def prepare(x, y, opts: FitOptions) -> tuple[np.ndarray, np.ndarray]:
             keep = (v >= lim[0]) & (v <= lim[1])
             x, y = x[keep], y[keep]
     if opts.bin_count:
-        x, y = bin_average(x, y, opts.bin_count, opts.bin_method, min_count=opts.bin_min_count)
+        x, y = bin_average(x, y, opts.bin_count, opts.bin_method, min_count=opts.bin_min_count, log=opts.bin_log)
     return x, y
 
 
@@ -81,6 +92,19 @@ def _power(x, y):
     keep = (x > 0) & (y > 0)
     a, b = power_fit(x[keep], y[keep])
     return lambda v: a * np.asarray(v) ** b, {"a": a, "b": b}, f"y = {a:.4g}·x^{b:.4g}"
+
+
+def _power_fixed(x, y, b=0.5):
+    """y = a·x^b with b given: least squares in y (as the fit through the origin),
+    a = Σ y·x^b / Σ x^2b, over the positive x.
+    """
+    keep = x > 0
+    xb = x[keep] ** b
+    denom = np.sum(xb * xb)
+    if not np.isfinite(denom) or denom == 0:
+        raise ValueError("no positive x to fit")
+    a = float(np.sum(y[keep] * xb) / denom)
+    return lambda v: a * np.asarray(v, dtype=float) ** b, {"a": a, "b": b}, f"y = {a:.4g}·x^{b:g} (exponent fixed)"
 
 
 def _log(x, y):
@@ -119,6 +143,38 @@ def _double_linear(x, y, intercept=None):
                                   maxfev=5000, bounds=([-np.inf, -np.inf, 1e-9], [np.inf] * 3))
     return (lambda v: _double_linear_model(np.asarray(v, dtype=float), A, B, C, D),
             {"A": A, "B": B, "C": C, "D": D}, f"double linear: slopes {A:.4g} → {B:.4g}, scale {C:.4g}, y(0) {D:.4g}")
+
+
+def _double_power_model(lx, la, b1, b2, lxb, width):
+    """ln y of a smoothly broken power law, from ln x: a·(x/x_b)^b1·(1 + (x/x_b)^(1/Δ))^((b2-b1)·Δ),
+    slope b1 well below the break x_b and b2 well above it, over a width Δ in ln x.
+    """
+    d = lx - lxb
+    return la + b1 * d + (b2 - b1) * width * np.logaddexp(0.0, d / width)
+
+
+def _double_power(x, y):
+    """Fitted in log space (positive x and y), so each decade of x weighs alike."""
+    keep = (x > 0) & (y > 0)
+    if keep.sum() < 5:
+        raise ValueError("fewer than five points with positive x and y")
+    lx, ly = np.log(x[keep]), np.log(y[keep])
+    a0, b0 = ls_linear_fit(lx, ly)
+    lo, hi = float(lx.min()), float(lx.max())
+    mid = float(np.median(lx))
+    span = max(hi - lo, 1e-6)
+    (la, b1, b2, lxb, width), *_ = curve_fit(
+        _double_power_model, lx, ly, p0=[a0 + b0 * mid, b0, b0, mid, span / 8], maxfev=10_000,
+        bounds=([-np.inf, -np.inf, -np.inf, lo, span / 200], [np.inf, np.inf, np.inf, hi, span]))
+    a, xb = float(np.exp(la)), float(np.exp(lxb))
+
+    def func(v):
+        v = np.asarray(v, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(v > 0, np.exp(_double_power_model(np.log(v), la, b1, b2, lxb, width)), np.nan)
+
+    return (func, {"a": a, "b1": b1, "b2": b2, "x_b": xb, "width": width},
+            f"double power law: x^{b1:.3g} → x^{b2:.3g} about x_b {xb:.4g} (a {a:.4g}, width {width:.3g} in ln x)")
 
 
 def _sparam_ri(x, y):
@@ -174,6 +230,8 @@ FITS: dict[str, Callable] = {
     "linear": _linear,
     "linear through origin": _origin,
     "power law": _power,
+    "power law, fixed exponent": _power_fixed,
+    "double power law": _double_power,
     "logarithmic": _log,
     "exponential": _exponential,
     "neutral log law (x = height)": _loglaw,
@@ -185,9 +243,44 @@ FITS: dict[str, Callable] = {
 
 # fits with settings of their own: name -> {argument: (label, default)}
 FIT_SETTINGS: dict[str, dict[str, tuple[str, float]]] = {
+    "power law, fixed exponent": {"b": ("exponent", 0.5)},
     ALPHA_RI: {"ri_neutral_lo": ("neutral band from Ri", -0.05), "ri_neutral_hi": ("to Ri", 0.05),
                "ri_critical": ("Ri_c (α held above)", 0.25)},
 }
+
+
+def _n(v: float) -> str:
+    """A coefficient for a formula: 6 significant figures, bracketed if negative."""
+    return f"{v:.6g}" if v >= 0 else f"({v:.6g})"
+
+
+def fit_formula(name: str, params: dict, settings: dict | None = None) -> list[tuple[str, str, str]]:
+    """The fitted curve as formulas for `expression`: [(y in x, from x, to x)], "" for no bound."""
+    p, s = {k: _n(v) for k, v in params.items()}, settings or {}
+    simple = {
+        "linear": lambda: f"{p['a']} + {p['b']}*x",
+        "linear through origin": lambda: f"{p['b']}*x",
+        "power law": lambda: f"{p['a']}*x^{p['b']}",
+        "power law, fixed exponent": lambda: f"{p['a']}*x^{p['b']}",
+        "double power law": lambda: (f"{p['a']}*(x/{p['x_b']})^{p['b1']}*(1 + (x/{p['x_b']})^(1/{p['width']}))"
+                                     f"^(({p['b2']} - {p['b1']})*{p['width']})"),
+        "logarithmic": lambda: f"{p['a']} + {p['b']}*ln(x)",
+        "exponential": lambda: f"{p['A']}*{p['B']}^x",
+        "neutral log law (x = height)": lambda: f"{p['ustar']}/{_n(KAPPA)}*ln(x/{p['z0']})",
+        "double linear": lambda: f"({p['B']} - {p['A']})*{p['C']}*(exp(-x/{p['C']}) - 1) + {p['B']}*x + {p['D']}",
+        "double linear through origin": lambda: (f"({p['B']} - {p['A']})*{p['C']}*(exp(-x/{p['C']}) - 1) "
+                                                 f"+ {p['B']}*x"),
+    }
+    if name in simple:
+        return [(simple[name](), "", "")]
+    if name == "ζ(Ri) (stability parameter)":
+        return [(f"{p['K']}*x", "", "0"), (f"{p['K']}*x/(1 + {p['B']}*x)", "0", "")]
+    if name == ALPHA_RI:
+        ri_c = _n(s.get("ri_critical", 0.25))
+        return [(f"{p['alpha0']}*(1 + {p['a_unstable']}*x)^{p['b_unstable']}", "", "0"),
+                (f"{p['alpha0']}*(1 + {p['a_stable']}*x)^{p['b_stable']}", "0", ri_c),
+                (p["alpha_critical"], ri_c, "")]
+    raise ValueError(f"no formula for {name}")
 
 
 def fit(name: str, x, y, opts: FitOptions = FitOptions(), **settings) -> FitResult:

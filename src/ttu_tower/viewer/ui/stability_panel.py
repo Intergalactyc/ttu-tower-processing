@@ -1,16 +1,18 @@
 """The Stability controls: which variable classifies stability (Ri_b between
 two booms, or ζ at one boom), the four boundaries between the five classes,
 and how many slots each class gets. Every view that uses stability follows.
+Schemes can be saved under a name and loaded again, on any run.
 """
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import BOOMS, HEIGHTS
-from ttu_tower.viewer.stability import NAMES, VARIABLES, ZETA_EDGES, StabilitySpec
+from ttu_tower.viewer.stability import NAMES, VARIABLES, ZETA_EDGES, SchemeStore, StabilitySpec
 from ttu_tower.viewer.ui import style, tables
 
 
@@ -25,8 +27,18 @@ class StabilityPanel(QWidget):
     changed = Signal()  # a valid criterion was set
     resetRequested = Signal()  # back to the run's own
 
-    def __init__(self, parent=None):
+    def __init__(self, schemes: SchemeStore | None = None, parent=None):
         super().__init__(parent)
+        self.schemes = schemes if schemes is not None else SchemeStore.open()
+        self.scheme = QComboBox()
+        self.scheme.setToolTip("saved schemes (every run): pick one to classify by it")
+        self.scheme.activated.connect(self._on_scheme_picked)
+        self.save_scheme_button = QPushButton("Save…")
+        self.save_scheme_button.setToolTip("save what's set here as a named scheme")
+        self.save_scheme_button.clicked.connect(lambda *_: self._ask_save())
+        self.delete_scheme_button = QPushButton("Delete")
+        self.delete_scheme_button.setToolTip("delete the scheme chosen beside")
+        self.delete_scheme_button.clicked.connect(lambda *_: self.delete_scheme())
         self.variable = QComboBox()
         for key, label in VARIABLES.items():
             self.variable.addItem(label, key)
@@ -39,7 +51,7 @@ class StabilityPanel(QWidget):
         for _ in range(4):
             spin = QDoubleSpinBox()
             spin.setRange(-1e4, 1e4)
-            spin.setDecimals(3)
+            spin.setDecimals(5)
             spin.setKeyboardTracking(False)  # reclassify once a value is entered, not on every keystroke
             self.edges.append(spin)
         self.errors = QLabel()
@@ -77,7 +89,13 @@ class StabilityPanel(QWidget):
                 rows.addWidget(self.edges[i], 2 * i + 1, 1)
         bounds.setToolTip("each class runs from its lower boundary (included) up to the next (excluded)")
 
+        schemes = QHBoxLayout()
+        schemes.addWidget(QLabel("scheme"))
+        schemes.addWidget(self.scheme, stretch=1)
+        schemes.addWidget(self.save_scheme_button)
+        schemes.addWidget(self.delete_scheme_button)
         layout = QVBoxLayout(self)
+        layout.addLayout(schemes)
         layout.addWidget(criterion)
         layout.addWidget(bounds)
         layout.addWidget(self.errors)
@@ -96,6 +114,7 @@ class StabilityPanel(QWidget):
             spin.valueChanged.connect(lambda *_: self._emit())
         self.reset.clicked.connect(self.resetRequested)
         self.set_spec(StabilitySpec())
+        self._fill_schemes()
 
     def _on_variable(self, *_) -> None:
         if not self._quiet:
@@ -136,6 +155,7 @@ class StabilityPanel(QWidget):
         self._show_variable()
         self.errors.hide()
         self._quiet = False
+        self._fill_schemes()
 
     def _emit(self) -> None:
         if self._quiet:
@@ -143,10 +163,73 @@ class StabilityPanel(QWidget):
         spec = self.spec()
         self._edges_for[spec.variable] = tuple(spec.edges)
         errors = spec.errors()
+        self._fill_schemes()
         self.errors.setText("; ".join(errors))
         self.errors.setVisible(bool(errors))
         if not errors:
             self.changed.emit()
+
+    # --- named schemes ------------------------------------------------------------------------
+
+    def _fill_schemes(self) -> None:
+        """The saved schemes, showing the one that is what's set (if any)."""
+        if not hasattr(self, "scheme"):
+            return
+        current = self.schemes.name_of(self.spec())
+        self.scheme.blockSignals(True)
+        self.scheme.clear()
+        self.scheme.addItem("(unsaved changes)" if self.schemes.items else "(no saved schemes)", None)
+        for name in sorted(self.schemes.items, key=str.lower):
+            self.scheme.addItem(name, name)
+            self.scheme.setItemData(self.scheme.count() - 1, self.schemes.items[name].describe(),
+                                    Qt.ItemDataRole.ToolTipRole)
+        self.scheme.setCurrentIndex(max(self.scheme.findData(current), 0) if current else 0)
+        self.scheme.blockSignals(False)
+        self.delete_scheme_button.setEnabled(current is not None)
+
+    def _on_scheme_picked(self, *_) -> None:
+        name = self.scheme.currentData()
+        if name is not None:
+            self.load_scheme(name)
+
+    def load_scheme(self, name: str) -> None:
+        """Classify by a saved scheme (every view follows)."""
+        spec = self.schemes.items[name]
+        self.set_spec(spec)
+        self._emit()
+
+    def save_scheme(self, name: str) -> None:
+        name = name.strip()
+        if not name:
+            raise ValueError("a scheme needs a name")
+        errors = self.spec().errors()
+        if errors:
+            raise ValueError("; ".join(errors))
+        self.schemes.put(name, self.spec())
+        self._fill_schemes()
+
+    def _ask_save(self) -> None:
+        offered = self.scheme.currentData() or ""
+        name, ok = QInputDialog.getText(self, "Save the stability scheme", "name:", text=offered)
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in self.schemes.items and self.schemes.items[name] != self.spec():
+            answer = QMessageBox.question(self, "Save the stability scheme",
+                                          f"Replace the saved scheme “{name}”?\n\n{self.schemes.items[name].describe()}")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            self.save_scheme(name)
+        except ValueError as exc:
+            self.errors.setText(str(exc))
+            self.errors.show()
+
+    def delete_scheme(self, name: str | None = None) -> None:
+        name = name or self.scheme.currentData()
+        if name is not None:
+            self.schemes.remove(name)
+            self._fill_schemes()
 
     def show_in_use(self, text: str) -> None:
         self.in_use.setText(text)

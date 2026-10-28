@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib import colormaps, patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Polygon
 
@@ -18,7 +19,7 @@ from matplotlib.patches import Polygon
 STABILITY_MARKERS = {"strongly unstable": "v", "unstable": "^", "neutral": "o", "stable": "D",
                      "strongly stable": "s"}
 KINDS = ("timelines", "distributions", "scatter", "profiles", "composite", "diurnal", "anisotropy", "windrose",
-         "compare")
+         "compare", "hodograph")
 
 
 def new_figure(size: tuple[float, float], nrows: int = 1, ncols: int = 1, **kwargs):
@@ -108,12 +109,20 @@ def _distributions(spec, size):
 
 
 def _scatter(spec, size):
-    """spec: xlabel, ylabel, groups [{label, color, x, y}], lines [{label, color, x, y, dashed}],
-    selected {x, y} | None, note, log_x, log_y, xlim, ylim."""
+    """spec: xlabel, ylabel, groups [{label, color, x, y, c?}], lines [{label, color, x, y, dashed}],
+    vlines [{x, label}], selected {x, y} | None, note, log_x, log_y, xlim, ylim, and z {label, cmap,
+    log, lim} where a group's points are colored by their c."""
     fig, axes = new_figure(size)
     ax = axes[0, 0]
     n = sum(len(g["x"]) for g in spec["groups"])
+    z = spec.get("z")
     for g in spec["groups"]:
+        if "c" in g and z is not None:
+            norm = (LogNorm if z["log"] else Normalize)(*z["lim"])
+            points = ax.scatter(g["x"], g["y"], s=4 if n > 5000 else 8, c=g["c"], cmap=z["cmap"], norm=norm,
+                                alpha=0.75, lw=0)
+            fig.colorbar(points, ax=ax, label=z["label"])
+            continue
         ax.scatter(g["x"], g["y"], s=4 if n > 5000 else 8, color=g["color"], alpha=0.6, lw=0,
                    marker=STABILITY_MARKERS.get(g["label"], "o"), label=g["label"] or None)
     sel = spec.get("selected")
@@ -122,6 +131,8 @@ def _scatter(spec, size):
     for line in spec.get("lines", []):
         ax.plot(line["x"], line["y"], color=line["color"], lw=1.4, ls="--" if line.get("dashed") else "-",
                 label=line["label"])
+    for line in spec.get("vlines", []):
+        ax.axvline(line["x"], color="#6a3d9a", lw=1.0, ls="--", label=f"x {line['label']}")
     if spec.get("log_x"):
         ax.set_xscale("log")
     if spec.get("log_y"):
@@ -178,7 +189,7 @@ def _composite(spec, size):
     ax.set_xscale("log")
     if spec.get("log_y"):
         ax.set_yscale("log")
-    ax.set_xlabel(r"$\tau$ (s)")
+    ax.set_xlabel(spec.get("xlabel", r"$\tau$ (s)"))
     ax.set_ylabel(spec["ylabel"])
     ax.set_title(spec["title"], fontsize=9, loc="left")
     ax.legend(title="Height", fontsize=7, title_fontsize=7, frameon=False, loc="center left", bbox_to_anchor=(1, 0.5))
@@ -290,5 +301,32 @@ def _compare(spec, size):
     ax.set_xlabel(spec["xlabel"])
     ax.set_ylabel(spec["ylabel"])
     ax.set_title(spec["title"], fontsize=9, loc="left")
+    _legend(ax)
+    return fig
+
+
+def _hodograph(spec, size):
+    """spec: lines [{label, color, u, v, heights, mesonet (u, v) | None}], labels, title."""
+    fig, axes = new_figure(size)
+    ax = axes[0, 0]
+    ax.axhline(0, color="#999999", lw=0.8)
+    ax.axvline(0, color="#999999", lw=0.8)
+    cmap = colormaps["viridis"]
+    for line in spec["lines"]:
+        ax.plot(line["u"], line["v"], color=line["color"], lw=1.6, label=line["label"] or None)
+        order = np.argsort(np.argsort(line["heights"]))
+        ax.scatter(line["u"], line["v"], s=28, c=[cmap(0.92 * i / max(len(order) - 1, 1)) for i in order],
+                   edgecolors=line["color"], lw=0.6, zorder=3)
+        if spec.get("labels"):
+            for u, v, h in zip(line["u"], line["v"], line["heights"]):
+                ax.annotate(f"{h:g} m", (u, v), xytext=(4, 0), textcoords="offset points", fontsize=7, va="center")
+        if line["mesonet"] is not None:
+            ax.scatter(*line["mesonet"], marker="*", s=110, color=line["color"], edgecolors="k", lw=0.5, zorder=4,
+                       label="mesonet 10 m" if line is spec["lines"][0] else None)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_xlabel("u, toward east (m/s)")
+    ax.set_ylabel("v, toward north (m/s)")
+    if spec.get("title"):
+        ax.set_title(spec["title"], fontsize=9, loc="left")
     _legend(ax)
     return fig

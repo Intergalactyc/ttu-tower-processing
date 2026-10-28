@@ -104,6 +104,9 @@ def _spec(kind):
         "windrose": {"roses": [{"title": "b7", "table": table, "bearings": [105.0]}], "speed_labels": ["a", "b", "c"],
                      "outer": 4.0},
         "compare": {"x": x, "y": x, "xlabel": "this", "ylabel": "other", "title": "b1"},
+        "hodograph": {"lines": [{"label": "stable", "color": "#2ca02c", "u": x[:3], "v": x[:3] * 0.5,
+                                 "heights": np.array([1.0, 10.0, 100.0]), "mesonet": (0.2, 0.1)}],
+                      "labels": True, "title": "all slots"},
     }[kind]
 
 
@@ -136,3 +139,14 @@ def test_spectra_matrix_and_boom_map_match_the_stored_rows(full_run):
     track = anisotropy.boom_track(index, boom, "mrd", int(map_slots.min()), int(map_slots.max()))
     track = track[np.isfinite(track["x"])]
     assert list(track["slot"]) == list(map_slots) and np.allclose(track["x"], x) and np.allclose(track["y"], y)
+
+
+def test_log_bins_are_equal_in_log_x_with_geometric_centres():
+    from ttu_tower.viewer import curvefits
+    x = np.array([-1.0, 0.0, 1.0, 2.0, 9.0, 11.0, 90.0, 110.0, 900.0])
+    y = np.arange(x.size, dtype=float)
+    cx, cy = curvefits.bin_average(x, y, 3, bin_range=(1.0, 1000.0), log=True)
+    assert np.allclose(cx, [np.sqrt(10.0), np.sqrt(1000.0), np.sqrt(1e5)])  # decades 1-10, 10-100, 100-1000
+    assert np.allclose(cy, [np.mean([2.0, 3.0, 4.0]), np.mean([5.0, 6.0]), np.mean([7.0, 8.0])])
+    lin_x, _ = curvefits.bin_average(x, y, 3, bin_range=(1.0, 1000.0))
+    assert lin_x.size == 2  # equal linear bins: almost everything lands in the first

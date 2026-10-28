@@ -37,6 +37,8 @@ PROFILE_QUANTITIES = (
     ProfileQuantity("uw", "w'u'", "m²/s²", "uw", "cov", True),
     ProfileQuantity("wvpts", "w'θv'", "K m/s", "wvpts", "cov", True),
     ProfileQuantity("zeta", "ζ = z/L", "", "zeta", None, True),
+    ProfileQuantity("theta_star", "θ*", "K", "theta_star", None, True),
+    ProfileQuantity("n2_most", "N² (MOST)", "1/s²", "n2_most", None, True),
     ProfileQuantity("ils_u", "ILS u", "m", "ils_u", None, True),
 )
 
@@ -183,16 +185,17 @@ def fit_summary(across, variant: str) -> list[str]:
 
 
 def pair_table(across, stability_pair) -> pd.DataFrame:
-    """Ri_b and dθv/dz for every boom pair, the stability pair first."""
+    """Ri_b, dθv/dz and bulk N² for every boom pair, the stability pair first."""
+    columns = ["rib", "lapse_vpt", "n2_bulk"]
     pairs = across.table("pairs")
-    rows = pairs[pairs["variable"].isin(["rib", "lapse_vpt"])]
+    rows = pairs[pairs["variable"].isin(columns)]
     if rows.empty:
-        return pd.DataFrame(columns=["boom", "boom2", "rib", "lapse_vpt"])
+        return pd.DataFrame(columns=["boom", "boom2", *columns])
     wide = rows.pivot_table(index=["boom", "boom2"], columns="variable", values="value", aggfunc="first",
                             dropna=False).reset_index()
     wide.columns.name = None
-    for col in ("rib", "lapse_vpt"):
+    for col in columns:
         if col not in wide.columns:
             wide[col] = np.nan
     first = (wide["boom"] == stability_pair[0]) & (wide["boom2"] == stability_pair[1])
-    return pd.concat([wide[first], wide[~first]], ignore_index=True)[["boom", "boom2", "rib", "lapse_vpt"]]
+    return pd.concat([wide[first], wide[~first]], ignore_index=True)[["boom", "boom2", *columns]]

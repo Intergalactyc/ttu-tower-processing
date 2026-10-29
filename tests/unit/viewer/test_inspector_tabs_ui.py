@@ -170,6 +170,7 @@ def test_scatter_follows_the_interval_and_fits_only_when_asked(window, qtbot):
     window._refresh_distributions()
     assert 0 < scatter.x.size < whole
     assert scatter.fit_result is fitted and "earlier" in scatter.fit_status.text()  # kept, marked stale
+    scatter.fit_shown_bins.setChecked(False)
     scatter.fit_bins.setValue(5)
     scatter.run_fit()
     qtbot.waitUntil(lambda: scatter.fit_result is not fitted, timeout=60_000)
@@ -819,6 +820,7 @@ def test_scatter_log_axes_show_the_values_themselves(window, qtbot):
     assert axis.tickStrings([0.0, 1.0, 2.0], 1.0, 1.0) == ["1", "10", "100"]  # data is log10(x); ticks read x
     scatter.log_x.setChecked(False)
     assert not axis.log10 and "(log scale)" not in scatter.plot.getPlotItem().getAxis("bottom").labelText
+    scatter.fit_shown_bins.setChecked(False)
     scatter.fit_bins.setValue(10)
     scatter.fit_bin_log.setChecked(True)
     assert scatter._options().bin_log == scatter.fit_bin_log.isEnabled()
@@ -1254,6 +1256,7 @@ def test_several_fits_are_drawn_together_and_kept_in_a_view(window, qtbot):
     scatter.add_fit()  # a copy, then changed
     assert len(scatter.fits) == 2 and scatter.current == 1 and scatter.fits[1].color != scatter.fits[0].color
     scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("constrained linear"))
+    scatter.fit_shown_bins.setChecked(False)
     scatter.fit_bins.setValue(8)
     assert scatter.fits[0].spec.name == "linear" and scatter.fits[1].spec.bins == 8
     scatter.run_fit()  # every fit
@@ -1401,7 +1404,65 @@ def test_a_constrained_linear_fit_takes_its_intercept_and_old_views_still_load(w
     state = view_state.save(scatter, scatter.STATE_FIELDS)
     state["fit_name"] = {"data": "linear through origin", "text": "linear through origin"}  # a view saved before
     state["fits_state"]["fits"][0].update(name="linear through origin", settings={})
+    del state["fits_state"]["fits"][0]["shown_bins"], state["fit_shown_bins"]
     state.pop("fit_settings", None)
     assert "fit_name" not in view_state.restore(scatter, state, scatter.STATE_FIELDS)
     assert scatter.fit_name.currentData() == "constrained linear" and scatter.fit_settings["a"].text() == "0"
     assert scatter.fits[0].spec.settings == {"a": "0"}
+    assert not scatter.fit_shown_bins.isChecked()  # older fits had bins of their own
+
+
+def test_a_fit_in_ln_y_is_relative_and_both_fits_score_in_ln_y(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("constrained linear"))
+    assert scatter.fit_errors.isEnabled()
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    in_y, scores = scatter.fit_result.params["b"], scatter.current_entry.scores
+    assert scores["ln points"][1] == scatter._shown()[0].size and "ln y" in scatter.fit_list.item(0).text()
+    assert "In ln y" in scatter.fit_status.text()
+
+    scatter.fit_errors.setCurrentIndex(scatter.fit_errors.findData("ln y"))
+    assert "earlier" in scatter.fit_status.text()
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: "earlier" not in scatter.fit_status.text() and not scatter._fitting, timeout=60_000)
+    rel = scatter.current_entry.scores
+    assert scatter.fit_inputs[1].errors == "ln y" and "errors in ln y" in scatter.fit_list.item(0).text()
+    assert scatter.fit_result.params["b"] != pytest.approx(in_y)
+    assert rel["ln points"][0] <= scores["ln points"][0] + 1e-9 and rel["points"][0] >= scores["points"][0] - 1e-9
+    assert scatter.fits_state.get_state()["fits"][0]["errors"] == "ln y"
+
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("exponential"))  # always in ln y
+    assert not scatter.fit_errors.isEnabled() and "always fitted in ln y" in scatter.fit_errors.toolTip()
+    scatter.current_entry.spec = scatter._spec_from_form()
+    assert scatter._options().errors == "ln y" and "errors in ln y" not in scatter._describe(scatter.current_entry)
+
+
+def test_fits_take_the_displayed_bins_and_score_alike_with_the_overlay(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.mid.setChecked(True)
+    scatter.mid_bins.setValue(6)
+    assert scatter.fit_shown_bins.isChecked() and not scatter.fit_bins.isEnabled()
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    opts = scatter.fit_inputs[1]
+    assert opts.bin_count == 6 and opts.bin_method == "median" and opts.bin_range == scatter._binning[3]
+    assert "as displayed" in scatter.fit_list.item(0).text()
+    scores = scatter.current_entry.scores
+    assert scores["points"][1] == scatter._shown()[0].size and scores["bins"][1] == scatter.fit_result.n <= 6
+    assert scores["bins"][0] == pytest.approx(scatter.fit_result.rmse)  # fitted to those very bins
+    assert "displayed bins" in scatter.fit_status.text() and "points" in scatter.fit_list.item(0).text()
+
+    scatter.overlay.from_fit.click()  # the same curve as an overlay scores the same
+    drawn = scatter.overlay.scores
+    assert drawn["points"][1] == scores["points"][1] and drawn["bins"][1] == scores["bins"][1]
+    assert drawn["points"][0] == pytest.approx(scores["points"][0], rel=1e-4)
+    assert drawn["bins"][0] == pytest.approx(scores["bins"][0], rel=1e-4)
+    assert "displayed bins" in scatter.overlay.status.text()
+
+    scatter.fit_shown_bins.setChecked(False)  # bins of its own: none
+    assert scatter.fit_bins.isEnabled() and "earlier" in scatter.fit_status.text()
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: "earlier" not in scatter.fit_status.text() and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.n == scatter._shown()[0].size

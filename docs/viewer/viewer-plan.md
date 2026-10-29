@@ -785,8 +785,9 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
     - a binned median/mean line
     - y = x
     - the curve-fit catalogue of `curve_fits`: linear, constrained linear (intercept given; was "through origin"), power, log, exponential,
-      neutral log law, double linear (± through origin), ζ(Ri) and α(Ri). Each fit takes
-      x-percentile limits and optional binning (count, mean/median, minimum per bin).
+      neutral log law, double linear (and constrained double linear), ζ(Ri) and α(Ri). Each fit takes
+      x-percentile limits, optional binning (count, mean/median, minimum per bin), and least
+      squares in y or in ln y (relative errors).
   - Statistics: N, Pearson r, Spearman ρ, and Cohen's κ on signs.
   - The view frames the 1st–99th percentiles.
   - A click on a point opens the inspector.
@@ -1547,6 +1548,26 @@ viewed interval or the whole period like the others.
 - **Scatter: constrained linear, 2026-10-28.** "Linear through origin" became "constrained linear",
   y = a + b·x with the intercept a typed in (default 0). Views saved with the old name load as it
   with a = 0 (`curvefits.RENAMED`). A fit's settings are listed by their labels ("intercept 0.5").
+  "Double linear through origin" likewise became "constrained double linear" (intercept D, default 0).
+- **Scatter: fits on the displayed bins; RMSE alike for fits and the overlay, 2026-10-28.**
+  - A fit's bins are by default the binned line's ("as displayed": its count, mean/median, log
+    bins on a log x axis, and its span, the shown x's 0.5–99.5th percentiles; the points while
+    it's off). Unticking gives the fit bins of its own, as before. Views saved before keep theirs.
+  - Every fit and the overlay report RMSE over all the points shown where the curve is defined,
+    and over the displayed bins (the curve at the bin centres; by boom height, the overlay's own
+    bin values, its height varying point to point). A fit to bins of its own also reports those.
+- **Scatter: relative fit errors (least squares in ln y), 2026-10-28.**
+  - Why: least squares in y let the largest y decide a fit. A constrained linear φm(ζ) on log bins
+    moved strongly with the upper x percentile: b = Σx(y−a)/Σx², so each bin pulls like x².
+  - "errors: in y / relative (in ln y)" on each fit. In ln y it minimises Σ(ln y − ln f)² over the
+    positive y, starting from the fit in y (`curvefits._in_ln_y`). Points or bins with y ≤ 0 are
+    left out, and the status says how many.
+  - The power law in y keeps its y²-weighted log fit; in ln y it is unweighted. The fixed-exponent
+    power law in ln y is exact: ln a = mean(ln y − b·ln x).
+  - Fixed per curve: exponential and the double power law are always in ln y. ζ(Ri), whose y
+    changes sign, and α(Ri), fitted in pieces, are always in y.
+  - Every fit and the overlay also report RMSE in ln y over the points and the displayed bins,
+    where all the y scored are positive. Older views fit in y.
 - **Scatter: several fits, and fitting with or without the selection, 2026-10-26.**
   - **Fit to:** every point shown, only the selected (brushed) points, or all but them. The
     selection is part of such a fit's inputs, so a new lasso marks it earlier (or refits it with

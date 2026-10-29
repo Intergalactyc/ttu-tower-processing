@@ -108,6 +108,8 @@ class FitSpec:
     min_count: int = 1
     settings: dict = field(default_factory=dict)  # the curve's own settings, as typed
     subset: str = "all"  # "all" the points shown, only the "selected", or all but them ("unselected")
+    shown_bins: bool = True  # the bins of the plot's binned line (none while it's off), not its own
+    errors: str = "y"  # least squares in "y" or "ln y" (relative), unless the curve has its own
 
 
 class FitEntry:
@@ -117,6 +119,7 @@ class FitEntry:
         self.result = self.inputs = None  # the fit and what it was fitted to
         self.failed = None  # inputs it failed on: not retried by "auto"
         self.error = ""
+        self.scores = None  # RMSE over the points shown and over the displayed bins (see `_scores`)
         self.id = next(_fit_ids)
 
 
@@ -135,7 +138,8 @@ class _FitsState:
     def put_state(self, value) -> bool:
         fits = (value or {}).get("fits") or []
         fields = set(FitSpec.__dataclass_fields__)
-        specs = [_renamed(FitSpec(**{k: (tuple(v) if k == "pct" else v) for k, v in f.items() if k in fields}))
+        specs = [_renamed(FitSpec(**({"shown_bins": False} | {k: (tuple(v) if k == "pct" else v)  # older: own bins
+                                                                for k, v in f.items() if k in fields})))
                  for f in fits]
         self.view.set_fits(specs, int((value or {}).get("current", 0)), [bool(f.get("shown", True)) for f in fits])
         return True
@@ -168,7 +172,9 @@ class ScatterView(QWidget):
     STATE_FIELDS = ("source.0", "member.0", "source.1", "member.1", "source.2", "z_quantity", "z_variant", "member.2",
                     "display", "color_by", "log_x", "sides.x", "log_y", "sides.y", "log_z", "sides.z", "z_map",
                     "points_shown", "ring", "only_class", "trend", "mid", "mid_method", "mid_bins", "unit", "pct.0", "pct.1",
-                    "pct_show", "fit_bins", "fit_bin_method", "fit_bin_log", "fit_min_count", "fit_name", "fit_auto",
+                    "pct_show", "fit_bins", "fit_bin_method", "fit_bin_log", "fit_min_count", "fit_shown_bins",
+                    "fit_errors",
+                    "fit_name", "fit_auto",
                     "fit_settings", "fit_subset", "fits_state", "overlay", "overlay_on")  # saved in a view, restored in this order
 
     pointClicked = Signal(int, object)  # slot, the point's member (its boom, by height)
@@ -188,6 +194,7 @@ class ScatterView(QWidget):
         self.x = self.y = self.z = np.empty(0)
         self.point_member = None  # each point's boom, by height
         self.empty_reason = None
+        self._binning = None  # the binned line's (count, method, log, (lo, hi)), None while it's off
         self.fits: list[FitEntry] = [FitEntry(FitSpec(), _FIT)]
         self.current = 0  # the fit the form edits
         self._pending: set[int] = set()  # fits being fitted
@@ -304,6 +311,16 @@ class ScatterView(QWidget):
         self.fit_bin_log.toggled.connect(lambda *_: self._show_stats())
         self.fit_min_count = QSpinBox()
         self.fit_min_count.setRange(1, 10_000)
+        self.fit_shown_bins = QCheckBox("as displayed")
+        self.fit_shown_bins.setChecked(True)
+        self.fit_shown_bins.setToolTip("fit to the bins of the binned line (its count, mean/median and log bins, "
+                                       "over its span), or to the points while it's off; untick for bins of "
+                                       "the fit's own")
+        self.fit_shown_bins.toggled.connect(lambda *_: (self._show_stats(), self._enable_controls()))
+        self.fit_errors = QComboBox()
+        self.fit_errors.addItem("in y", "y")
+        self.fit_errors.addItem("relative (in ln y)", "ln y")
+        self.fit_errors.currentIndexChanged.connect(lambda *_: self._show_stats())
         for w in (self.fit_name, self.fit_bin_method):
             w.currentIndexChanged.connect(lambda *_: (self._show_stats(), self._enable_controls()))
         for w in (*self.pct, self.fit_bins, self.fit_min_count):
@@ -419,8 +436,12 @@ class ScatterView(QWidget):
         pct_row.addWidget(QLabel("to"))
         pct_row.addWidget(self.pct[1])
         pct_row.addWidget(self.pct_show)
+        pct_row.addStretch(1)
+        pct_row.addWidget(QLabel("errors"))
+        pct_row.addWidget(self.fit_errors)
         form.addRow("x percentiles", pct_row)
         bin_row = QHBoxLayout()
+        bin_row.addWidget(self.fit_shown_bins)
         bin_row.addWidget(self.fit_bins)
         bin_row.addWidget(self.fit_bin_method)
         bin_row.addWidget(self.fit_bin_log)
@@ -433,6 +454,7 @@ class ScatterView(QWidget):
         self.overlay_on.setToolTip("draw y(x) typed by hand, in pieces over x ranges if need be; in the values "
                                    "plotted (−x where a log axis shows the negative side)")
         self.overlay = FunctionOverlay(HEIGHT_VARIABLES)
+        self.overlay.scores = None  # as a fit's: RMSE over the points and the displayed bins
         self.overlay_on.toggled.connect(lambda on: self.lower_tabs.setTabText(1, "overlay (on)" if on else "overlay"))
         self.overlay_on.toggled.connect(lambda *_: self.redraw())
         overlay_page = QWidget()
@@ -760,10 +782,19 @@ class ScatterView(QWidget):
             side.model().item(0).setEnabled(not box.isChecked())  # a log axis shows one side
             for i, has in enumerate((bool((values > 0).any()), bool((values < 0).any())), start=1):
                 side.model().item(i).setEnabled(has or side.currentIndex() == i)
-        binned = self.fit_bins.value() > 0
-        self.fit_bin_method.setEnabled(binned)
+        own = not self.fit_shown_bins.isChecked()
+        binned = self.fit_bins.value() > 0 if own else self.mid.isChecked()
+        self.fit_bins.setEnabled(own)
+        self.fit_bin_method.setEnabled(own and binned)
         self.fit_min_count.setEnabled(binned)
-        self.fit_bin_log.setEnabled(binned and bool((self.x > 0).any()))
+        self.fit_bin_log.setEnabled(own and binned and bool((self.x > 0).any()))
+        name = self.fit_name.currentData()
+        own = name in curvefits.IN_LN_Y or name in curvefits.IN_Y
+        self.fit_errors.setEnabled(not own)
+        self.fit_errors.setToolTip(
+            f"{name} is always fitted in {curvefits.errors_in(name)}" if own else
+            "least squares in y, or in ln y: relative errors, so each decade of y weighs alike (in y the "
+            "largest y, often at the largest x, decide the fit); only positive y")
         curves = self.fit_name.currentData() is not None or any(e.spec.name for e in self.fits)
         self.fit_button.setEnabled(curves and self.x.size > 1 and not self._fitting)
         self.overlay.from_fit.setEnabled(self.fit_result is not None)
@@ -779,6 +810,7 @@ class ScatterView(QWidget):
     def _redraw(self) -> None:
         self._enable_controls()
         self.drawn_lines, self.drawn_groups, self.drawn_vlines, self.drawn_z = [], [], [], None
+        self._binning = None
         self.plot.clear()
         self.legend.clear()
         self.zbar.hide()
@@ -821,26 +853,32 @@ class ScatterView(QWidget):
                 self._line(grid, res.func(grid), "#ff7f0e", f"trend {res.label}")
             except ValueError:
                 pass
+        bins = None
         if self.mid.isChecked():
             log_bins = self.log_x.isChecked()  # equal bins in what's shown: log bins on a log x axis
-            cx, cy = curvefits.bin_average(x, y, self.mid_bins.value(), self.mid_method.currentText(),
-                                           bin_range=(lo, hi), log=log_bins)
-            self._line(cx, cy, "#d62728", f"{self.mid_method.currentText()}, {self.mid_bins.value()}"
-                                          f"{' log' if log_bins else ''} bins", width=2)
+            self._binning = (self.mid_bins.value(), self.mid_method.currentText(), log_bins, (float(lo), float(hi)))
+            bins = curvefits.bin_average(x, y, *self._binning[:2], bin_range=(lo, hi), log=log_bins)
+            self._line(*bins, "#d62728", f"{self.mid_method.currentText()}, {self.mid_bins.value()}"
+                                         f"{' log' if log_bins else ''} bins", width=2)
         if self.unit.isChecked():
             self._line(grid, grid, "#555555", "y = x", dash=True)
         several = len(self.fits) > 1
         for i, entry in enumerate(self.fits):
-            if entry.result is None or not entry.shown:
+            entry.scores = None
+            if entry.result is None:
                 continue
             with warnings.catch_warnings(), np.errstate(all="ignore"):
                 warnings.simplefilter("ignore")
+                entry.scores = self._scores(entry.result.func(x), y, bins,
+                                            entry.result.func(bins[0]) if bins is not None else None)
+                if not entry.shown:
+                    continue
                 fy = entry.result.func(grid)
             stale = entry.inputs != self._inputs_for(entry.spec)
             label = (f"{i + 1}. {self._describe(entry)}" if several else entry.inputs[0]) + (" (earlier)" if stale else "")
             self._line(grid, fy, entry.color, label, width=2.8 if several and i == self.current else 2.2, dash=stale)
         if self.overlay_on.isChecked():
-            self._draw_overlay(x, y)
+            self._draw_overlay(x, y, bins)
         if self.pct_show.isChecked():
             pct = [self.pct[0].value(), self.pct[1].value()]
             for p, at in zip(pct, np.percentile(x, pct)):
@@ -964,9 +1002,9 @@ class ScatterView(QWidget):
         breaks = np.flatnonzero(np.diff(expression.piece_of(grid, ranges)) != 0) + 1
         return np.insert(grid, breaks, np.nan), np.insert(gy, breaks, np.nan)
 
-    def _draw_overlay(self, x, y) -> None:
+    def _draw_overlay(self, x, y, bins=None) -> None:
         """The typed function over the shown points' x span (by boom height, a curve per boom at its own
-        height), and how far the points lie from it.
+        height), and how far the points and the displayed `bins` lie from it.
         """
         made = self.overlay.function()
         if made is None:
@@ -995,14 +1033,22 @@ class ScatterView(QWidget):
             gx, gy = self._overlay_curve(func, ranges, float(x.min()), float(x.max()), values)
             self._line(gx, gy, _OVERLAY, "overlay", width=2.2, gaps=True)
             at = func(x, **values)
-        ok = np.isfinite(at)
         if unread:
             return  # the status says what couldn't be read
-        if ok.any():
-            rmse = float(np.sqrt(np.mean((y[ok] - at[ok]) ** 2)))
-            self.overlay.status.setText(f"RMSE {rmse:.3g} over the {int(ok.sum())} points where it's defined")
-        else:
-            self.overlay.status.setText("not defined at any point shown")
+        at_bins = None
+        if bins is not None and self.by_height() and self._drawn_members is not None:
+            # each point's height differs: the function's own bin values, over the points where it's defined
+            count, method, log, span = self._binning
+            ok = np.isfinite(at)
+            bins = curvefits.bin_average(x[ok], y[ok], count, method, bin_range=span, log=log)
+            at_bins = curvefits.bin_average(x[ok], at[ok], count, method, bin_range=span, log=log)[1]
+        elif bins is not None:
+            with np.errstate(all="ignore"):
+                at_bins = func(bins[0], **values)
+        scores = self._scores(at, y, bins, at_bins)
+        self.overlay.scores = scores
+        self.overlay.status.setText(self._rmse_text(scores) if scores["points"][1]
+                                    else "not defined at any point shown")
 
     def _overlay_from_fit(self) -> None:
         if self.fit_result is None:
@@ -1035,13 +1081,14 @@ class ScatterView(QWidget):
         return FitSpec(self.fit_name.currentData(), (self.pct[0].value(), self.pct[1].value()), self.fit_bins.value(),
                        self.fit_bin_method.currentText(), self.fit_bin_log.isChecked(), self.fit_min_count.value(),
                        {arg: edit.text() for arg, edit in self.fit_settings.items()},
-                       self.fit_subset.currentData() or "all")
+                       self.fit_subset.currentData() or "all", self.fit_shown_bins.isChecked(),
+                       self.fit_errors.currentData() or "y")
 
     def _form_from_spec(self, spec: "FitSpec") -> None:
         """Show a fit's options in the form (which then edits that fit)."""
         self._loading_form = True
         widgets = (self.fit_name, *self.pct, self.fit_bins, self.fit_bin_method, self.fit_bin_log, self.fit_min_count,
-                   self.fit_subset)
+                   self.fit_subset, self.fit_shown_bins, self.fit_errors)
         for w in widgets:
             w.blockSignals(True)
         self.fit_name.setCurrentIndex(max(self.fit_name.findData(spec.name), 0))
@@ -1052,16 +1099,63 @@ class ScatterView(QWidget):
         self.fit_bin_log.setChecked(spec.bin_log)
         self.fit_min_count.setValue(spec.min_count)
         self.fit_subset.setCurrentIndex(max(self.fit_subset.findData(spec.subset), 0))
+        self.fit_shown_bins.setChecked(spec.shown_bins)
+        self.fit_errors.setCurrentIndex(max(self.fit_errors.findData(spec.errors), 0))
         for w in widgets:
             w.blockSignals(False)
         self._build_fit_settings(spec.settings)
         self._loading_form = False
 
     def _options_for(self, spec: "FitSpec") -> curvefits.FitOptions:
+        if spec.shown_bins:
+            count, method, log, span = self._binning or (0, spec.bin_method, False, None)
+        else:
+            count, method, log, span = spec.bins, spec.bin_method, spec.bin_log, None
         return curvefits.FitOptions(pct_x=spec.pct if tuple(spec.pct) != (0.0, 100.0) else None,
-                                    bin_count=spec.bins or None, bin_method=spec.bin_method,
-                                    bin_min_count=spec.min_count,
-                                    bin_log=spec.bin_log and spec.bins > 0 and bool((self.x > 0).any()))
+                                    bin_count=count or None, bin_method=method, bin_min_count=spec.min_count,
+                                    bin_log=log and count > 0 and bool((self.x > 0).any()),
+                                    bin_range=span if count else None,
+                                    errors=curvefits.errors_in(spec.name, spec.errors))
+
+    @staticmethod
+    def _scores(at, y, bins, at_bins) -> dict:
+        """RMSE and N over the points shown, and over the displayed bins (None while there are none),
+        where the curve is defined: alike for every fit and the overlay. Also in ln y ("ln points",
+        "ln bins"), where every y scored is positive.
+        """
+        def ln_rmse(f, v):
+            f, v = np.asarray(f, dtype=float), np.asarray(v, dtype=float)
+            ok = np.isfinite(f) & np.isfinite(v)
+            if not ok.any() or (v[ok] <= 0).any():
+                return None
+            with np.errstate(all="ignore"):
+                return curvefits.rmse(np.log(f[ok]), np.log(v[ok]))
+
+        out = {"points": curvefits.rmse(at, y), "bins": None, "ln points": ln_rmse(at, y), "ln bins": None}
+        if bins is not None and at_bins is not None:
+            out["bins"] = curvefits.rmse(at_bins, bins[1])
+            out["ln bins"] = ln_rmse(at_bins, bins[1])
+        return out
+
+    @staticmethod
+    def _rmse_text(scores: dict | None, short: bool = False) -> str:
+        if scores is None:
+            return "RMSE —"
+        (r, n), b = scores["points"], scores["bins"]
+        lp, lb = scores.get("ln points"), scores.get("ln bins")
+        if short:
+            text = f"RMSE {r:.3g} points" + (f", {b[0]:.3g} bins" if b is not None else "")
+            if lp is not None:
+                text += f"; ln y {lp[0]:.3g}" + (f", {lb[0]:.3g}" if lb is not None else "")
+            return text
+        text = f"RMSE {r:.3g} over the {n} points shown where it's defined"
+        if b is not None:
+            text += f"; {b[0]:.3g} over the {b[1]} displayed bins" if b[1] else "; not defined in any displayed bin"
+        if lp is not None:
+            text += f". In ln y: {lp[0]:.3g} over {lp[1]} points"
+            if lb is not None:
+                text += f", {lb[0]:.3g} over {lb[1]} bins"
+        return text
 
     def _options(self) -> curvefits.FitOptions:
         return self._options_for(self._spec_from_form())
@@ -1215,10 +1309,14 @@ class ScatterView(QWidget):
         parts = [spec.name or "none"]
         if tuple(spec.pct) != (0.0, 100.0):
             parts.append(f"x {spec.pct[0]:g}–{spec.pct[1]:g} %")
-        if spec.bins:
-            parts.append(f"{spec.bins} {spec.bin_method}{' log' if spec.bin_log else ''} bins")
+        opts = self._options_for(spec)
+        if opts.bin_count:
+            parts.append(f"{opts.bin_count} {opts.bin_method}{' log' if opts.bin_log else ''} bins"
+                         f"{' as displayed' if spec.shown_bins else ''}")
         if spec.subset != "all":
             parts.append("selected only" if spec.subset == "selected" else "without the selection")
+        if spec.errors == "ln y" and spec.name not in curvefits.IN_LN_Y | curvefits.IN_Y:
+            parts.append("errors in ln y")
         labels = {k: label for k, (label, _) in curvefits.FIT_SETTINGS.get(spec.name, {}).items()}
         parts += [f"{labels.get(k, k)} {v}" for k, v in spec.settings.items()]
         return ", ".join(parts)
@@ -1230,7 +1328,7 @@ class ScatterView(QWidget):
             text = f"{i + 1}. {self._describe(entry)}"
             if entry.result is not None:
                 stale = entry.inputs != self._inputs_for(entry.spec)
-                text += f": RMSE {entry.result.rmse:.3g}" + (" (earlier)" if stale else "")
+                text += f": {self._rmse_text(entry.scores, short=True)}" + (" (earlier)" if stale else "")
             elif entry.error:
                 text += ": failed"
             item = QListWidgetItem(text)
@@ -1315,8 +1413,13 @@ class ScatterView(QWidget):
             return
         params = ", ".join(f"{k} {v:.4g}" for k, v in res.params.items())
         opts = entry.inputs[1]
-        text = (f"<b>{res.label}</b> ({params}; fitted to {res.n} {'bins' if opts.bin_count else 'points'}, "
-                f"RMSE {res.rmse:.3g})")
+        text = f"<b>{res.label}</b> ({params}; fitted to {res.n} {'bins' if opts.bin_count else 'points'})"
+        if entry.scores is not None:
+            text += f" — {self._rmse_text(entry.scores)}"
+            if opts.bin_count and not entry.spec.shown_bins:
+                text += f"; {res.rmse:.3g} over its own {res.n} bins"
+        if res.notes:
+            text += " — " + "; ".join(res.notes)
         if entry.inputs != now:
             if failed_now:
                 text += (f" — <span style='color:#b00'>{entry.error}; the curve is the earlier one</span>"

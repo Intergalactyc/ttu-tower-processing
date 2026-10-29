@@ -69,6 +69,7 @@ def test_a_saved_view_reopens_the_same_state(qtbot, full_run):
     first.diurnal.member.setCurrentIndex(first.diurnal.member.count() - 1)
     first.right_tabs.setCurrentWidget(first.scatter)
     first.scatter.log_x.setChecked(True)
+    first.scatter.fit_shown_bins.setChecked(False)
     first.scatter.fit_bins.setValue(12)
     first.dists[0].side.setCurrentIndex(first.dists[0].side.findData("abs"))
     first.composite.spectrum.setCurrentIndex(first.composite.spectrum.findData("ww"))

@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 from scipy import stats as sp_stats
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, least_squares
 
 from ttu_tower.math.fits import constrained_linear_fit, log_fit, ls_linear_fit, power_fit
 from ttu_tower.physics.constants import KAPPA
@@ -34,6 +34,8 @@ class FitOptions:
     bin_method: str = "mean"
     bin_min_count: int = 1
     bin_log: bool = False  # bins equal in log x (only positive x is binned)
+    bin_range: tuple[float, float] | None = None  # the bins' span (else the points' x span)
+    errors: str = "y"  # least squares in "y", or in "ln y" (relative errors; positive y only)
 
 
 def bin_average(x, y, bin_count: int, method: str = "mean", bin_range=None, min_count: int = 1, log: bool = False):
@@ -72,46 +74,99 @@ def prepare(x, y, opts: FitOptions) -> tuple[np.ndarray, np.ndarray]:
             keep = (v >= lim[0]) & (v <= lim[1])
             x, y = x[keep], y[keep]
     if opts.bin_count:
-        x, y = bin_average(x, y, opts.bin_count, opts.bin_method, min_count=opts.bin_min_count, log=opts.bin_log)
+        x, y = bin_average(x, y, opts.bin_count, opts.bin_method, bin_range=opts.bin_range,
+                           min_count=opts.bin_min_count, log=opts.bin_log)
     return x, y
 
 
-# --- the fits (each core takes the prepared x, y) ------------------------------------------
+def rmse(f, y) -> tuple[float, int]:
+    """(RMSE of y about the curve's values f, N) where both are finite."""
+    f, y = np.asarray(f, dtype=float), np.asarray(y, dtype=float)
+    ok = np.isfinite(f) & np.isfinite(y)
+    return (float(np.sqrt(np.mean((y[ok] - f[ok]) ** 2))) if ok.any() else np.nan), int(ok.sum())
 
-def _linear(x, y):
+
+# --- the fits (each core takes the prepared x, y; `relative`: least squares in ln y) ---------
+
+def _in_ln_y(model, x, y, p0, lower=None, upper=None) -> tuple:
+    """The parameters of `model(x, *p)` minimising Σ(ln y − ln f)² over the positive y, from p0
+    (its fit in y): relative errors, so every decade of y weighs alike.
+    """
+    keep = y > 0
+    x, ly = x[keep], np.log(y[keep])
+    if ly.size < len(p0):
+        raise ValueError(f"only {ly.size} points (or bins) with y > 0, which errors in ln y need")
+    if not np.all(np.isfinite(p0)):
+        raise ValueError("the fit in y it starts from failed")
+    eps = 1e-6 * float(np.exp(np.median(ly)))
+
+    def resid(p):
+        with np.errstate(all="ignore"):
+            f = np.asarray(model(x, *p), dtype=float)
+        # below eps, ln f goes on as its tangent: a curve dipping to 0 or below is pushed back up
+        return np.where(f > eps, np.log(np.maximum(f, eps)), np.log(eps) + (f - eps) / eps) - ly
+
+    n = len(p0)
+    res = least_squares(resid, np.asarray(p0, dtype=float), x_scale="jac",
+                        bounds=(lower if lower is not None else [-np.inf] * n, upper if upper is not None else [np.inf] * n))
+    with np.errstate(all="ignore"):
+        if not (np.asarray(model(x, *res.x), dtype=float) > 0).all():
+            raise ValueError("no curve of this form stays above 0 at every point with y > 0, as errors in ln y need")
+    return tuple(float(v) for v in res.x)
+
+
+def _linear(x, y, relative=False):
     a, b = ls_linear_fit(x, y)
+    if relative:
+        a, b = _in_ln_y(lambda v, a, b: a + b * v, x, y, [a, b])
     return lambda v: a + b * v, {"a": a, "b": b}, f"y = {a:.4g} + {b:.4g}·x"
 
 
-def _constrained(x, y, a=0.0):
+def _constrained(x, y, a=0.0, relative=False):
     """y = a + b·x with the intercept a given."""
     _, b = constrained_linear_fit(x, y, a=a)
+    if relative:
+        (b,) = _in_ln_y(lambda v, b: a + b * v, x, y, [b])
     label = f"y = {b:.4g}·x" if a == 0 else f"y = {a:g} + {b:.4g}·x (intercept fixed)"
     return lambda v: a + b * np.asarray(v, dtype=float), {"a": a, "b": b}, label
 
 
-def _power(x, y):
+def _power(x, y, relative=False):
+    """In ln y, weighted by y² (close to errors in y), or unweighted when `relative`."""
     keep = (x > 0) & (y > 0)
-    a, b = power_fit(x[keep], y[keep])
+    if relative:
+        ln_a, b = ls_linear_fit(np.log(x[keep]), np.log(y[keep]))
+        a = float(np.exp(ln_a))
+    else:
+        a, b = power_fit(x[keep], y[keep])
     return lambda v: a * np.asarray(v) ** b, {"a": a, "b": b}, f"y = {a:.4g}·x^{b:.4g}"
 
 
-def _power_fixed(x, y, b=0.5):
-    """y = a·x^b with b given: least squares in y (as the fit through the origin),
-    a = Σ y·x^b / Σ x^2b, over the positive x.
+def _power_fixed(x, y, b=0.5, relative=False):
+    """y = a·x^b with b given: least squares in y (as the constrained linear fit),
+    a = Σ y·x^b / Σ x^2b, over the positive x; when `relative`, in ln y,
+    ln a = mean(ln y − b·ln x), over the positive x and y.
     """
     keep = x > 0
-    xb = x[keep] ** b
-    denom = np.sum(xb * xb)
-    if not np.isfinite(denom) or denom == 0:
-        raise ValueError("no positive x to fit")
-    a = float(np.sum(y[keep] * xb) / denom)
+    if relative:
+        keep &= y > 0
+        if not keep.any():
+            raise ValueError("no point with positive x and y to fit")
+        a = float(np.exp(np.mean(np.log(y[keep]) - b * np.log(x[keep]))))
+    else:
+        xb = x[keep] ** b
+        denom = np.sum(xb * xb)
+        if not np.isfinite(denom) or denom == 0:
+            raise ValueError("no positive x to fit")
+        a = float(np.sum(y[keep] * xb) / denom)
     return lambda v: a * np.asarray(v, dtype=float) ** b, {"a": a, "b": b}, f"y = {a:.4g}·x^{b:g} (exponent fixed)"
 
 
-def _log(x, y):
+def _log(x, y, relative=False):
     keep = x > 0
     a, b = log_fit(x[keep], y[keep])
+    if relative:
+        a, b = _in_ln_y(lambda v, a, b: a + b * np.log(v), x[keep], y[keep], [a, b])
     return lambda v: a + b * np.log(v), {"a": a, "b": b}, f"y = {a:.4g} + {b:.4g}·ln x"
 
 
@@ -122,9 +177,12 @@ def _exponential(x, y):
     return lambda v: A * B ** np.asarray(v), {"A": A, "B": B}, f"y = {A:.4g}·{B:.4g}^x"
 
 
-def _loglaw(x, y):
+def _loglaw(x, y, relative=False):
     keep = x > 0
     ustar, z0 = neutral_loglaw_fit(x[keep], y[keep])
+    if relative:
+        ustar, z0 = _in_ln_y(lambda v, u, z: u / KAPPA * np.log(v / z), x[keep], y[keep], [ustar, z0],
+                             lower=[-np.inf, 1e-12])
     return (lambda v: ustar / KAPPA * np.log(np.asarray(v) / z0), {"ustar": ustar, "z0": z0},
             f"y = u*/κ·ln(x/z0): u* = {ustar:.4g}, z0 = {z0:.4g}")
 
@@ -133,7 +191,7 @@ def _double_linear_model(x, A, B, C, D):
     return (B - A) * C * (np.exp(-x / C) - 1) + B * x + D
 
 
-def _double_linear(x, y, intercept=None):
+def _double_linear(x, y, intercept=None, relative=False):
     a0, b0 = ls_linear_fit(x, y)
     c0 = max((x.max() - x.min()) / 4, 1e-6)
     if intercept is None:
@@ -143,6 +201,11 @@ def _double_linear(x, y, intercept=None):
         D = intercept
         (A, B, C), *_ = curve_fit(lambda v, A, B, C: _double_linear_model(v, A, B, C, D), x, y, p0=[b0, b0, c0],
                                   maxfev=5000, bounds=([-np.inf, -np.inf, 1e-9], [np.inf] * 3))
+    if relative and intercept is None:
+        A, B, C, D = _in_ln_y(_double_linear_model, x, y, [A, B, C, D], lower=[-np.inf, -np.inf, 1e-9, -np.inf])
+    elif relative:
+        A, B, C = _in_ln_y(lambda v, A, B, C: _double_linear_model(v, A, B, C, D), x, y, [A, B, C],
+                           lower=[-np.inf, -np.inf, 1e-9])
     return (lambda v: _double_linear_model(np.asarray(v, dtype=float), A, B, C, D),
             {"A": A, "B": B, "C": C, "D": D}, f"double linear: slopes {A:.4g} → {B:.4g}, scale {C:.4g}, y(0) {D:.4g}")
 
@@ -238,7 +301,8 @@ FITS: dict[str, Callable] = {
     "exponential": _exponential,
     "neutral log law (x = height)": _loglaw,
     "double linear": _double_linear,
-    "double linear through origin": lambda x, y: _double_linear(x, y, intercept=0.0),
+    "constrained double linear": lambda x, y, D=0.0, relative=False: _double_linear(x, y, intercept=D,
+                                                                                    relative=relative),
     "ζ(Ri) (stability parameter)": _sparam_ri,
     ALPHA_RI: _alpha_ri,
 }
@@ -246,12 +310,23 @@ FITS: dict[str, Callable] = {
 # fits with settings of their own: name -> {argument: (label, default)}
 FIT_SETTINGS: dict[str, dict[str, tuple[str, float]]] = {
     "constrained linear": {"a": ("intercept", 0.0)},
+    "constrained double linear": {"D": ("intercept", 0.0)},
     "power law, fixed exponent": {"b": ("exponent", 0.5)},
     ALPHA_RI: {"ri_neutral_lo": ("neutral band from Ri", -0.05), "ri_neutral_hi": ("to Ri", 0.05),
                "ri_critical": ("Ri_c (α held above)", 0.25)},
 }
 
-RENAMED = {"linear through origin": ("constrained linear", {"a": "0"})}  # old name -> (name, its settings)
+IN_LN_Y = {"exponential", "double power law"}  # always fitted in ln y
+IN_Y = {"ζ(Ri) (stability parameter)", ALPHA_RI}  # always in y: ζ changes sign; α-Ri is fitted in pieces
+
+
+def errors_in(name: str | None, errors: str = "y") -> str:
+    """What a fit's least squares are in: "y" or "ln y" as chosen, unless the curve has its own."""
+    return "ln y" if name in IN_LN_Y else "y" if name in IN_Y else errors
+
+
+RENAMED = {"linear through origin": ("constrained linear", {"a": "0"}),  # old name -> (name, its settings)
+           "double linear through origin": ("constrained double linear", {"D": "0"})}
 
 
 def _n(v: float) -> str:
@@ -273,8 +348,8 @@ def fit_formula(name: str, params: dict, settings: dict | None = None) -> list[t
         "exponential": lambda: f"{p['A']}*{p['B']}^x",
         "neutral log law (x = height)": lambda: f"{p['ustar']}/{_n(KAPPA)}*ln(x/{p['z0']})",
         "double linear": lambda: f"({p['B']} - {p['A']})*{p['C']}*(exp(-x/{p['C']}) - 1) + {p['B']}*x + {p['D']}",
-        "double linear through origin": lambda: (f"({p['B']} - {p['A']})*{p['C']}*(exp(-x/{p['C']}) - 1) "
-                                                 f"+ {p['B']}*x"),
+        "constrained double linear": lambda: (f"({p['B']} - {p['A']})*{p['C']}*(exp(-x/{p['C']}) - 1) "
+                                              f"+ {p['B']}*x + {p['D']}"),
     }
     if name in simple:
         return [(simple[name](), "", "")]
@@ -292,11 +367,17 @@ def fit(name: str, x, y, opts: FitOptions = FitOptions(), **settings) -> FitResu
     xf, yf = prepare(x, y, opts)
     if xf.size < 2:
         raise ValueError("fewer than two points to fit")
-    func, params, label = FITS[name](xf, yf, **settings)
+    in_ln_y = errors_in(name, opts.errors) == "ln y"
+    relative = {"relative": True} if in_ln_y and name not in IN_LN_Y else {}
+    func, params, label = FITS[name](xf, yf, **settings, **relative)
     with np.errstate(all="ignore"):
         resid = yf - func(xf)
     rmse = float(np.sqrt(np.nanmean(resid ** 2))) if resid.size else np.nan
-    return FitResult(func=func, params={k: float(v) for k, v in params.items()}, label=label, n=int(xf.size), rmse=rmse)
+    notes = []
+    if in_ln_y and (yf <= 0).any():
+        notes.append(f"{int((yf <= 0).sum())} {'bins' if opts.bin_count else 'points'} with y ≤ 0 left out (ln y)")
+    return FitResult(func=func, params={k: float(v) for k, v in params.items()}, label=label, n=int(xf.size), rmse=rmse,
+                     notes=notes)
 
 
 # --- statistics --------------------------------------------------------------------------------

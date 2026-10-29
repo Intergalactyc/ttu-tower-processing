@@ -264,3 +264,56 @@ def test_a_constrained_linear_fit_keeps_the_intercept_given():
     assert off.params["a"] == 4.0 and off.func(np.array([0.0]))[0] == pytest.approx(4.0)
     assert "intercept fixed" in off.label and "intercept" not in curvefits.fit("constrained linear", x, 2 * x).label
     assert curvefits.FIT_SETTINGS["constrained linear"] == {"a": ("intercept", 0.0)}
+
+
+def test_relative_errors_weigh_each_decade_alike():
+    x, y = np.array([1.0, 10.0, 100.0]), np.array([2.0, 20.0, 260.0])
+    in_y = curvefits.fit("constrained linear", x, y)
+    assert in_y.params["b"] == pytest.approx(np.sum(x * y) / np.sum(x * x))  # the top point decides
+    rel = curvefits.fit("constrained linear", x, y, curvefits.FitOptions(errors="ln y"))
+    assert rel.params["b"] == pytest.approx((2.0 * 2.0 * 2.6) ** (1 / 3), rel=1e-6)  # ln b = mean ln(y/x)
+    power = curvefits.fit("power law", x, y, curvefits.FitOptions(errors="ln y"))
+    slope, ln_a = np.polyfit(np.log(x), np.log(y), 1)
+    assert power.params["b"] == pytest.approx(slope) and power.params["a"] == pytest.approx(np.exp(ln_a))
+    fixed = curvefits.fit("power law, fixed exponent", x, y, curvefits.FitOptions(errors="ln y"), b=1.0)
+    assert fixed.params["a"] == pytest.approx(rel.params["b"], rel=1e-6)
+
+
+@pytest.mark.parametrize("name, settings", [("linear", {}), ("logarithmic", {}), ("double linear", {}),
+                                            ("constrained double linear", {"D": 1.0}),
+                                            ("neutral log law (x = height)", {})])
+def test_a_fit_in_ln_y_lowers_the_rmse_in_ln_y(name, settings):
+    rng = np.random.default_rng(3)
+    x = np.geomspace(2.0, 200.0, 80)
+    y = (1.0 + 0.4 * np.log(x)) * np.exp(rng.normal(0.0, 0.2, x.size)) * (1 + 3 * (x > 100))
+    def ln(r):  # undefined (inf) where the curve dips to 0 or below
+        f = r.func(x)
+        return np.sqrt(np.mean((np.log(y) - np.log(f)) ** 2)) if (f > 0).all() else np.inf
+
+    in_y = curvefits.fit(name, x, y, **settings)
+    rel = curvefits.fit(name, x, y, curvefits.FitOptions(errors="ln y"), **settings)
+    assert np.isfinite(ln(rel)) and ln(rel) < ln(in_y) and rel.rmse > in_y.rmse * (1 - 1e-6)
+
+
+def test_some_curves_keep_their_own_errors_and_y_at_or_below_0_is_left_out():
+    assert curvefits.errors_in("exponential", "y") == "ln y" and curvefits.errors_in("double power law") == "ln y"
+    assert curvefits.errors_in(curvefits.ALPHA_RI, "ln y") == "y" and curvefits.errors_in("linear", "ln y") == "ln y"
+    x = np.linspace(-2.0, 2.0, 41)
+    y = 0.8 * x
+    ri = [curvefits.fit("ζ(Ri) (stability parameter)", x, y, curvefits.FitOptions(errors=e)).params for e in ("y", "ln y")]
+    assert ri[0] == ri[1]
+    x, y = np.arange(1.0, 11.0), np.array([-1.0, 0.0] + [3.0 * v for v in range(3, 11)])
+    res = curvefits.fit("constrained linear", x, y, curvefits.FitOptions(errors="ln y"))
+    assert res.params["b"] == pytest.approx(3.0) and res.notes == ["2 points with y ≤ 0 left out (ln y)"]
+
+
+def test_a_constrained_double_linear_fit_keeps_its_intercept_and_bins_take_a_fixed_span():
+    x = np.linspace(0.0, 8.0, 200)
+    truth = curvefits._double_linear_model(x, 2.0, 0.5, 1.0, 1.5)
+    res = curvefits.fit("constrained double linear", x, truth, D=1.5)
+    assert res.params["D"] == 1.5 and res.params["A"] == pytest.approx(2.0, rel=1e-3) and res.rmse < 1e-6
+    assert curvefits.RENAMED["double linear through origin"] == ("constrained double linear", {"D": "0"})
+    opts = curvefits.FitOptions(bin_count=4, bin_range=(0.0, 16.0))  # bins 4 wide: only two hold points
+    bx, _ = curvefits.prepare(x[:-1], truth[:-1], opts)  # x < 8
+    assert bx == pytest.approx([2.0, 6.0])
+    assert curvefits.rmse([1.0, np.nan, 3.0], [2.0, 5.0, 3.0]) == (pytest.approx(np.sqrt(0.5)), 2)

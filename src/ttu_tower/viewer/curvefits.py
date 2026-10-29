@@ -83,9 +83,11 @@ def _linear(x, y):
     return lambda v: a + b * v, {"a": a, "b": b}, f"y = {a:.4g} + {b:.4g}·x"
 
 
-def _origin(x, y):
-    _, b = constrained_linear_fit(x, y, a=0.0)
-    return lambda v: b * v, {"b": b}, f"y = {b:.4g}·x"
+def _constrained(x, y, a=0.0):
+    """y = a + b·x with the intercept a given."""
+    _, b = constrained_linear_fit(x, y, a=a)
+    label = f"y = {b:.4g}·x" if a == 0 else f"y = {a:g} + {b:.4g}·x (intercept fixed)"
+    return lambda v: a + b * np.asarray(v, dtype=float), {"a": a, "b": b}, label
 
 
 def _power(x, y):
@@ -228,7 +230,7 @@ def _alpha_ri(x, y, ri_neutral_lo=-0.05, ri_neutral_hi=0.05, ri_critical=0.25):
 
 FITS: dict[str, Callable] = {
     "linear": _linear,
-    "linear through origin": _origin,
+    "constrained linear": _constrained,
     "power law": _power,
     "power law, fixed exponent": _power_fixed,
     "double power law": _double_power,
@@ -243,10 +245,13 @@ FITS: dict[str, Callable] = {
 
 # fits with settings of their own: name -> {argument: (label, default)}
 FIT_SETTINGS: dict[str, dict[str, tuple[str, float]]] = {
+    "constrained linear": {"a": ("intercept", 0.0)},
     "power law, fixed exponent": {"b": ("exponent", 0.5)},
     ALPHA_RI: {"ri_neutral_lo": ("neutral band from Ri", -0.05), "ri_neutral_hi": ("to Ri", 0.05),
                "ri_critical": ("Ri_c (α held above)", 0.25)},
 }
+
+RENAMED = {"linear through origin": ("constrained linear", {"a": "0"})}  # old name -> (name, its settings)
 
 
 def _n(v: float) -> str:
@@ -259,7 +264,7 @@ def fit_formula(name: str, params: dict, settings: dict | None = None) -> list[t
     p, s = {k: _n(v) for k, v in params.items()}, settings or {}
     simple = {
         "linear": lambda: f"{p['a']} + {p['b']}*x",
-        "linear through origin": lambda: f"{p['b']}*x",
+        "constrained linear": lambda: f"{p['a']} + {p['b']}*x",
         "power law": lambda: f"{p['a']}*x^{p['b']}",
         "power law, fixed exponent": lambda: f"{p['a']}*x^{p['b']}",
         "double power law": lambda: (f"{p['a']}*(x/{p['x_b']})^{p['b1']}*(1 + (x/{p['x_b']})^(1/{p['width']}))"

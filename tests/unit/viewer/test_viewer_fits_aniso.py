@@ -31,7 +31,7 @@ def test_map_corners():
 
 @pytest.mark.parametrize("name, truth, make", [
     ("linear", {"a": 1.5, "b": -0.7}, lambda x, p: p["a"] + p["b"] * x),
-    ("linear through origin", {"b": 2.0}, lambda x, p: p["b"] * x),
+    ("constrained linear", {"a": 0.0, "b": 2.0}, lambda x, p: p["b"] * x),
     ("power law", {"a": 3.0, "b": 0.25}, lambda x, p: p["a"] * x ** p["b"]),
     ("logarithmic", {"a": 2.0, "b": 0.5}, lambda x, p: p["a"] + p["b"] * np.log(x)),
     ("exponential", {"A": 2.0, "B": 1.3}, lambda x, p: p["A"] * p["B"] ** x),
@@ -238,7 +238,7 @@ def test_a_power_law_of_fixed_exponent_fits_only_its_constant():
     assert res.params["b"] == 0.5 and res.params["a"] == pytest.approx(3.0, rel=1e-2)
     assert res.func(np.array([4.0]))[0] == pytest.approx(2 * res.params["a"])
     line = curvefits.fit("power law, fixed exponent", x[:400], y[:400], b=1.0)
-    origin = curvefits.fit("linear through origin", x[:400], y[:400])
+    origin = curvefits.fit("constrained linear", x[:400], y[:400])
     assert line.params["a"] == pytest.approx(origin.params["b"])  # exponent 1: the fit through the origin
 
 
@@ -253,3 +253,14 @@ def test_a_double_power_law_finds_both_exponents_and_the_break():
     assert np.isnan(res.func(np.array([-1.0]))[0])
     far = np.array([0.1, 100.0])  # the asymptotes' slopes
     assert np.log(res.func(far * 2) / res.func(far)) / np.log(2) == pytest.approx([0.5, 1.5], abs=0.08)
+
+
+def test_a_constrained_linear_fit_keeps_the_intercept_given():
+    x = np.linspace(-3.0, 6.0, 90)
+    y = 1.0 + 2.0 * x
+    res = curvefits.fit("constrained linear", x, y, a=1.0)
+    assert res.params["a"] == 1.0 and res.params["b"] == pytest.approx(2.0) and res.rmse < 1e-9
+    off = curvefits.fit("constrained linear", x, y, a=4.0)
+    assert off.params["a"] == 4.0 and off.func(np.array([0.0]))[0] == pytest.approx(4.0)
+    assert "intercept fixed" in off.label and "intercept" not in curvefits.fit("constrained linear", x, 2 * x).label
+    assert curvefits.FIT_SETTINGS["constrained linear"] == {"a": ("intercept", 0.0)}

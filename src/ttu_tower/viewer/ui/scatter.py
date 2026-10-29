@@ -35,7 +35,7 @@ from ttu_tower.viewer.ui.function_overlay import FunctionOverlay
 from ttu_tower.viewer.ui import variant_combo
 from ttu_tower.viewer.ui.timeline_plot import brush_mode
 from ttu_tower.viewer.ui.search_combo import SearchCombo
-from ttu_tower.viewer.ui.view_state import LateCombo
+from ttu_tower.viewer.ui.view_state import LateCombo, put_combo
 
 _POINT = "#1f4e9c"
 _FIT = "#2ca02c"
@@ -135,9 +135,26 @@ class _FitsState:
     def put_state(self, value) -> bool:
         fits = (value or {}).get("fits") or []
         fields = set(FitSpec.__dataclass_fields__)
-        specs = [FitSpec(**{k: (tuple(v) if k == "pct" else v) for k, v in f.items() if k in fields}) for f in fits]
+        specs = [_renamed(FitSpec(**{k: (tuple(v) if k == "pct" else v) for k, v in f.items() if k in fields}))
+                 for f in fits]
         self.view.set_fits(specs, int((value or {}).get("current", 0)), [bool(f.get("shown", True)) for f in fits])
         return True
+
+
+def _renamed(spec: FitSpec) -> FitSpec:
+    """A saved fit under a curve's former name, as it is called now."""
+    if spec.name not in curvefits.RENAMED:
+        return spec
+    name, settings = curvefits.RENAMED[spec.name]
+    return replace(spec, name=name, settings={**settings, **spec.settings})
+
+
+class _FitCombo(QComboBox):
+    def put_state(self, value) -> bool:
+        old = (value or {}).get("data")
+        if old in curvefits.RENAMED:
+            value = {"data": curvefits.RENAMED[old][0], "text": curvefits.RENAMED[old][0]}
+        return put_combo(self, value)
 
 
 def _fit_job(name, x, y, opts, settings=()):
@@ -263,7 +280,7 @@ class ScatterView(QWidget):
             w.toggled.connect(lambda *_: self.redraw())
         self.mid_bins.valueChanged.connect(lambda *_: self.redraw())
 
-        self.fit_name = QComboBox()
+        self.fit_name = _FitCombo()
         self.fit_name.addItem("none", None)
         for name in curvefits.FITS:
             self.fit_name.addItem(name, name)
@@ -1202,7 +1219,8 @@ class ScatterView(QWidget):
             parts.append(f"{spec.bins} {spec.bin_method}{' log' if spec.bin_log else ''} bins")
         if spec.subset != "all":
             parts.append("selected only" if spec.subset == "selected" else "without the selection")
-        parts += [f"{k} {v}" for k, v in spec.settings.items()]
+        labels = {k: label for k, (label, _) in curvefits.FIT_SETTINGS.get(spec.name, {}).items()}
+        parts += [f"{labels.get(k, k)} {v}" for k, v in spec.settings.items()]
         return ", ".join(parts)
 
     def _fill_fit_list(self) -> None:

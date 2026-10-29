@@ -1253,14 +1253,14 @@ def test_several_fits_are_drawn_together_and_kept_in_a_view(window, qtbot):
     scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear"))
     scatter.add_fit()  # a copy, then changed
     assert len(scatter.fits) == 2 and scatter.current == 1 and scatter.fits[1].color != scatter.fits[0].color
-    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("linear through origin"))
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("constrained linear"))
     scatter.fit_bins.setValue(8)
     assert scatter.fits[0].spec.name == "linear" and scatter.fits[1].spec.bins == 8
     scatter.run_fit()  # every fit
     qtbot.waitUntil(lambda: all(e.result is not None for e in scatter.fits) and not scatter._fitting,
                     timeout=60_000)
     labels = [line["label"] for line in scatter.drawn_lines]
-    assert "1. linear" in labels and "2. linear through origin, 8 mean bins" in labels
+    assert "1. linear" in labels and "2. constrained linear, 8 mean bins, intercept 0" in labels
     assert scatter.fit_list.count() == 2 and "RMSE" in scatter.fit_list.item(1).text()
     assert scatter.fits[1].result.n <= 8
     scatter.fit_list.setCurrentRow(0)  # edit the first
@@ -1270,9 +1270,9 @@ def test_several_fits_are_drawn_together_and_kept_in_a_view(window, qtbot):
 
     state = view_state.save(scatter, scatter.STATE_FIELDS)
     scatter.remove_current_fit()
-    assert len(scatter.fits) == 1 and scatter.fits[0].spec.name == "linear through origin"
+    assert len(scatter.fits) == 1 and scatter.fits[0].spec.name == "constrained linear"
     view_state.restore(scatter, state, scatter.STATE_FIELDS)
-    assert [e.spec.name for e in scatter.fits] == ["linear", "linear through origin"]
+    assert [e.spec.name for e in scatter.fits] == ["linear", "constrained linear"]
     assert [e.shown for e in scatter.fits] == [True, False] and scatter.fits[1].spec.bins == 8
 
     scatter.fit_auto.setChecked(True)  # every fit refits by itself
@@ -1387,3 +1387,21 @@ def test_scatter_offers_all_unstable_and_all_stable(window, qtbot):
     both = in_class(stability, scatter.slots, "stable") | in_class(stability, scatter.slots, "strongly stable")
     assert sorted(scatter._shown()[0]) == sorted(scatter.slots[both])
     assert scatter.stats.text().startswith("all stable only")
+
+
+def test_a_constrained_linear_fit_takes_its_intercept_and_old_views_still_load(window, qtbot):
+    scatter = _wind_and_ustar(window, qtbot)
+    scatter.fit_name.setCurrentIndex(scatter.fit_name.findData("constrained linear"))
+    assert scatter.fit_settings["a"].text() == "0"
+    scatter.fit_settings["a"].setText("0.5")
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
+    assert scatter.fit_result.params["a"] == 0.5 and "intercept 0.5" in scatter.fit_list.item(0).text()
+
+    state = view_state.save(scatter, scatter.STATE_FIELDS)
+    state["fit_name"] = {"data": "linear through origin", "text": "linear through origin"}  # a view saved before
+    state["fits_state"]["fits"][0].update(name="linear through origin", settings={})
+    state.pop("fit_settings", None)
+    assert "fit_name" not in view_state.restore(scatter, state, scatter.STATE_FIELDS)
+    assert scatter.fit_name.currentData() == "constrained linear" and scatter.fit_settings["a"].text() == "0"
+    assert scatter.fits[0].spec.settings == {"a": "0"}

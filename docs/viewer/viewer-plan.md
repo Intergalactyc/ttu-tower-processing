@@ -784,7 +784,7 @@ compare spectra and τ markers, run Verify on a few real slots, and inspect ACFs
     - a linear trend
     - a binned median/mean line
     - y = x
-    - the curve-fit catalogue of `curve_fits`: linear, through origin, power, log, exponential,
+    - the curve-fit catalogue of `curve_fits`: linear, constrained linear (intercept given; was "through origin"), power, log, exponential,
       neutral log law, double linear (± through origin), ζ(Ri) and α(Ri). Each fit takes
       x-percentile limits and optional binning (count, mean/median, minimum per bin).
   - Statistics: N, Pearson r, Spearman ρ, and Cohen's κ on signs.
@@ -1544,6 +1544,9 @@ viewed interval or the whole period like the others.
   Hodograph, Scales, Composite spectra, Summary → τ) also offers the two combined groups:
   strongly unstable + unstable, and stable + strongly stable (`timeline.class_choices` / `in_class`).
   They appear only when the scheme has both classes of a group (the run's own scheme might not).
+- **Scatter: constrained linear, 2026-10-28.** "Linear through origin" became "constrained linear",
+  y = a + b·x with the intercept a typed in (default 0). Views saved with the old name load as it
+  with a = 0 (`curvefits.RENAMED`). A fit's settings are listed by their labels ("intercept 0.5").
 - **Scatter: several fits, and fitting with or without the selection, 2026-10-26.**
   - **Fit to:** every point shown, only the selected (brushed) points, or all but them. The
     selection is part of such a fit's inputs, so a new lasso marks it earlier (or refits it with

@@ -1350,9 +1350,13 @@ lazily, only when
 **`tertiary/multiboom.py`** (on filtered `none` values):
 - `rib` for all pairs i < j: `physics.richardson.bulk_richardson_number` with components = true
   (ue/vn means), slow VPT and local g.
-- `lapse_vpt`.
 - `veer` per boom vs `veer_reference_boom` (`math.polar.series_signed_angular_distance`: positive
   when the boom's wd is clockwise of the reference's).
+
+**`tertiary/gradients.py`** (on filtered values, after filtering): the per-boom gradient
+products of output-schema.md §5.1 (dθ/dz, dθv/dz, dU/dz, shear, N², Ri_g; per flux variant φm,
+φh, Ri_f, Km, Kh, Pr, σw/N), one set per `[tertiary.gradients].stencils` entry. Added
+2026-10-28; it replaced the pair lapse rate and bulk N² and secondary's MOST N².
 
 **`tertiary/profiles.py`**
 - Fits: weighted `power_fit` (y²-weighted in log space) from `math.fits`;

@@ -8,6 +8,7 @@ dropped.
 import numpy as np
 import pandas as pd
 
+from ttu_tower.tertiary import gradients
 from ttu_tower.timegrid import SAMPLES_PER_SLOT
 
 _WINDOW_MARGIN_SAMPLES = 15_000
@@ -38,7 +39,7 @@ QUANTITY_GROUPS: dict[str, str] = {
     # heat family: needs both heat and momentum (obukhov_length needs ustar).
     "wvpts": "heat", "obukhov_length": "heat", "zeta": "heat", "ils_vpts": "heat", "ils_corr_vpts": "heat",
     "theta_star": "heat", "phi_m_bd": "heat", "phi_h_bd": "heat", "psi_m_bd": "heat", "psi_h_bd": "heat",
-    "n2_most": "heat", "heat": "heat",
+    "heat": "heat",
     # ts family: ts/vpts statistics, their ITS/ratio, and the pressure factor
     # that travels with the vpts values it converted.
     "ts": "ts", "vpts": "ts", "its_ratio_vpts": "ts", "its_short_vpts": "ts", "its_corr_vpts": "ts",
@@ -47,6 +48,9 @@ QUANTITY_GROUPS: dict[str, str] = {
     "t": "t", "rh": "rh", "p": "p",
     # vpt group: thermodynamic quantities needing all three slow sensors.
     "es": "vpt", "e": "vpt", "r": "vpt", "q": "vpt", "td": "vpt", "pt": "vpt", "vt": "vpt", "vpt": "vpt",
+    # computed after filtering from already-filtered values (gradients.py), under every
+    # stencil's name; listed for the family a filtered input would come from, never filtered themselves.
+    **{n: gradients.GROUPS[gradients.split(n)[0]] for n in gradients.all_names()},
 }
 
 # The families to threshold against `min_coverage` for each group. `its` and

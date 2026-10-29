@@ -18,7 +18,7 @@ from ttu_tower.io.runs import register_run
 from ttu_tower.io.stage import check_hash_guard, write_config_copies, write_run_meta, write_run_summary
 from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch, plan_batches
-from ttu_tower.tertiary import filtering, mesonet, multiboom, profiles, wide
+from ttu_tower.tertiary import filtering, gradients, mesonet, multiboom, profiles, wide
 
 _PRIMARY_TABLES = ("coverage", "means")
 _PRIMARY_MARKER_TABLE = "means"  # any primary unit's fragment existing implies the unit succeeded
@@ -107,6 +107,8 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
         candidate, primary["coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary,
     )
     boom_final = filtering.apply(candidate, fail_keys)
+    grads = gradients.gradients(boom_final, cfg.files.booms, cfg.tertiary.gradients.stencils)
+    boom_final = pd.concat([boom_final, grads], ignore_index=True)
     boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
 
     pairs = multiboom.multiboom(boom_final, cfg.files.booms, cfg.tertiary.veer_reference_boom)

@@ -12,6 +12,7 @@ import pyarrow.dataset as pa_dataset
 from ttu_tower import schema
 from ttu_tower.secondary.detect import SMOOTHING, Detection, detect
 from ttu_tower.secondary.select import select
+from ttu_tower.viewer import tauvariants
 from ttu_tower.viewer.fragments import FragmentIndex
 
 COSPECTRA = ("wvpts", "uw", "vw", "uv")
@@ -232,8 +233,7 @@ def spectrum_variant(bundle: SlotBundle, variant: str) -> str:
     """The mrd variant holding `variant`'s spectra: naive shares mrd's, and an
     mrd_unexcised primary never computed (nothing was excised) equals mrd.
     """
-    if variant == "naive":
-        return "mrd"
+    variant = tauvariants.basis(variant)  # naive's and the viewer's variants': the data they're computed from
     if variant == "mrd_unexcised" and bundle.mrd is not None:
         has = ((bundle.mrd["slot"] == bundle.slot) & (bundle.mrd["boom"] == bundle.boom)
                & (bundle.mrd["variant"] == "mrd_unexcised")).any()
@@ -305,7 +305,7 @@ def rung_scales(bundle: SlotBundle, variant: str) -> pd.DataFrame:
     (as secondary defines it); and the fully usable blocks behind each ITS.
     """
     ladder = bundle.ladder
-    variant = "mrd" if variant == "naive" else variant
+    variant = tauvariants.basis(variant)
     if ladder is None or ladder.empty:
         return pd.DataFrame()
     lad = ladder[ladder["variant"] == variant]

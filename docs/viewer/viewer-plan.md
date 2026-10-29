@@ -1500,7 +1500,50 @@ viewed interval or the whole period like the others.
   loads one again (every view reclassifies), on any run. The list shows the scheme that is exactly
   what's set, or "(unsaved changes)" after an edit; Save offers that name and asks before replacing a
   different scheme of the same name; Delete removes the one shown. Kept as `SchemeStore` in
-  `<home>/viewer/stability_schemes.json`.
+  `<home>/viewer/stability_schemes.json`. The boundaries take 5 decimals.
+- **τ variants and τ schemes, 2026-10-28** (`viewer/tauvariants.py`, `ui/tau_panel.py`, Controls → τ).
+  - **Variants beyond the run's three:** a fixed τ at every ladder rung (`fixed_<rung>`; 600 s is
+    naive, so not repeated) and every saved τ scheme (`scheme:<name>`), in every variant menu
+    (panels, Scatter z, Derived, Find, QC, Anisotropy, the anisotropy band, Stability's ζ, and the
+    inspector once computed).
+  - **A τ scheme:** data (excised / unexcised); a base selection (the run's own, or a what-if of
+    detection and selection settings, "Copy from Summary → τ"); optional τ per stability class, each
+    class taking the base, the run's selection, or a fixed rung, plus "otherwise" for unclassified.
+    Classified globally (a *copy* of a stability scheme, per slot; refreshed only by Copy) or locally
+    (per boom): ζ split by the heat flux's sign, or Ri of the layer around the boom (layer or
+    log-profile form, see pairs at booms) split by its own sign; neutral is |x| ≤ a threshold, or
+    each boom's given share closest to 0 (exact count, threshold reported). A scheme can't classify
+    by another scheme's ζ (a fixed rung's is fine; it's computed first). Kept in
+    `<home>/viewer/tau_schemes.json`.
+  - **Computed** with the pipeline's own code: secondary's `selected_stats` and `derived`, tertiary's
+    `filtering.evaluate`/`apply` (flags read for the boom's whole run) and
+    `profiles.variant_profiles` (new; the τ-dependent fits of one variant). One process per boom;
+    about 35 s for oneyear (10 booms), once. Written in the run's schema to
+    `<home>/viewer/tau_variants/<tag>/<key>-<hash>/` (hash: definition + the run's secondary and
+    tertiary stamps; ~250 MB a variant: `boom_stats` keeps only filtered rows), plus `tau_rule` (the
+    class that chose each τ) and `done.json` (counts by class and τ, thresholds).
+  - **Read** through `FragmentIndex.read`: a read whose filter names a viewer variant gets its rows
+    (computed first if need be); one naming no variant gets every computed one. A panel showing an
+    uncomputed variant says so and loads once it's done; other views wait for it in their job.
+  - **Exact:** fixed 600 s reproduces naive, the run's-own scheme mrd and mrd_unexcised, and a what-if
+    with the run's settings mrd (tests). Fixed while building: Summary τ's redetection left
+    mrd_unexcised rows without spectra of their own (secondary's copies of mrd) at their stored
+    detection; they now copy mrd's redetection.
+- **Gradient products, 2026-10-28** (replacing `viewer/pairmap.py`'s pairs at single booms).
+  Tertiary now stores per-boom gradients and what's built on them in `boom_final`
+  (output-schema.md §5.1: dθ/dz, dθv/dz, dU/dz, shear, N², Ri_g; per flux variant φm, φh, φh_v,
+  Ri_f, Km, Kh, Pr, σw/N), one set per stencil (the second suffixed `_log`, labelled "(log
+  stencil)"), so they're ordinary boom quantities everywhere. The Profile tab plots N², Ri_g and Ri_f
+  (no longer MOST N²) and its pair table is Ri_b alone. The τ schemes' local classifier takes Ri_g
+  (saved schemes using the old "Ri_b, layer" or "Ri, log profile" now read as Ri_g). τ variants get
+  the flux products too: a cross-boom pass after the per-boom build adds them to each boom's
+  `boom_final` (variant cache version 2, so cached variants recompute).
+- **Derived: Duplicate, 2026-10-28.** Turns the definition shown (as edited) into a new, unsaved one
+  named `<name>_2` (the next free number), to rename, change and Save.
+- **"all unstable" and "all stable", 2026-10-28.** Every one-class filter (Scatter, Distribution,
+  Hodograph, Scales, Composite spectra, Summary → τ) also offers the two combined groups:
+  strongly unstable + unstable, and stable + strongly stable (`timeline.class_choices` / `in_class`).
+  They appear only when the scheme has both classes of a group (the run's own scheme might not).
 - **Scatter: several fits, and fitting with or without the selection, 2026-10-26.**
   - **Fit to:** every point shown, only the selected (brushed) points, or all but them. The
     selection is part of such a fit's inputs, so a new lasso marks it earlier (or refits it with

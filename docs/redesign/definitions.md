@@ -151,3 +151,5 @@ Easily confused: the **detection window** is used only to *find* τ; **τ-blocks
 | TI, TKE | Turbulence intensity, turbulent kinetic energy. |
 | u*, L, ζ | Friction velocity, Obukhov length, z/L (`zeta`). |
 | Ri_b | Bulk Richardson number between two booms. |
+| Ri_g, Ri_f | Gradient and flux Richardson numbers at a boom (`rig`, `rif`). |
+| N², Km, Kh, Pr | Brunt-Väisälä frequency squared, eddy diffusivities of momentum and heat, turbulent Prandtl number Km/Kh. |

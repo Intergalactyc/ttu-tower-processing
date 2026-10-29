@@ -25,7 +25,7 @@ from ttu_tower.viewer import anisotropy, brush, compare, figures, timeline
 from ttu_tower.viewer import stability as criteria
 from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
 from ttu_tower.viewer.views import SavedView, ViewStore
-from ttu_tower.viewer import derived
+from ttu_tower.viewer import derived, tauvariants
 from ttu_tower.viewer.ui.derived_panel import DerivedPanel
 from ttu_tower.viewer.catalog import build_catalog
 from ttu_tower.viewer.fragments import FragmentIndex
@@ -47,6 +47,7 @@ from ttu_tower.viewer.ui.hodograph_view import HodographView
 from ttu_tower.viewer.ui.hover_readout import HoverReadout
 from ttu_tower.viewer.ui.jets_controller import JetsController
 from ttu_tower.viewer.ui.stability_panel import StabilityPanel
+from ttu_tower.viewer.ui.tau_panel import TauPanel
 from ttu_tower.viewer.ui.wrap_tabs import WrapTabWidget
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui import style, view_state
@@ -70,6 +71,7 @@ _TAB_FOR_TARGET = {"flux": "spectra", "spectra": "spectra", "acf": "scales", "pr
 
 class MainWindow(QMainWindow):
     runOpened = Signal()
+    variantProgress = Signal(str, str)  # a τ variant being computed (from its worker thread): key, text
 
     def __init__(self, run: RunHandle | None = None, runner: JobRunner | None = None, resume: str = "never"):
         """`resume`: "ask" offers, on opening a run, to resume where it was left (and keeps
@@ -99,6 +101,14 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, KeyError) as exc:  # kept in memory, never written over the unreadable file
             self.derived_store = derived.DerivedStore()
             logging.getLogger("ttu_view").error(f"couldn't read the derived quantities: {exc}")
+        try:
+            self.tau_schemes = tauvariants.SchemeStore.open()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.tau_schemes = tauvariants.SchemeStore()
+            logging.getLogger("ttu_view").error(f"couldn't read the τ schemes: {exc}")
+        self.variants: tauvariants.VariantStore | None = None  # the run's τ variants beyond its own
+        self._variant_waiters: dict[str, list] = {}  # key -> what to do once it's computed
+        self.variantProgress.connect(self._on_variant_progress)
         self._pending_view = None  # a view to apply once the run's quantities are known
         self._pending_summary = None  # the Summary tabs' part of one, once stability classes are known
         self._pending_legend: dict[int, list] = {}  # panel -> the legend entries shown, once it has loaded
@@ -173,6 +183,14 @@ class MainWindow(QMainWindow):
         self.derived_panel.changed.connect(self._derived_changed)
         tabs.addTab(self.derived_panel, "Derived")
         tabs.setTabToolTip(tabs.count() - 1, "quantities defined by a formula of others, for the panels")
+        self.tau_panel = TauPanel(self.tau_schemes, self.stability_panel.schemes, self._stability_in_use)
+        self.tau_panel.schemesChanged.connect(lambda *_: self._tau_schemes_changed())
+        self.tau_panel.computeRequested.connect(lambda key: self._when_variant_ready(key, lambda: None))
+        self.tau_panel.useRequested.connect(self.use_variant_everywhere)
+        self.tau_panel.clearRequested.connect(self._clear_variants)
+        tabs.addTab(self.tau_panel, "τ")
+        tabs.setTabToolTip(tabs.count() - 1, "fixed τ and τ schemes (selection rules, by stability class) as "
+                                             "variants for every view")
         self._stability_timer = QTimer(self)
         self._stability_timer.setSingleShot(True)
         self._stability_timer.setInterval(300)
@@ -219,6 +237,7 @@ class MainWindow(QMainWindow):
         self.scales_view = ScalesView(self.runner)
         self.tau_view = TauView(self.runner)
         self.tau_view.selectRequested.connect(lambda slots: self.set_selection(slots, "replace"))
+        self.tau_panel.copy_whatif.clicked.connect(lambda *_: self.tau_panel.copy_from(self.tau_view))
         self.diurnal = DiurnalView()
         self.diurnal.cellSelected.connect(lambda slots: self.set_selection(slots, "replace"))
         self.aniso_map = AnisotropyMapView(self.runner)
@@ -459,6 +478,11 @@ class MainWindow(QMainWindow):
             self.reprocessor.close()
         self.run = run
         self.index = FragmentIndex(run.run_dir)
+        self.variants = tauvariants.VariantStore(run, self.index)
+        self.variants.set_schemes(self.tau_schemes.items)
+        self.variants.progress = lambda key, text: self.variantProgress.emit(key, text)
+        self.index.variants = self.variants
+        self._variant_waiters = {}
         self.reprocessor = Reprocessor(run) if run.cfg is not None else None
         self.catalog, self.datas, self.night, self._have_range = None, [None, None], None, False
         self.stability, self._stability_known = None, False
@@ -510,6 +534,8 @@ class MainWindow(QMainWindow):
         self._set_other_run(None)
         self._load_aniso_band()
         self.jets.set_run(run)
+        self.tau_panel.set_run(run, self.variants)
+        self._spread_variants()
         self._open_stability(run)
 
     def _load_aniso_band(self) -> None:
@@ -522,6 +548,7 @@ class MainWindow(QMainWindow):
 
     def _catalog_ready(self, catalog) -> None:
         self.catalog = catalog
+        tauvariants.add_to(catalog, tauvariants.menu_variants(self.tau_schemes.items))
         notes = derived.add_to(catalog, self.derived_store.items)
         self.derived_panel.set_catalog(catalog, notes)
         for panel in self.panels:
@@ -844,6 +871,11 @@ class MainWindow(QMainWindow):
             self.plots[i].clear("choose a quantity and at least one boom")
             self.datas[i] = None
             self._refresh_distributions()
+            return
+        if tauvariants.is_virtual(spec.variant) and self.variants is not None and not self.variants.is_ready(spec.variant):
+            self.plots[i].clear(f"computing {tauvariants.label(spec.variant)} for this run (about half a minute for "
+                                "a year, once)…")
+            self._when_variant_ready(spec.variant, lambda: spec is self.specs[i] and self._on_spec(i, spec))
             return
         self.plots[i].title.setText(f"loading {spec.quantity.title}…")
         self.runner.submit(timeline.load, self.run, self.index, spec.quantity, spec.variant, spec.members,
@@ -1182,9 +1214,13 @@ class MainWindow(QMainWindow):
 
     def _derived_changed(self) -> None:
         """A definition saved or deleted: the panels' quantities again, each panel kept as it was."""
+        self._catalog_changed()
+
+    def _catalog_changed(self) -> None:
         if self.catalog is None:
             return
         states = [p.state() for p in self.panels]  # before the catalog changes under them
+        tauvariants.add_to(self.catalog, tauvariants.menu_variants(self.tau_schemes.items))
         notes = derived.add_to(self.catalog, self.derived_store.items)
         self.derived_panel.set_catalog(self.catalog, notes)
         if self.other_catalog is not None:
@@ -1195,6 +1231,86 @@ class MainWindow(QMainWindow):
             if why:  # its derived quantity was deleted
                 self.statusBar().showMessage(why, 8000)
         self.scatter.set_catalog(self.catalog)
+
+    # --- τ variants ---------------------------------------------------------------------------------
+
+    def _stability_in_use(self):
+        """The stability classification in use, as a spec (None if the run's own can't be one)."""
+        if self.stability_spec is not None:
+            return self.stability_spec
+        return criteria.from_config(self.run.cfg.post) if self.run is not None and self.run.cfg is not None else None
+
+    def _spread_variants(self) -> None:
+        """Every variant menu offers the fixed rungs and the saved τ schemes."""
+        extra = tauvariants.menu_variants(self.tau_schemes.items)
+        for view in (self.find, self.qc_summary, self.aniso_map, self.aniso_band, self.stability_panel,
+                     self.tau_panel):
+            view.set_variants(extra)
+        self._catalog_changed()
+
+    def _tau_schemes_changed(self) -> None:
+        """A τ scheme saved or deleted: the menus again, and anything showing a changed one recomputed."""
+        if self.variants is None:
+            self._spread_variants()
+            return
+        changed = self.variants.set_schemes(self.tau_schemes.items)
+        if changed:
+            self.run.caches.clear()  # whatever was read of the old definitions
+        self._spread_variants()
+        for i, spec in enumerate(self.specs):
+            if spec.variant in changed and spec.variant in self.variants.known():
+                self._on_spec(i, spec)
+        self.tau_panel.show_state()
+
+    def _when_variant_ready(self, key: str, then) -> None:
+        """`then()` once τ variant `key` is computed for the run (computing it, once, if need be)."""
+        if self.variants is None:
+            return
+        if self.variants.is_ready(key):
+            then()
+            return
+        waiters = self._variant_waiters.setdefault(key, [])
+        waiters.append(then)
+        if len(waiters) > 1:
+            return
+        run = self.run
+
+        def done(_):
+            if run is self.run:
+                for fn in self._variant_waiters.pop(key, []):
+                    fn()
+                self.tau_panel.show_state()
+
+        def failed(exc, tb):
+            if run is self.run:
+                self._variant_waiters.pop(key, None)
+                self.tau_panel.show_state()
+            self._report_error(exc, tb)
+
+        self.runner.submit(self.variants.ensure, key, label=f"computing {tauvariants.label(key)}", on_done=done,
+                           on_error=failed)
+
+    def _on_variant_progress(self, key: str, text: str) -> None:
+        self.statusBar().showMessage(text, 15_000)
+        self.tau_panel.show_progress(key, text)
+
+    def use_variant_everywhere(self, key: str) -> None:
+        """Every variant menu that offers `key` switches to it."""
+        for combo in [p.variant for p in self.panels] + [self.find.variant, self.qc_summary.variant,
+                                                         self.aniso_map.variant, self.aniso_band.variant]:
+            i = combo.findData(key)
+            if i >= 0:
+                combo.setCurrentIndex(i)
+
+    def _clear_variants(self) -> None:
+        if self.variants is None:
+            return
+        self.variants.clear()
+        self.run.caches.clear()
+        self.tau_panel.show_state()
+        for i, spec in enumerate(self.specs):
+            if tauvariants.is_virtual(spec.variant):
+                self._on_spec(i, spec)
 
     def _other_catalog_ready(self, run, catalog) -> None:
         if run is not self.other_run:
@@ -1263,7 +1379,7 @@ class MainWindow(QMainWindow):
                     ok = (o.x >= x0) & (o.x <= x1)
                     t, y = broken(o.x[ok], o.y[ok])
                     others.append({"label": m, "color": color, "t": t, "y": y})
-            variant = "" if data.variant == "none" else f" · {data.variant}"
+            variant = "" if data.variant == "none" else f" · {tauvariants.label(data.variant)}"
             panels.append({"title": q.title + variant, "ylabel": q.unit, "log_y": plot.log_y,
                            "categories": data.categories if q.categorical else None, "curves": curves,
                            "others": others})

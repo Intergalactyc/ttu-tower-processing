@@ -16,6 +16,7 @@ from ttu_tower.config.model import (
     DetectionConfig,
     FilesConfig,
     FitsConfig,
+    GradientsConfig,
     LadderConfig,
     MRDConfig,
     OutputConfig,
@@ -421,16 +422,30 @@ def _parse_fits(d: dict, path: str) -> FitsConfig:
                        gamma_booms=gamma_booms, wdgamma_booms=wdgamma_booms, loglaw_booms=loglaw_booms)
 
 
+def _parse_gradients(d: dict, path: str) -> GradientsConfig:
+    stencils = _pop_str_list(d, "stencils", ["log_linear", "log"], path)
+    if not stencils:
+        _err(f"{path}.stencils", "needs at least one stencil")
+    for s in stencils:
+        if s not in ("log_linear", "log"):
+            _err(f"{path}.stencils", f"'{s}' must be 'log_linear' or 'log'")
+    if len(set(stencils)) != len(stencils):
+        _err(f"{path}.stencils", "lists a stencil twice")
+    _check_unknown(d, path)
+    return GradientsConfig(stencils=tuple(stencils))
+
+
 def _parse_tertiary(d: dict, path: str) -> TertiaryConfig:
     min_coverage = _pop_number(d, "min_coverage", 0.75, path, min_=0, min_incl=False, max_=1)
     max_bounds_fraction = _pop_fraction_dict(d, "max_bounds_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
     max_spike_fraction = _pop_fraction_dict(d, "max_spike_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
     veer_reference_boom = _pop_number(d, "veer_reference_boom", 4, path, kind=int)
     fits = _parse_fits(_section(d, "fits", path), f"{path}.fits")
+    gradients = _parse_gradients(_section(d, "gradients", path), f"{path}.gradients")
     _check_unknown(d, path)
     return TertiaryConfig(min_coverage=min_coverage, max_bounds_fraction=max_bounds_fraction,
                            max_spike_fraction=max_spike_fraction, veer_reference_boom=veer_reference_boom,
-                           fits=fits)
+                           fits=fits, gradients=gradients)
 
 
 def _parse_stability(d: dict, path: str) -> StabilityConfig:

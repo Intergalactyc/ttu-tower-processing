@@ -106,6 +106,9 @@ gamma_booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 wdgamma_booms = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 loglaw_booms = [1, 2, 3, 4, 5, 6, 7]
 
+[tertiary.gradients]
+stencils = ["log_linear", "log"]
+
 [post.stability]
 pair = [2, 4]
 classes = [

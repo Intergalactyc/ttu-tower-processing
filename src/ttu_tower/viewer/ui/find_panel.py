@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.viewer import find
 from ttu_tower.viewer.timeaxis import format_slot
-from ttu_tower.viewer.ui import tables
+from ttu_tower.viewer.ui import tables, variant_combo
 
 MAX_SHOWN = 5000  # rows listed (every match is still stepped through and selected)
 _VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (10 min)"), ("mrd_unexcised", "mrd unexcised"))
@@ -128,6 +128,10 @@ class FindPanel(QWidget):
             row.addWidget(w)
         layout.addLayout(row)
         self._enable()
+
+    def set_variants(self, extra) -> None:
+        """The viewer's τ variants (Controls → τ) after the run's own."""
+        variant_combo.refill(self.variant, _VARIANTS, extra)
 
     def _enable(self) -> None:
         has = self.result is not None and len(self.result) > 0

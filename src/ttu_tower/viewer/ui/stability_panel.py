@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.constants import BOOMS, HEIGHTS
 from ttu_tower.viewer.stability import NAMES, VARIABLES, ZETA_EDGES, SchemeStore, StabilitySpec
-from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui import style, tables, variant_combo
 
 
 def _boom_combo() -> QComboBox:
@@ -115,6 +115,10 @@ class StabilityPanel(QWidget):
         self.reset.clicked.connect(self.resetRequested)
         self.set_spec(StabilitySpec())
         self._fill_schemes()
+
+    def set_variants(self, extra) -> None:
+        """The viewer's τ variants (Controls → τ) after the run's own."""
+        variant_combo.refill(self.variant, [(v, v) for v in ("mrd", "naive", "mrd_unexcised")], extra)
 
     def _on_variable(self, *_) -> None:
         if not self._quiet:

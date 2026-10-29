@@ -136,3 +136,21 @@ def test_a_derived_quantity_is_defined_in_controls_and_shown_in_a_panel(window, 
     panel.delete()
     assert "derived|u_ustar_ratio|" not in window.catalog.quantities and panel.list.count() == 0
     assert "isn't in this run" in window.statusBar().currentMessage()
+
+
+@pytest.mark.slow
+def test_duplicating_a_derived_quantity_keeps_its_definition_under_a_new_name(window):
+    panel = window.derived_panel
+    assert _define(panel, "lb", "x/sqrt(abs(y))", [("x", "boom_final|sigma_w|", "mrd", None),
+                                                    ("y", "boom_final|n2|", "none", None)]), panel.status.text()
+    panel.duplicate()
+    assert panel.editing is None and panel.name.text() == "lb_2" and "copy of lb" in panel.status.text()
+    panel.formula.setText("x/sqrt(abs(y))*z")
+    assert panel.save(), panel.status.text()
+    names = sorted(d.name for d in panel.store.items)
+    assert names == ["lb", "lb_2"]
+    copy = next(d for d in panel.store.items if d.name == "lb_2")
+    assert copy.variables == panel.store.items[0].variables and copy.formula.endswith("*z")
+    panel.open(panel.store.items[0])
+    panel.duplicate()
+    assert panel.name.text() == "lb_3"

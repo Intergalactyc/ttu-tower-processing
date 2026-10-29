@@ -72,13 +72,6 @@ def most_wind_gradient(u_star, l, z, method: str = "businger dyer"):
     return u_star / (KAPPA * z) * businger_dyer_phi_m(z / l)
 
 
-def most_brunt_vaisala_squared(u_star, z, z_over_l):
-    """N^2 (1/s^2) = u*^2/(kappa z)^2 * zeta * phi_h(zeta), i.e. (g/theta_v) dtheta_v/dz
-    from MOST + Businger-Dyer.
-    """
-    return u_star**2 / (KAPPA * z) ** 2 * z_over_l * businger_dyer_phi_h(z_over_l)
-
-
 def neutral_loglaw_fit(zvals, uvals, displacement: float = 0.0) -> tuple[float, float]:
     """Least-squares fit to u = (u*/kappa) * log((z-d)/z0). Returns (ustar, z0)."""
     z = np.asarray(zvals, dtype=float)

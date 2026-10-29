@@ -115,7 +115,7 @@ def slot_states(across, variant: str) -> pd.DataFrame:
     final values, or (flagged `filtered`) from before filtering where
     tertiary removed them.
     """
-    variant = "mrd" if variant not in ("mrd", "naive", "mrd_unexcised") else variant
+    variant = "mrd" if variant == "none" else variant
     booms = list(across.booms)
     out = pd.DataFrame({"boom": booms, "height": [HEIGHTS[b] for b in booms]})
     final, pre = across.table("boom_final"), across.table("boom_stats")

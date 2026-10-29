@@ -62,7 +62,7 @@ def test_profile_tab_ghosts_the_filtered_boom_and_switches_boom_on_click(window,
     inspector = _inspect(window, qtbot, "profile")
     profile = inspector.profile
     qtbot.waitUntil(lambda: bool(profile.plots), timeout=60_000)
-    assert len(profile.plots) == 16 and {"tke", "zeta", "uw", "ils_u", "theta_star", "n2_most"} <= set(profile.plots)
+    assert len(profile.plots) == 18 and {"tke", "zeta", "uw", "ils_u", "theta_star", "n2", "rig", "rif"} <= set(profile.plots)
     assert all(profile.points[k]["value"].notna().any() for k in ("uw", "ils_u"))
     points = profile.points["sigma_w"].set_index("boom")
     assert points.loc[SPIKY_BOOM, "filtered"]
@@ -1373,3 +1373,17 @@ def test_stability_boundaries_take_five_decimals(window, tmp_path):
     assert panel.spec().edges[2] == 0.00375
     panel.save_scheme("fine")
     assert criteria.SchemeStore.open(tmp_path / "schemes.json").items["fine"].edges[2] == 0.00375
+
+
+def test_scatter_offers_all_unstable_and_all_stable(window, qtbot):
+    from ttu_tower.viewer.timeline import Curve, in_class
+    scatter = _wind_and_ustar(window, qtbot)
+    names = ["strongly unstable", "unstable", "neutral", "stable", "strongly stable"]
+    stability = (Curve(slots=scatter.slots, y=(scatter.slots % 5).astype(float)), names)
+    scatter.set_sources(window.datas, None, stability)
+    items = [scatter.only_class.itemData(i) for i in range(scatter.only_class.count())]
+    assert items == [None, *names, "all unstable", "all stable"]
+    scatter.only_class.setCurrentIndex(scatter.only_class.findData("all stable"))
+    both = in_class(stability, scatter.slots, "stable") | in_class(stability, scatter.slots, "strongly stable")
+    assert sorted(scatter._shown()[0]) == sorted(scatter.slots[both])
+    assert scatter.stats.text().startswith("all stable only")

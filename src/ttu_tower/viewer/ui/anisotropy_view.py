@@ -17,7 +17,7 @@ from ttu_tower.viewer import anisotropy
 from ttu_tower.viewer.brush import in_polygon
 from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import in_class
-from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui import style, tables, variant_combo
 from ttu_tower.viewer.ui.inspector.anisotropy_tab import draw_frame
 from ttu_tower.viewer.ui.scatter import LassoViewBox
 from ttu_tower.viewer.ui.timeline_plot import SELECTED_COLOR
@@ -117,6 +117,11 @@ class AnisotropyMapView(QWidget):
 
     def sizeHint(self) -> QSize:
         return QSize(600, 600)
+
+
+    def set_variants(self, extra) -> None:
+        """The viewer's τ variants (Controls → τ) after the run's own."""
+        variant_combo.refill(self.variant, _VARIANTS, extra)
 
     def set_run(self, run, index, booms) -> None:
         self.run, self.index, self.states = run, index, None

@@ -1,4 +1,4 @@
-"""Bulk Richardson number and bulk Brunt-Vaisala frequency."""
+"""Bulk Richardson number."""
 import numpy as np
 
 from ttu_tower.math import polar
@@ -57,18 +57,3 @@ def bulk_richardson_number(
     if np.ndim(ri) == 0:
         return float(ri)
     return ri
-
-
-def bulk_brunt_vaisala_squared(vpt_lower, vpt_upper, height_lower: float, height_upper: float,
-                               gravity: float = STANDARD_GRAVITY):
-    """N^2 (1/s^2) = g/mean(vpt) * delta vpt/delta z between two heights: Ri_b's
-    numerator over delta z^2.
-    """
-    vpt_lower = np.asarray(vpt_lower, dtype=float)
-    vpt_upper = np.asarray(vpt_upper, dtype=float)
-    vpt_avg = (vpt_upper + vpt_lower) / 2
-    with np.errstate(divide="ignore", invalid="ignore"):
-        n2 = gravity * (vpt_upper - vpt_lower) / (vpt_avg * (height_upper - height_lower))
-    if np.ndim(n2) == 0:
-        return float(n2)
-    return n2

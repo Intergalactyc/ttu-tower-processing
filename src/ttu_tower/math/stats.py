@@ -1,4 +1,4 @@
-"""Detrending and distribution-shape statistics. Pure numpy."""
+"""Detrending, distribution-shape statistics and profile-gradient weights. Pure numpy."""
 import numpy as np
 
 from ttu_tower.math import fits
@@ -42,6 +42,21 @@ def autocovariance(x: np.ndarray, max_lag: int) -> np.ndarray:
     spectrum = np.fft.rfft(x, size)
     full = np.fft.irfft(spectrum * np.conj(spectrum), size)
     return full[: max_lag + 1]
+
+
+def log_gradient_weights(heights, z: float) -> np.ndarray:
+    """Weights w with dF/dz at z = sum_i w_i F(heights_i), exact for
+    F = a + b ln z (two heights: (F_2 - F_1) / (z ln(z_2/z_1))) or
+    F = a + b ln z + c z (three heights: b/z + c of the interpolant).
+    """
+    heights = np.asarray(heights, dtype=np.float64)
+    if heights.size == 2:
+        c = 1.0 / (z * np.log(heights[1] / heights[0]))
+        return np.array([-c, c])
+    if heights.size == 3:
+        basis = np.column_stack([np.ones(3), np.log(heights), heights])
+        return np.linalg.solve(basis.T, np.array([0.0, 1.0 / z, 1.0]))
+    raise ValueError(f"need 2 or 3 heights, got {heights.size}")
 
 
 # Total over e-folding-truncated integral of an exponential ACF:

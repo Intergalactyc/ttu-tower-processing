@@ -84,3 +84,15 @@ def test_boom_final_curve_and_overlays(full_run):
     assert timeline.night(run, index) is not None
     stability = timeline.stability(run, index)
     assert stability is not None and stability[1] == [n for n, _ in run.cfg.post.stability.classes]
+
+
+def test_combined_stability_groups_take_both_classes():
+    names = ["strongly unstable", "unstable", "neutral", "stable", "strongly stable"]
+    assert timeline.class_choices(names) == names + ["all unstable", "all stable"]
+    assert timeline.class_choices(["unstable", "neutral", "stable"]) == ["unstable", "neutral", "stable"]
+    slots = np.arange(10, dtype=np.int64)
+    stability = (timeline.Curve(slots=slots, y=(slots % 5).astype(float)), names)
+    assert list(slots[timeline.in_class(stability, slots, "all unstable")]) == [0, 1, 5, 6]
+    assert list(slots[timeline.in_class(stability, slots, "all stable")]) == [3, 4, 8, 9]
+    three = (stability[0], ["unstable", "neutral", "stable"])
+    assert not timeline.in_class(three, slots, "all unstable").any()

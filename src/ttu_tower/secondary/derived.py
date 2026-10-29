@@ -179,7 +179,6 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             theta_star = most.temperature_scale(ustar, wvpts_cov) if ustar else np.nan
             phi_m_bd, phi_h_bd = most.businger_dyer_phi_m(zeta), most.businger_dyer_phi_h(zeta)
             psi_m_bd, psi_h_bd = most.businger_dyer_psi_m(zeta), most.businger_dyer_psi_h(zeta)
-            n2_most = most.most_brunt_vaisala_squared(ustar, HEIGHTS[boom], zeta)
             ils_u = its_u * u_mean
             ils_v = its_v * abs(u_mean)
             ils_w = its_w * abs(u_mean)
@@ -207,7 +206,6 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             "tke": tke, "ctke": ctke, "ustar": ustar,
             "obukhov_length": obukhov_length, "zeta": zeta, "theta_star": theta_star,
             "phi_m_bd": phi_m_bd, "phi_h_bd": phi_h_bd, "psi_m_bd": psi_m_bd, "psi_h_bd": psi_h_bd,
-            "n2_most": n2_most,
             "ils_u": ils_u, "ils_v": ils_v, "ils_w": ils_w, "ils_vpts": ils_vpts,
             "its_corr_u": its_corr_u, "its_corr_v": its_corr_v, "its_corr_w": its_corr_w,
             "its_corr_vpts": its_corr_vpts,

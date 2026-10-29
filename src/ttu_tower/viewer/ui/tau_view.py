@@ -23,7 +23,7 @@ from ttu_tower.secondary.detect import SMOOTHING
 from ttu_tower.viewer import taustats, whatif
 from ttu_tower.viewer.taustats import RUNGS, SOURCES, VARIANTS
 from ttu_tower.viewer.timeaxis import slot_to_unix
-from ttu_tower.viewer.timeline import in_class
+from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.timeline_plot import LegendBar
 
@@ -310,7 +310,7 @@ class TauView(QWidget):
         current = self.group.currentData()
         items = [("all slots", "all")]
         if self.stability is not None:
-            items += [(n, f"class:{n}") for n in self.stability[1]]
+            items += [(n, f"class:{n}") for n in class_choices(self.stability[1])]
         if self.selection.size:
             items += [("selected slots", "selected"), ("unselected slots", "rest")]
         if [self.group.itemData(i) for i in range(self.group.count())] == [d for _, d in items]:

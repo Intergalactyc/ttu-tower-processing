@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 
 from ttu_tower.flags import TESTS
 from ttu_tower.io.runs import locate_home
+from ttu_tower.tertiary import gradients
 
 VARIANTS = ("mrd", "naive", "mrd_unexcised")
 _CACHE_VERSION = 1
@@ -37,7 +38,14 @@ _META: dict[str, tuple[str, str, str]] = {
     "obukhov_length": ("Stability", "Obukhov L", "m"), "zeta": ("Stability", "ζ = z/L", ""),
     "theta_star": ("Fluxes", "θ*", "K"), "phi_m_bd": ("Stability", "φm (Businger-Dyer)", ""),
     "phi_h_bd": ("Stability", "φh (Businger-Dyer)", ""), "psi_m_bd": ("Stability", "ψm (Businger-Dyer)", ""),
-    "psi_h_bd": ("Stability", "ψh (Businger-Dyer)", ""), "n2_most": ("Stability", "N² (MOST)", "1/s²"),
+    "psi_h_bd": ("Stability", "ψh (Businger-Dyer)", ""),
+    "dpt_dz": ("Stability", "dθ/dz", "K/m"), "dvpt_dz": ("Stability", "dθv/dz", "K/m"),
+    "dws_dz": ("Stability", "dU/dz", "1/s"), "shear": ("Stability", "shear |dV/dz|", "1/s"),
+    "n2": ("Stability", "N²", "1/s²"), "rig": ("Stability", "Ri_g", ""), "rif": ("Stability", "Ri_f", ""),
+    "phi_m": ("Stability", "φm measured", ""), "phi_h": ("Stability", "φh measured (θ)", ""),
+    "phi_h_v": ("Stability", "φh measured (θv)", ""), "km": ("Turbulence", "Km", "m²/s"),
+    "kh": ("Turbulence", "Kh", "m²/s"), "prandtl": ("Turbulence", "Prandtl number", ""),
+    "l_buoyant": ("Scales", "buoyancy length σw/N", "m"),
     "its_corr_u": ("Scales", "ITS u corrected", "s"), "its_corr_v": ("Scales", "ITS v corrected", "s"),
     "its_corr_w": ("Scales", "ITS w corrected", "s"), "its_corr_vpts": ("Scales", "ITS θv corrected", "s"),
     "ils_corr_u": ("Scales", "ILS u corrected", "m"), "ils_corr_v": ("Scales", "ILS v corrected", "m"),
@@ -52,8 +60,7 @@ _META: dict[str, tuple[str, str, str]] = {
     "aniso_l3": ("Turbulence", "anisotropy λ3", ""), "aniso_beta": ("Turbulence", "anisotropy β", "deg"),
     "aniso_phi": ("Turbulence", "anisotropy φ", "deg"), "w_ratio": ("QC", "w/ws (tilt)", ""),
     "momentum": ("QC", "momentum family", ""), "heat": ("QC", "heat family", ""), "its_vpts": ("QC", "ITS θv blocks", ""),
-    "rib": ("Stability", "Ri_b", ""), "lapse_vpt": ("Stability", "dθv/dz", "K/m"),
-    "n2_bulk": ("Stability", "N² (bulk)", "1/s²"), "veer": ("Stability", "veer", "deg"),
+    "rib": ("Stability", "Ri_b", ""), "veer": ("Stability", "veer", "deg"),
     "alpha": ("Profile fits", "α (ws power law)", ""), "loglaw": ("Profile fits", "log-law fit", ""), "gamma": ("Profile fits", "γ (TI power law)", ""),
     "wdgamma": ("Profile fits", "γ (wd std power law)", ""), "loglaw_ustar": ("Profile fits", "log-law u*", "m/s"),
     "loglaw_z0": ("Profile fits", "log-law z0", "m"), "loglaw_z0_constrained": ("Profile fits", "log-law z0 (u* fixed)", "m"),
@@ -96,6 +103,10 @@ def _describe(variable: str, stat: str | None) -> tuple[str, str, str]:
     if "_meso" in variable:
         _, _, unit = _META.get(variable.split("_meso")[0], ("", "", ""))
         return "Mesonet", f"mesonet {variable.replace('_meso', '').replace('_', ' ')}", unit
+    base, stencil = gradients.split(variable)
+    if stencil is not None:
+        group, label, unit = _describe(base, stat)
+        return group, f"{label} ({stencil} stencil)", unit
     group, label, unit = _META.get(variable, ("Other", variable, ""))
     if stat is None:
         return group, label, unit

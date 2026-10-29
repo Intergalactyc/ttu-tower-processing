@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSplitt
 from ttu_tower.viewer import hodograph
 from ttu_tower.viewer.hodograph import MESONET
 from ttu_tower.viewer.timeaxis import slot_to_unix
-from ttu_tower.viewer.timeline import in_class
+from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 
 _LINE = "#333333"
@@ -145,7 +145,8 @@ class HodographView(QWidget):
         current = self.group.currentData()
         items = [("all slots", "all")]
         if self.stability is not None:
-            items += [(n, f"class:{n}") for n in self.stability[1]] + [("each class, overlaid", "classes")]
+            items += [(n, f"class:{n}") for n in class_choices(self.stability[1])]
+            items += [("each class, overlaid", "classes")]
         if self.selection.size:
             items += [("selected slots", "selected"), ("unselected slots", "rest")]
         if [self.group.itemData(i) for i in range(self.group.count())] == [d for _, d in items]:

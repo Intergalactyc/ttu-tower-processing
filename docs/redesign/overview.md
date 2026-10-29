@@ -31,7 +31,7 @@ flagged data (`mrd_unexcised`).
   computes slow-sensor thermodynamics and converts heat quantities to the measured pressure.
 - **Tertiary** filters values by their flags and coverage (a failing value becomes NaN; whole
   records are never dropped), merges mesonet data, and computes cross-boom quantities (Ri_b,
-  lapse rate, veer) and profile fits. **Post** helpers classify stability and report yields.
+  veer, per-boom gradients with N², Ri_g, Ri_f, Km, Kh) and profile fits. **Post** helpers classify stability and report yields.
 
 **Quality control** runs each test once, at its own grain, and stores the result as intervals
 of sample indices, so any later window can ask what fraction of it was flagged. Unusable
@@ -148,11 +148,13 @@ flowchart TB
         t_meso["mesonet.py<br/>merge, 10-min resample"]
         mesodir[("Mesonet<br/>directory")]
         t_filter["filtering.py<br/>flags and coverage → NaN"]
-        t_multi["multiboom.py<br/>Ri_b, lapse rate, veer"]
+        t_multi["multiboom.py<br/>Ri_b, veer"]
+        t_grad["gradients.py<br/>dθ/dz, N², Ri_g, Ri_f, Km, Kh"]
         t_prof["profiles.py<br/>power-law and log-law fits"]
         t_wide["wide.py<br/>monthly wide export"]
         c_tertiary --> t_runner --> t_meso -.->|"wtxmeso"| mesodir
         t_runner --> t_filter --> t_multi
+        t_filter --> t_grad
         t_filter --> t_prof
         t_runner --> t_wide
     end
@@ -245,7 +247,7 @@ flowchart TB
 
     subgraph tertiary["Tertiary · all booms together"]
         direction LR
-        filter["Filtering<br/>failing values → NaN"] --> multi["Across booms<br/>Ri_b, lapse rate, veer,<br/>profile fits"]
+        filter["Filtering<br/>failing values → NaN"] --> multi["Across booms<br/>Ri_b, veer, gradients,<br/>profile fits"]
     end
 
     meso[("Mesonet data")]
@@ -330,7 +332,7 @@ flowchart TB
     subgraph TERTIARY["TERTIARY · per batch"]
         t1["Mesonet merge<br/>10-min resample"]
         t2["Filtering<br/>coverage and flag fractions<br/>over each value's support;<br/>failures → NaN"]
-        t3["Across booms<br/>Ri_b, lapse rate, veer"]
+        t3["Across booms<br/>Ri_b, veer, gradients"]
         t4["Profile fits<br/>power laws, log law;<br/>τ-status rules"]
         t2 --> t3 & t4
     end

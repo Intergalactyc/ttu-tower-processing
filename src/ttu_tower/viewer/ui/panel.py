@@ -12,23 +12,15 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer.catalog import Catalog, Quantity
 from ttu_tower.viewer.timeline import has_filtered_overlay, has_tau_overlay
+from ttu_tower.viewer.ui import variant_combo
 
-_VARIANT_LABELS = {"none": "slot (no τ)", "mrd": "mrd (selected τ)", "naive": "naive (10 min)",
-                   "mrd_unexcised": "mrd unexcised"}
-_VARIANT_TIPS = {
-    "none": "Over the whole 10-min slot on the final usable mask (means, slow sensors and what's "
-            "built from them); doesn't depend on τ.",
-    "mrd": "Mean over the valid τ-blocks tiling the slot, at the selected τ (τ = 20 min: the "
-           "window from 5 min before the slot to 15 min after).",
-    "naive": "The 600-s rung of mrd: the slot as a single block.",
-    "mrd_unexcised": "As mrd, on the series with nothing removed (gaps ≤ 10 min interpolated).",
-}
+_VARIANT_LABELS = variant_combo.LABELS  # the run's own; variant_combo.label covers the viewer's too
 STYLES = ("lines", "points", "lines + points")
 
 
 def default_pairs(q: Quantity) -> list:
     """The pairs a pair quantity starts with: veer against its reference boom
-    for every other boom, Ri_b and the lapse rate over 2-4.
+    for every other boom, Ri_b over 2-4.
     """
     if q.variable == "veer":
         refs = {b2 for _, b2 in q.pairs}
@@ -208,8 +200,8 @@ class PanelControls(QWidget):
         self.variant.blockSignals(True)
         self.variant.clear()
         for v in q.variants:
-            self.variant.addItem(_VARIANT_LABELS.get(v, v), v)
-            self.variant.setItemData(self.variant.count() - 1, _VARIANT_TIPS.get(v, ""), Qt.ItemDataRole.ToolTipRole)
+            self.variant.addItem(variant_combo.label(v), v)
+            self.variant.setItemData(self.variant.count() - 1, variant_combo.tip(v), Qt.ItemDataRole.ToolTipRole)
         i = self.variant.findData(self._preferred_variant)
         self.variant.setCurrentIndex(i if i >= 0 else max(self.variant.findData("mrd"), 0))
         self.variant.setEnabled(len(q.variants) > 1)

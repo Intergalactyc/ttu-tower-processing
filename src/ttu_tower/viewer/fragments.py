@@ -79,6 +79,7 @@ class FragmentIndex:
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
         self._tables: dict[str, TableFragments] = {}
+        self.variants = None  # the viewer's τ variants (tauvariants.VariantStore), read alongside the run's
 
     def table(self, name: str) -> TableFragments:
         if name not in self._tables:
@@ -93,7 +94,30 @@ class FragmentIndex:
         selects rows within them, so pass a boom filter too for per-batch tables.
         """
         paths = self.table(name).paths(booms=booms, half_hours=half_hours, include_other=include_other)
-        return read_paths(paths, columns=columns, filter=filter)
+        out = read_paths(paths, columns=columns, filter=filter)
+        extra = self._variant_rows(name, booms, half_hours, columns, filter)
+        if not extra:
+            return out
+        return pd.concat(([] if out.empty else [out]) + extra, ignore_index=True)
+
+    def _variant_rows(self, name, booms, half_hours, columns, filter) -> list[pd.DataFrame]:
+        """Rows of the viewer's τ variants the read asks for (computed first if
+        need be), from the batches `half_hours` would have read.
+        """
+        from ttu_tower.viewer import tauvariants
+        if self.variants is None or name not in tauvariants.TABLES:
+            return []
+        dirs = [d for key in tauvariants.requested(self.variants, filter) if (d := self.variants.ensure(key))]
+        paths = [p for d in dirs for p in tauvariants.paths(d, name, booms)]
+        if not paths:
+            return []
+        if half_hours is not None:
+            batches = {b for b in (self.table(name).batch_for_half_hour(int(h)) for h in half_hours) if b}
+            slots = [s for h_a, h_b in batches for s in range(3 * h_a, 3 * (h_b + 1))]
+            in_batches = pa_dataset.field("slot").isin(slots)
+            filter = in_batches if filter is None else filter & in_batches
+        rows = read_paths(paths, columns=columns, filter=filter)
+        return [rows] if not rows.empty else []
 
     def flags_window(self, boom: int, g_lo: int, g_hi: int) -> pd.DataFrame:
         """Flag intervals of `boom` overlapping samples [g_lo, g_hi). Flags are

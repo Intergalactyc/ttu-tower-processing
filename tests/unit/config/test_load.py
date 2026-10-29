@@ -88,6 +88,7 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.tertiary.fits.gamma_booms == tuple(range(1, 11))
     assert cfg.tertiary.fits.wdgamma_booms == tuple(range(1, 11))
     assert cfg.tertiary.fits.loglaw_booms == (1, 2, 3, 4, 5, 6, 7)
+    assert cfg.tertiary.gradients.stencils == ("log_linear", "log")
     assert cfg.post.stability.pair == (2, 4)
     assert cfg.post.stability.classes == (
         ("strongly unstable", "(-inf,-0.05)"),
@@ -196,6 +197,20 @@ def test_flag_fraction_number_sets_every_variable():
 def test_flag_fraction_invalid_raises(value, match):
     raw = _minimal_raw()
     raw["tertiary"] = {"max_spike_fraction": value}
+    with pytest.raises(ConfigError, match=match):
+        config_from_dict(raw, default_tag="t")
+
+
+def test_gradient_stencils_override():
+    raw = _minimal_raw()
+    raw["tertiary"] = {"gradients": {"stencils": ["log"]}}
+    assert config_from_dict(raw, default_tag="t").tertiary.gradients.stencils == ("log",)
+
+
+@pytest.mark.parametrize("value,match", [([], "at least one"), (["cubic"], "must be"), (["log", "log"], "twice")])
+def test_gradient_stencils_invalid_raises(value, match):
+    raw = _minimal_raw()
+    raw["tertiary"] = {"gradients": {"stencils": value}}
     with pytest.raises(ConfigError, match=match):
         config_from_dict(raw, default_tag="t")
 

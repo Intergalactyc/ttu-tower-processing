@@ -211,6 +211,12 @@ Filtering runs first, so a boom whose input value was filtered is already absent
 | `wdgamma_booms` | list[int] | `[1, …, 10]` | `ttu-windprofiles` | Booms for the wd-standard-deviation power law. |
 | `loglaw_booms` | list[int] | `[1, 2, 3, 4, 5, 6, 7]` | OLDC | Booms for the neutral log-law fits. |
 
+### `[tertiary.gradients]`
+
+| Key | Type | Default | Prov. | Notes |
+|---|---|---|---|---|
+| `stencils` | list[str] | `["log_linear", "log"]` | DES | The finite-difference stencils of the per-boom gradient products (output-schema.md §5.1): `log_linear` (three points, exact for log-linear profiles) or `log` (two points, exact for log profiles). Each gives a full set; the first under the plain names, the others suffixed `_<stencil>`, for comparison. |
+
 ## `[post.stability]` (read only by `ttu-report --stability` and `ttu_tower.post.classify`)
 
 | Key | Type | Default | Prov. | Notes |

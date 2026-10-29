@@ -139,12 +139,18 @@ class FitsConfig:
 
 
 @dataclass(frozen=True)
+class GradientsConfig:
+    stencils: tuple[str, ...]  # the first gives the plain-named products
+
+
+@dataclass(frozen=True)
 class TertiaryConfig:
     min_coverage: float
     max_bounds_fraction: dict[str, float]  # per input variable (ue, vn, w, ts, t, rh, p)
     max_spike_fraction: dict[str, float]
     veer_reference_boom: int
     fits: FitsConfig
+    gradients: GradientsConfig
 
 
 @dataclass(frozen=True)

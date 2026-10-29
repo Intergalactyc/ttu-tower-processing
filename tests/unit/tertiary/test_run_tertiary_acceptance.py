@@ -93,12 +93,14 @@ def test_run_tertiary_end_to_end(tmp_path, monkeypatch, raw_dir):
     # completeness check.
     unmapped = set(boom_final["variable"].unique()) - set(filtering.QUANTITY_GROUPS)
     assert not unmapped, f"no QUANTITY_GROUPS entry for: {unmapped}"
+    # the gradient products, under both default stencils
+    assert {"rig", "rig_log", "n2", "rif", "prandtl_log", "phi_h_v"} <= set(boom_final["variable"].unique())
 
     tau_final = tables["tau_final"]
     assert set(tau_final["variant"].unique()) == {"mrd", "mrd_unexcised", "naive"}
 
     pairs = tables["pairs"]
-    assert set(pairs["variable"].unique()) == {"rib", "lapse_vpt", "n2_bulk", "veer"}
+    assert set(pairs["variable"].unique()) == {"rib", "veer"}
     assert {(1, 2), (1, 1)} <= set(zip(pairs["boom"], pairs["boom2"]))
 
     profile = tables["profile"]

@@ -350,7 +350,6 @@ It contains:
 | `theta_star` | θ* = −w'θv'/u\* (K), positive when stable |
 | `phi_m_bd`, `phi_h_bd` | Businger-Dyer φm(ζ), φh(ζ) (Dyer 1974: α = 5, β = 16; φh = φm² when unstable) |
 | `psi_m_bd`, `psi_h_bd` | Their integrated forms ψm(ζ), ψh(ζ) (Paulson 1970) |
-| `n2_most` | N² = u\*²/(κz)² · ζ · φh(ζ) (1/s²), i.e. (g/θv) dθv/dz from MOST |
 | `ils_u`, `ils_v`, `ils_w`, `ils_vpts` | ITS × (u mean), with \|u mean\| for v, w and vpts |
 | `its_corr_u`, `its_corr_v`, `its_corr_w`, `its_corr_vpts` | ITS × e/(e−1): the full integral of an exponential ACF, from its integral up to the 1/e crossing (the ACF beyond it isn't integrated) |
 | `ils_corr_u`, `ils_corr_v`, `ils_corr_w`, `ils_corr_vpts` | ILS × e/(e−1), likewise |
@@ -406,8 +405,54 @@ file; values are NaN where inputs are missing or filtered.
 Columns: `slot`, `slot_start`, `boom`, `variant` (`none` | `mrd` | `naive` | `mrd_unexcised`),
 `variable`, `stat`, `value`.
 
-- `variant = none`: the rows of `means` and `slow`.
-- Other variants: the rows of `boom_stats`.
+- `variant = none`: the rows of `means` and `slow`, plus the profile gradient products below.
+- Other variants: the rows of `boom_stats`, plus the flux gradient products below.
+
+The gradient products (stat null, `tertiary/gradients.py`) are computed after filtering from
+the filtered values, so a filtered input gives NaN.
+
+**Stencils.** dX/dz at boom b is a weighted sum of X at b's neighbours among the run's booms
+(`math.stats.log_gradient_weights`):
+
+- `log_linear`: the booms below and above b, and b itself. X = a + β ln z + c z through the
+  three points, differentiated at z_b: dX/dz = β/z_b + c. Exact for log and log-linear
+  (Businger-Dyer stable) profiles.
+- `log`: the booms below and above b: (X₊ − X₋)/(z_b ln(z₊/z₋)). Exact for X linear in ln z.
+- The lowest and highest booms use themselves and their one neighbour, with `log`'s formula,
+  under both.
+
+Every stencil in `[tertiary.gradients].stencils` gives a full set: the first under the names
+below, each other with the suffix `_<stencil>` (`rig_log`, `phi_m_log`, …).
+
+Profile products (`variant = none`):
+
+| variable | Definition |
+|---|---|
+| `dpt_dz` | dθ/dz (K/m), θ = slow-sensor `pt` |
+| `dvpt_dz` | dθv/dz (K/m), θv = slow-sensor `vpt` |
+| `dws_dz` | dU/dz (1/s), U = \|(ue, vn) mean\| |
+| `shear` | \|(dūe/dz, dv̄n/dz)\| (1/s): the vector shear, which counts veer. ≥ \|`dws_dz`\| under `log` (the triangle inequality); `log_linear`'s three weights don't guarantee it, and it can fall slightly below (the 2026-10-28 run: 1.9% of rows, by ~0.1%, mostly boom 3) |
+| `n2` | N² = g/θv · dθv/dz (1/s²); θv the boom's own slow-sensor `vpt` (as in ζ), g local at z_b |
+| `rig` | Ri_g = N²/`shear`² |
+
+Flux products (each flux variant):
+
+| variable | Definition |
+|---|---|
+| `phi_m` | κz/u\* · `dws_dz` |
+| `phi_h` | κz/θ\* · `dpt_dz` (θ\* is from w'θv', as in `theta_star`) |
+| `phi_h_v` | κz/θ\* · `dvpt_dz` |
+| `rif` | Ri_f = (g/θv) w'θv' / (u'w' ∂U_s/∂z + v'w' ∂V_s/∂z), θv and g as in `n2` |
+| `km` | Km = −(u'w' ∂U_s/∂z + v'w' ∂V_s/∂z)/`shear`² (m²/s): the shear production over S² |
+| `kh` | Kh = −w'θv'/`dvpt_dz` (m²/s) |
+| `prandtl` | Pr = Km/Kh, which is `rig`/`rif` exactly |
+| `l_buoyant` | σw/N (m), N = √`n2`; NaN unless `n2` > 0 |
+
+(∂U_s/∂z, ∂V_s/∂z) is the earth-frame gradient (dūe/dz, dv̄n/dz) rotated into the boom's
+streamwise frame (its slot-mean wind), the frame of `uw` and `vw`. Those are slot means of
+block-wise streamwise covariances (each block rotated to its own mean wind), so the slot-mean
+frame is theirs only approximately; the difference is second order in the wind's direction
+changes within the slot.
 
 Values that fail filtering are NaN (§5.6). `boom_labels` (the anisotropy class) isn't part of
 this table - see `boom_labels_final` (§5.8).
@@ -423,9 +468,7 @@ Columns: `slot`, `slot_start`, `boom`, `boom2`, `variant`, `variable`, `value`.
 | variable | variant | Definition |
 |---|---|---|
 | `rib` | none | Bulk Richardson number between `boom` < `boom2` (all 45 pairs); vector wind difference from ue/vn means; slow VPT; local g. |
-| `lapse_vpt` | none | (VPT₂ − VPT₁)/(z₂ − z₁), K/m, all pairs. |
-| `n2_bulk` | none | N² = g/mean(VPT₁, VPT₂) · `lapse_vpt` (1/s²), with Ri_b's g; Ri_b = N² Δz²/ΔU². All pairs. |
-| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. Includes the reference boom's own row (`boom == boom2`, value 0 unless the reference's own `wd` was filtered) - unlike `rib`/`lapse_vpt`/`n2_bulk`, `veer` doesn't follow the `boom < boom2` convention, since `boom2` here is a fixed reference rather than a pair partner. |
+| `veer` | none | Signed angular difference wd(`boom`) − wd(`boom2`), deg, where `boom2` is the reference boom; positive when `boom`'s direction is clockwise of the reference's. Includes the reference boom's own row (`boom == boom2`, value 0 unless the reference's own `wd` was filtered) - unlike `rib`, `veer` doesn't follow the `boom < boom2` convention, since `boom2` here is a fixed reference rather than a pair partner. |
 
 ### 5.4 `profile`: profile fits per slot
 
@@ -576,4 +619,5 @@ counts); and wall time in total and per step.
 | `l1_{b}`…, `anisotropy_{b}`, `beta_{b}`, `phi_{b}` | `boom_stats` aniso_*, `boom_labels` aniso_class |
 | `sun_elevation`, `night` | `slot_stats` / `slot_final` |
 | `quality` | removed (boom-level filtering replaces record classes) |
-| `tiglobal_{b}`, `Rif_*`, `spoleto`, `pp` flags | removed |
+| `Rif_*` | `boom_final` rif (per boom, from the gradients; §5.1) |
+| `tiglobal_{b}`, `spoleto`, `pp` flags | removed |

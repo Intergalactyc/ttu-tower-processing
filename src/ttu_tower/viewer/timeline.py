@@ -180,7 +180,7 @@ def has_filtered_overlay(q: Quantity) -> bool:
 
 
 def has_tau_overlay(q: Quantity, variant: str) -> bool:
-    return q.table in ("boom_final", "boom_labels_final") and variant in ("mrd", "mrd_unexcised")
+    return q.table in ("boom_final", "boom_labels_final") and (variant in ("mrd", "mrd_unexcised") or variant.startswith("scheme:"))
 
 
 def filtered(run, index: FragmentIndex, q: Quantity, variant: str, members) -> FilteredOverlay:
@@ -323,14 +323,35 @@ def values_at(curve: Curve, slots: np.ndarray) -> np.ndarray:
     return y
 
 
+COMBINED = {"all unstable": ("strongly unstable", "unstable"), "all stable": ("stable", "strongly stable")}
+
+
+def class_choices(names) -> list[str]:
+    """The classes one at a time, then each combined group whose classes the scheme has."""
+    names = list(names)
+    return names + [g for g, members in COMBINED.items() if g not in names and all(m in names for m in members)]
+
+
+def _members(name: str, names) -> list[str]:
+    if name in names:
+        return [name]
+    members = COMBINED.get(name, ())
+    return list(members) if members and all(m in names for m in members) else []
+
+
 def in_class(stability: tuple[Curve, list[str]] | None, slots: np.ndarray, name: str | None) -> np.ndarray:
-    """Which of `slots` fall in stability class `name` (all of them for None)."""
+    """Which of `slots` fall in stability class `name` (all of them for None) or
+    combined group ("all unstable", "all stable").
+    """
     if name is None:
         return np.ones(slots.size, dtype=bool)
     if stability is None:
         return np.zeros(slots.size, dtype=bool)
     curve, names = stability
-    return values_at(curve, slots) == names.index(name) if name in names else np.zeros(slots.size, dtype=bool)
+    members = _members(name, names)
+    if not members:
+        return np.zeros(slots.size, dtype=bool)
+    return np.isin(values_at(curve, slots), [names.index(m) for m in members])
 
 
 def joined(a: Curve, b: Curve) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

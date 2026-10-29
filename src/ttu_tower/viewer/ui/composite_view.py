@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLa
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer import composite
 from ttu_tower.viewer.timeaxis import slot_to_unix
-from ttu_tower.viewer.timeline import in_class
+from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.axes import Log10Axis
 from ttu_tower.viewer.ui.timeline_plot import LegendBar
@@ -129,7 +129,7 @@ class CompositeSpectraView(QWidget):
         current = self.group.currentData()
         items = [("all slots", "all")]  # item data: "all", "selected", "rest" or "class:<name>"
         if self.stability is not None:
-            items += [(n, f"class:{n}") for n in self.stability[1]]
+            items += [(n, f"class:{n}") for n in class_choices(self.stability[1])]
         if self.selection.size:
             items += [("selected slots", "selected"), ("unselected slots", "rest")]
         if [self.group.itemData(i) for i in range(self.group.count())] == [d for _, d in items]:

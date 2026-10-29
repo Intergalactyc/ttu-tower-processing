@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QSizePolicy, QTool
 
 from ttu_tower.viewer.anisotropy import CASE_COLORS, CASES
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, slot_to_unix, unix_to_slot
-from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui import style, variant_combo
 from ttu_tower.viewer.ui.curves import FixedXViewBox
 
 
@@ -136,6 +136,10 @@ class AnisotropyBand(QWidget):
 
     def link_to(self, plot_item) -> None:
         self.plot.getPlotItem().setXLink(plot_item)
+
+    def set_variants(self, extra) -> None:
+        """The viewer's τ variants (Controls → τ) after the run's own."""
+        variant_combo.refill(self.variant, [(v, v) for v in ("mrd", "naive", "mrd_unexcised")], extra)
 
     def set_booms(self, booms, shown=None) -> None:
         for btn in self.boom_buttons.values():

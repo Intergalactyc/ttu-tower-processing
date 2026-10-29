@@ -13,6 +13,8 @@ from ttu_tower.constants import HEIGHTS
 from ttu_tower.post.classify import stability_classes
 from ttu_tower.viewer.slotdata import load_across, load_slot, stored_selection
 from ttu_tower.viewer.timeaxis import format_slot
+from ttu_tower.viewer import tauvariants
+from ttu_tower.viewer.ui import variant_combo
 from ttu_tower.viewer.ui.inspector.anisotropy_tab import AnisotropyTab
 from ttu_tower.viewer.ui.inspector.hodograph_tab import HodographTab
 from ttu_tower.viewer.ui.inspector.numbers_tab import NumbersTab
@@ -130,6 +132,11 @@ class InspectorWindow(QWidget):
         self.boom, self.slot = boom, slot
         self.emphasis, self.focus_vars, self._auto_acf = emphasis, tuple(focus_vars), tab == "scales"
         self._set_combo(self.boom_box, boom)
+        if self.index.variants is not None:  # the viewer's τ variants computed so far
+            ready = self.index.variants.ready()
+            self.variant_box.blockSignals(True)
+            variant_combo.fill(self.variant_box, _VARIANTS, [k for k in self.index.variants.known() if k in ready])
+            self.variant_box.blockSignals(False)
         if variant is not None:
             self._set_combo(self.variant_box, variant if variant != "none" else "mrd")
         if self.reprocessor is not None:
@@ -342,7 +349,7 @@ class InspectorWindow(QWidget):
             parts.append(f"τ <b>{sel['tau_s']:g} s</b> from {sel['source']} ({sel['source_status']})"
                          if np.isfinite(sel["tau_s"]) else f"τ none ({sel['source_status']})")
         tau = b.table("tau")
-        spec_variant = "mrd" if variant == "naive" else variant
+        spec_variant = tauvariants.basis(variant)
         for row in tau[tau["variant"] == spec_variant].itertuples():
             value = row.tau_s if np.isfinite(row.tau_s) else row.tau_lb_s
             parts.append(f"{row.cospectrum} {row.status}" + (f" {value:g} s" if np.isfinite(value) else ""))

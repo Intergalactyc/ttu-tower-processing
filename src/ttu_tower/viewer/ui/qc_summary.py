@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QScrollArea, QVBox
 from ttu_tower.viewer import qcsummary
 from ttu_tower.viewer.catalog import variable_label
 from ttu_tower.viewer.timeaxis import unix_to_slot
-from ttu_tower.viewer.ui import tables
+from ttu_tower.viewer.ui import tables, variant_combo
 
 _VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (10 min)"), ("mrd_unexcised", "mrd unexcised"))
 _FLAGGED_TIP = ("% of the variable's samples each test flagged, over the slots with a file; excursion only "
@@ -106,6 +106,11 @@ class QCSummaryView(QWidget):
 
     def _tables(self):
         return (self.availability_table, self.coverage_table, self.flag_table, self.filter_table, self.tau_table)
+
+
+    def set_variants(self, extra) -> None:
+        """The viewer's τ variants (Controls → τ) after the run's own."""
+        variant_combo.refill(self.variant, _VARIANTS, extra)
 
     def set_run(self, run, index, booms) -> None:
         self.run, self.index, self.booms = run, index, list(booms)

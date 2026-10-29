@@ -28,11 +28,11 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer import brush, curvefits, expression
 from ttu_tower.viewer.timeaxis import slot_to_unix
-from ttu_tower.viewer.timeline import in_class, joined
+from ttu_tower.viewer.timeline import class_choices, in_class, joined
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
 from ttu_tower.viewer.ui.function_overlay import FunctionOverlay
-from ttu_tower.viewer.ui.panel import _VARIANT_LABELS
+from ttu_tower.viewer.ui import variant_combo
 from ttu_tower.viewer.ui.timeline_plot import brush_mode
 from ttu_tower.viewer.ui.search_combo import SearchCombo
 from ttu_tower.viewer.ui.view_state import LateCombo
@@ -510,7 +510,7 @@ class ScatterView(QWidget):
         self.z_variant.blockSignals(True)
         self.z_variant.clear()
         for v in q.variants if q is not None else ():
-            self.z_variant.addItem(_VARIANT_LABELS.get(v, v), v)
+            self.z_variant.addItem(variant_combo.label(v), v)
         i = self.z_variant.findData(variant)
         self.z_variant.setCurrentIndex(i if i >= 0 else max(self.z_variant.findData("mrd"), 0))
         self.z_variant.setEnabled(self.z_variant.count() > 1)
@@ -616,10 +616,11 @@ class ScatterView(QWidget):
     def class_shown(self) -> str | None:
         """The one stability class shown, or None for all."""
         name = self.only_class.currentData()
-        return name if name is not None and self.stability is not None and name in self.stability[1] else None
+        shown = self.stability is not None and name in class_choices(self.stability[1])
+        return name if name is not None and shown else None
 
     def _fill_classes(self) -> None:
-        names = list(self.stability[1]) if self.stability is not None else []
+        names = class_choices(self.stability[1]) if self.stability is not None else []
         if [self.only_class.itemData(i) for i in range(self.only_class.count())] == [None] + names:
             return
         current = self.only_class.currentData()

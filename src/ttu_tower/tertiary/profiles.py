@@ -128,6 +128,19 @@ def _loglaw_constrained_rows(boom_final: pd.DataFrame, tau_selected: pd.DataFram
     return rows
 
 
+def variant_profiles(boom_final: pd.DataFrame, tau_selected: pd.DataFrame, variant: str, cfg_fits) -> pd.DataFrame:
+    """The τ-dependent fits (gamma, wdgamma, the constrained log law) of one
+    variant, as `profiles` makes them for each of its own (the viewer's τ
+    variants). `boom_final` needs the variant's rows and the `none` ws means.
+    """
+    rows = _second_moment_power_rows(boom_final, tau_selected, variant, "gamma", "ti", None, cfg_fits.gamma_booms,
+                                     cfg_fits)
+    rows += _second_moment_power_rows(boom_final, tau_selected, variant, "wdgamma", "wd", "std",
+                                      cfg_fits.wdgamma_booms, cfg_fits)
+    rows += _loglaw_constrained_rows(boom_final, tau_selected, variant, cfg_fits)
+    return pd.DataFrame(rows, columns=_PROFILE_COLUMNS)
+
+
 def profiles(boom_final: pd.DataFrame, tau_selected: pd.DataFrame, cfg_fits) -> pd.DataFrame:
     rows = []
     rows += _alpha_rows(boom_final, cfg_fits)

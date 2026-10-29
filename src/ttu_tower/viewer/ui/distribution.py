@@ -17,7 +17,7 @@ from ttu_tower.math.polar import yamartino_std
 from ttu_tower.math.stats import moments
 from ttu_tower.viewer import distfits
 from ttu_tower.viewer.decimate import visible_slice
-from ttu_tower.viewer.timeline import in_class
+from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
 
@@ -78,7 +78,7 @@ def stability_combo(tip: str) -> QComboBox:
 
 def set_stability_names(combo: QComboBox, stability) -> None:
     """The classes of the run's stability scheme (disabled without one)."""
-    names = stability[1] if stability is not None else []
+    names = class_choices(stability[1]) if stability is not None else []
     if [combo.itemData(i) for i in range(1, combo.count())] == names:
         return
     current = combo.currentData()

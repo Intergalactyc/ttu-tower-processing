@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer import derived
 from ttu_tower.viewer.derived import Definition, Variable
-from ttu_tower.viewer.ui.panel import _VARIANT_LABELS
+from ttu_tower.viewer.ui import variant_combo
 from ttu_tower.viewer.ui.search_combo import SearchCombo
 
 _NAMES = ("x", "y", "a", "b", "c", "d", "f", "g", "h", "k")
@@ -55,7 +55,7 @@ class _Row:
         if q is None:
             return
         for v in q.variants:
-            self.variant.addItem(_VARIANT_LABELS.get(v, v), v)
+            self.variant.addItem(variant_combo.label(v), v)
         i = self.variant.findData(variant)
         self.variant.setCurrentIndex(i if i >= 0 else max(self.variant.findData("mrd"), 0))
         self.variant.setEnabled(len(q.variants) > 1)
@@ -101,6 +101,9 @@ class DerivedPanel(QWidget):
         self.list.currentItemChanged.connect(lambda *_: self._open_current())
         new, delete = QPushButton("New"), QPushButton("Delete")
         new.clicked.connect(self.new)
+        duplicate = QPushButton("Duplicate")
+        duplicate.setToolTip("a new quantity defined as the one shown (as edited), to rename and change")
+        duplicate.clicked.connect(lambda *_: self.duplicate())
         delete.clicked.connect(self.delete)
         self.name = QLineEdit()
         self.name.setPlaceholderText("name, e.g. u_ustar_ratio")
@@ -123,6 +126,7 @@ class DerivedPanel(QWidget):
 
         buttons = QHBoxLayout()
         buttons.addWidget(new)
+        buttons.addWidget(duplicate)
         buttons.addWidget(delete)
         buttons.addStretch(1)
         head = QHBoxLayout()
@@ -140,6 +144,11 @@ class DerivedPanel(QWidget):
         layout.addLayout(self.grid)
         layout.addWidget(self.add_button, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(formula)
+        hint = QLabel("<i>z</i> = the boom's height (m), in a per-boom formula — e.g. x/sqrt(y) with x = σw and "
+                      "y = N² at each boom's height, or x*z")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#555;")
+        layout.addWidget(hint)
         layout.addWidget(self.status)
         self._fill_list()
         self.new()
@@ -221,6 +230,21 @@ class DerivedPanel(QWidget):
         self.add_row()
         self.add_row()
         self.status.setText("a new derived quantity: name it, choose its variables, write its formula, Save")
+
+    def duplicate(self) -> None:
+        """The definition shown becomes a new, unsaved one with a free name."""
+        base = self.name.text().strip() or "copy"
+        taken = {d.name for d in self.store.items}
+        i = 2
+        while f"{base}_{i}" in taken:
+            i += 1
+        source, self.editing = self.editing, None
+        self.list.blockSignals(True)
+        self.list.clearSelection()
+        self.list.setCurrentItem(None)
+        self.list.blockSignals(False)
+        self.name.setText(f"{base}_{i}")
+        self.status.setText(f"a copy of {source or base}: rename it, change what differs, Save")
 
     def open(self, d: Definition) -> None:
         self.editing = d.name

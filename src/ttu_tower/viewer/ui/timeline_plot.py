@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor, QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QVBoxLayout, QWidget
 
+from ttu_tower.viewer import tauvariants
 from ttu_tower.viewer.decimate import break_wraps, nearest_on_curve
 from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, unix_to_slot
 from ttu_tower.viewer.timeline import Curve, FilteredOverlay, TimelineData, values_at as _values_at
@@ -206,7 +207,7 @@ class TimelinePlot(QWidget):
         self.vb.suppress_fit = True
         self.plot_item.setLogMode(y=spec.log_y)
         self.vb.suppress_fit = False
-        variant = "" if data.variant == "none" else f" · {data.variant}"
+        variant = "" if data.variant == "none" else f" · {tauvariants.label(data.variant)}"
         self.title.setText(f"<b>{q.title}</b>{variant}")
         self.plot_item.export_title = f"{q.title}{variant}"
         self.plot_item.setLabel("left", q.unit if not q.categorical else "")

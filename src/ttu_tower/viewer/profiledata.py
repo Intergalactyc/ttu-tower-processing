@@ -38,7 +38,9 @@ PROFILE_QUANTITIES = (
     ProfileQuantity("wvpts", "w'θv'", "K m/s", "wvpts", "cov", True),
     ProfileQuantity("zeta", "ζ = z/L", "", "zeta", None, True),
     ProfileQuantity("theta_star", "θ*", "K", "theta_star", None, True),
-    ProfileQuantity("n2_most", "N² (MOST)", "1/s²", "n2_most", None, True),
+    ProfileQuantity("n2", "N²", "1/s²", "n2", None, False),
+    ProfileQuantity("rig", "Ri_g", "", "rig", None, False),
+    ProfileQuantity("rif", "Ri_f", "", "rif", None, True),
     ProfileQuantity("ils_u", "ILS u", "m", "ils_u", None, True),
 )
 
@@ -185,8 +187,8 @@ def fit_summary(across, variant: str) -> list[str]:
 
 
 def pair_table(across, stability_pair) -> pd.DataFrame:
-    """Ri_b, dθv/dz and bulk N² for every boom pair, the stability pair first."""
-    columns = ["rib", "lapse_vpt", "n2_bulk"]
+    """Ri_b for every boom pair, the stability pair first."""
+    columns = ["rib"]
     pairs = across.table("pairs")
     rows = pairs[pairs["variable"].isin(columns)]
     if rows.empty:

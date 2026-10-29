@@ -200,11 +200,23 @@ def redetect(index, data: TauData, boom: int, cfg_det, kernel=SMOOTHING) -> dict
         ends = np.r_[starts[1:], gkey.size]
         pos = np.searchsorted(key, gkey[starts])
         status, tau, lb = out[family]
+        own = np.zeros(key.size, dtype=bool)  # rows with spectra of their own
         for s, e, i in zip(starts, ends, pos):
-            if i >= key.size or key[i] != gkey[s] or status[i] == no_data:
+            if i >= key.size or key[i] != gkey[s]:
+                continue
+            own[i] = True
+            if status[i] == no_data:
                 continue
             det = detect(value[s:e], se[s:e], n[s:e], True, cfg_det, kernel=kernel)
             status[i], tau[i], lb[i] = STATUSES.index(det.status), det.tau_s, det.tau_lb_s
+        # an mrd_unexcised row without spectra is secondary's copy of the mrd row: so is its redetection
+        unexcised = VARIANTS.index("mrd_unexcised")
+        copied = np.flatnonzero((data.variant[rows] == unexcised) & ~own)
+        target = key[copied] - unexcised + VARIANTS.index("mrd")
+        twin = np.searchsorted(key, target)
+        ok = (twin < key.size) & (key[np.minimum(twin, key.size - 1)] == target)
+        copied, twin = copied[ok], twin[ok]
+        status[copied], tau[copied], lb[copied] = status[twin], tau[twin], lb[twin]
     return out
 
 

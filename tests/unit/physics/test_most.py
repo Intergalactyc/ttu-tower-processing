@@ -50,15 +50,6 @@ def test_businger_dyer_psi_integrates_phi():
             assert psi(zeta) == approx(np.trapezoid((1 - phi(x)) / x, x), abs=1e-6)
 
 
-def test_most_brunt_vaisala_squared_matches_gradient_form():
-    # N^2 = (g/theta) * theta* phi_h / (kappa z), with L = u*^2 theta / (kappa g theta*)
-    u_star, theta, theta_star, z, g = 0.3, 300.0, 0.1, 10.0, 9.8
-    l = u_star**2 * theta / (KAPPA * g * theta_star)
-    zeta = z / l
-    expected = g / theta * theta_star * most.businger_dyer_phi_h(zeta) / (KAPPA * z)
-    assert most.most_brunt_vaisala_squared(u_star, z, zeta) == approx(expected, rel=1e-12)
-
-
 def test_neutral_loglaw_fit_recovers_known_profile():
     ustar_true, z0_true = 0.35, 0.1
     z = np.array([2.0, 5.0, 10.0, 20.0, 50.0])

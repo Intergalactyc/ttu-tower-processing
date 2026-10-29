@@ -15,7 +15,7 @@ def _none_row(slot, boom, variable, value, stat="mean"):
     return {"slot": slot, "boom": boom, "variant": "none", "variable": variable, "stat": stat, "value": value}
 
 
-def test_rib_and_lapse_vpt_match_direct_computation():
+def test_rib_matches_direct_computation():
     boom_final = pd.DataFrame([
         _none_row(_SLOT, 1, "ue", 5.0), _none_row(_SLOT, 1, "vn", 0.0), _none_row(_SLOT, 1, "vpt", 290.0, stat=None),
         _none_row(_SLOT, 4, "ue", 6.0), _none_row(_SLOT, 4, "vn", 1.0), _none_row(_SLOT, 4, "vpt", 292.0, stat=None),
@@ -29,15 +29,7 @@ def test_rib_and_lapse_vpt_match_direct_computation():
         290.0, 292.0, HEIGHTS[1], HEIGHTS[4], 5.0, 6.0, 0.0, 1.0, components=True, gravity=expected_g,
     )
     assert rib_row["value"].iloc[0] == pytest.approx(expected_rib)
-
-    lapse_row = result[(result["boom"] == 1) & (result["boom2"] == 4) & (result["variable"] == "lapse_vpt")]
-    expected_lapse = (292.0 - 290.0) / (HEIGHTS[4] - HEIGHTS[1])
-    assert lapse_row["value"].iloc[0] == pytest.approx(expected_lapse)
-
-    n2_row = result[(result["boom"] == 1) & (result["boom2"] == 4) & (result["variable"] == "n2_bulk")]
-    assert n2_row["value"].iloc[0] == pytest.approx(expected_g / 291.0 * expected_lapse)
-    shear_sq = (6.0 - 5.0) ** 2 + (1.0 - 0.0) ** 2
-    assert expected_rib == pytest.approx(n2_row["value"].iloc[0] * (HEIGHTS[4] - HEIGHTS[1]) ** 2 / shear_sq)
+    assert set(result["variable"]) == {"rib", "veer"}
 
 
 def test_veer_matches_signed_angular_distance_to_reference():
@@ -78,7 +70,7 @@ def test_filtered_boom_gives_nan_rib_for_every_pair_containing_it():
     ])
     result = multiboom(boom_final, [1, 2, 3], veer_reference_boom=2)
 
-    involving_1 = result[((result["boom"] == 1) | (result["boom2"] == 1)) & result["variable"].isin(["rib", "lapse_vpt", "n2_bulk"])]
+    involving_1 = result[((result["boom"] == 1) | (result["boom2"] == 1)) & (result["variable"] == "rib")]
     assert involving_1["value"].isna().all()
     not_involving_1 = result[(result["boom"] == 2) & (result["boom2"] == 3) & (result["variable"] == "rib")]
     assert not not_involving_1["value"].isna().any()

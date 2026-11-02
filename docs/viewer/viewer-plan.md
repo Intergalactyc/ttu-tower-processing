@@ -1556,6 +1556,63 @@ viewed interval or the whole period like the others.
   - Every fit and the overlay report RMSE over all the points shown where the curve is defined,
     and over the displayed bins (the curve at the bin centres; by boom height, the overlay's own
     bin values, its height varying point to point). A fit to bins of its own also reports those.
+- **Slot Inspector: added profiles of any per-boom quantity, 2026-10-30.**
+  - Profile tab, "add": any per-boom catalog quantity (derived ones and τ variants too), at a
+    variant of its own or "as the inspector". The plots follow the built-in ones in the grid,
+    y-linked.
+  - Each is read as the timelines read it (`timeline.load` on the worker, cached per run), and
+    `profiledata.points_at` takes this slot. Stepping slots is then quick.
+  - No ghosts or stored fits: a catalog quantity has only its final value. A button per added
+    profile removes it.
+  - They last as long as the inspector window and aren't saved.
+- **Profiles: one stability class; values beside the points, 2026-10-30.**
+  - By stability, a class choice: every class (as before), one class, or "all unstable" / "all
+    stable", that group's slots together as one profile (`profiles.profile_stats(classes=)`). A
+    combined group takes its milder class's color.
+  - "values" writes each point's value (3 significant figures) a few pixels to its right. Labels
+    follow the class offsets on zoom and resize, and go into the matplotlib figure too.
+  - Both are saved in views.
+- **Scatter: constrained fits hold slopes too, 2026-10-30.** A setting left blank ("fitted") is
+  fitted; a number holds it (`curvefits.BLANK_FITTED`).
+  - Constrained linear: the intercept (default 0) or the slope, not both. A held slope gives
+    a = mean(y − b·x). Both blank is the linear fit.
+  - Constrained double linear: up to two of slope 1 (A, at x → 0), slope 2 (B, at large x) and
+    the intercept (D, default 0). The scale C is always fitted. The label says which were held.
+  - Older views load as before: intercept 0, slopes fitted.
+- **Formulas: min and max, 2026-10-30.** `min(a, b, ...)` and `max(a, b, ...)` of two or more
+  values, element by element; NaN if any value is (`expression.SEVERAL`). This applies to derived
+  quantities and the Scatter's function overlay alike. The names aren't reserved, so a variable may
+  still be called `max`.
+- **Derived quantities built on derived quantities, 2026-10-30.** A variable may be another
+  derived quantity.
+  - Definitions are resolved each after those they use (`derived.in_order`), whatever order the
+    store keeps them in.
+  - Loops are refused at Save ("it would use itself (a → b → a)"). One already in the store, from
+    an older home or a hand-edited file, leaves the quantities in it unresolved, with that note.
+  - Renaming a derived quantity carries over to those that use it. Deleting one says which
+    quantities used it; they go grey in the list ("not on this run") until it's back.
+  - Loading recurses through `timeline.load`. Its cache key holds the nested definitions, so
+    editing an inner quantity recomputes the outer ones.
+- **Derived quantities: the site's constants, 2026-10-30.** A formula may use `g`, `f`, `kappa`,
+  `cp` and `Rd` (`derived.SITE`, listed in the formula's tooltip).
+  - `g` is local gravity as the pipeline computes it (`local_gravity(SITE_LATITUDE, SITE_ELEVATION
+    + height)`), at the result's own height: the boom's, a pair's mean, or the ground for a per-slot
+    quantity.
+  - `f` is the Coriolis parameter at SITE_LATITUDE. `kappa`, `cp` and `Rd` come from
+    `physics.constants`.
+  - A variable with one of these names hides the constant, so existing definitions keep working.
+- **Short screens: scroll rather than squeeze or overflow, 2026-10-29.**
+  - The timeline column (both timelines, the bands and the overview) scrolls when the window is
+    shorter than it needs. Its minimum (~600 px) used to set the window's own, so on a laptop the
+    window ran off the bottom of the screen. The window's minimum height is now ~350 px.
+  - Summary plots have a least height (`wrap_tabs.keep_tall`: 220 px; 160 px for the stacked
+    distributions and wind roses). A short Summary page scrolls instead of crushing its plot.
+  - Scatter: a splitter between the plot and the fit and overlay below it. Drag it to trade
+    height, or drag it shut for all plot. Everything below the plot (stats, fit, overlay) scrolls
+    as one, so it can shrink to ~40 px.
+  - Scatter: the seven rows of options above the plot fold away (`wrap_tabs.Fold`) to one line
+    naming the axes ("y: … x: …", with z where it colors or stacks the points; "(log)" on log
+    axes). The fold and the splitter's sizes are saved in views, so a session resumes as left.
 - **Scatter: relative fit errors (least squares in ln y), 2026-10-28.**
   - Why: least squares in y let the largest y decide a fit. A constrained linear φm(ζ) on log bins
     moved strongly with the upper x percentile: b = Σx(y−a)/Σx², so each bin pulls like x².

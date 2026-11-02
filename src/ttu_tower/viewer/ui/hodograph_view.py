@@ -16,6 +16,7 @@ from ttu_tower.viewer.hodograph import MESONET
 from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _LINE = "#333333"
 EACH_SLOT_LIMIT = 500
@@ -99,7 +100,7 @@ class HodographView(QWidget):
         self.group.currentIndexChanged.connect(lambda *_: self.redraw())
         for w in (self.common, self.each_slot, self.labels):
             w.toggled.connect(lambda *_: self.redraw())
-        self.plot = pg.PlotWidget()
+        self.plot = keep_tall(pg.PlotWidget())
         self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         prepare_plot(self.plot)
         self.table = tables.new_table()

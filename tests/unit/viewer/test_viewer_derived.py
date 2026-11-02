@@ -46,6 +46,48 @@ def test_a_definition_resolves_to_a_quantity_of_the_right_kind():
             derived.resolve(d, cat)
 
 
+def test_the_site_constants_are_the_pipelines_at_each_members_height():
+    from ttu_tower.constants import SITE_ELEVATION, SITE_LATITUDE
+    from ttu_tower.physics.earth import local_gravity
+
+    top = derived.site_values("boom", 10)
+    assert top["g"] == pytest.approx(local_gravity(SITE_LATITUDE, SITE_ELEVATION + 200.0))
+    assert top["f"] == pytest.approx(2 * 7.2921e-5 * np.sin(np.deg2rad(SITE_LATITUDE)))
+    assert top["kappa"] == 0.41 and top["cp"] == pytest.approx(1004.69, abs=0.01) and top["Rd"] == pytest.approx(287.006, abs=0.001)
+    pair = derived.site_values("pair", (2, 4))["g"]
+    assert pair == pytest.approx(local_gravity(SITE_LATITUDE, SITE_ELEVATION + (2.4 + 10.1) / 2))
+    assert derived.site_values("slot", None)["g"] > pair > top["g"]  # less with height
+    cat = _catalog()
+    assert derived.resolve(Definition("n", "g/x*f/kappa", (Variable("x", "ws"),)), cat).kind == "boom"
+    assert derived.resolve(Definition("s", "g*2", (Variable("g", "meso"),)), cat).kind == "slot"  # a variable may be g
+    with pytest.raises(ValueError, match="unknown name 'G'"):
+        derived.resolve(Definition("r", "G*x", (Variable("x", "ws"),)), cat)
+
+
+def test_a_derived_quantity_may_use_others_but_never_itself(tmp_path):
+    a = Definition("a", "x/y", (Variable("x", "ws"), Variable("y", "ustar", "mrd")))
+    b = Definition("b", "2*p", (Variable("p", "derived|a|"),))
+    c = Definition("c", "p + q", (Variable("p", "derived|b|"), Variable("q", "meso")))
+    cat = _catalog()
+    assert derived.add_to(cat, [c, b, a]) == []  # each after those it uses, whatever the order kept
+    assert cat["derived|c|"].kind == "boom" and derived.uses(c) == {"b"}
+    assert [d.name for d in derived.in_order([c, b, a])[0]] == ["a", "b", "c"]
+
+    loop = Definition("a", "p", (Variable("p", "derived|b|"),))  # a → b → a
+    me = Definition("m", "p", (Variable("p", "derived|m|"),))
+    notes = derived.add_to(cat, [loop, b, c, me])
+    assert "a: it uses itself (a → b → a)" in notes and "b: it uses itself (b → a → b)" in notes
+    assert "m: it uses itself (m → m)" in notes
+    assert any(n.startswith("c: p: the derived quantity b isn't defined") for n in notes)  # c relies on the loop
+
+    store = DerivedStore.open(tmp_path / "derived.json")
+    for d in (a, b, c):
+        store.put(d)
+    store.put(Definition("ratio", a.formula, a.variables), replacing="a")  # renamed: b follows
+    again = {d.name: d for d in DerivedStore.open(tmp_path / "derived.json").items}
+    assert again["b"].variables[0].key == "derived|ratio|" and derived.add_to(_catalog(), again.values()) == []
+
+
 def test_definitions_are_kept_and_replaced_by_name(tmp_path):
     store = DerivedStore.open(tmp_path / "derived.json")
     a = Definition("a", "x", (Variable("x", "rib", member=(2, 4)),), "m")
@@ -136,6 +178,45 @@ def test_a_derived_quantity_is_defined_in_controls_and_shown_in_a_panel(window, 
     panel.delete()
     assert "derived|u_ustar_ratio|" not in window.catalog.quantities and panel.list.count() == 0
     assert "isn't in this run" in window.statusBar().currentMessage()
+
+
+@pytest.mark.slow
+def test_a_formula_takes_g_at_each_booms_height_and_a_variable_hides_a_constant(window, qtbot):
+    panel = window.derived_panel
+    assert "g: local gravity" in panel.formula.toolTip()
+    assert _define(panel, "gws", "x*0 + g/f", [("x", "boom_final|ws|mean", "none", None)]), panel.status.text()
+    window.panels[0].select("derived|gws|", None, tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "derived|gws|", timeout=60_000)
+    for b in FULL_BOOMS:
+        site = derived.site_values("boom", b)
+        y = window.datas[0].curves[b].y
+        assert y.size and np.allclose(y[np.isfinite(y)], site["g"] / site["f"])
+    assert _define(panel, "fws", "f", [("f", "boom_final|ws|mean", "none", None)]), panel.status.text()
+    shown = derived.load(window.run, window.index, window.catalog["derived|fws|"], FULL_BOOMS)
+    ws = timeline.load(window.run, window.index, window.catalog["boom_final|ws|mean"], "none", FULL_BOOMS)
+    assert np.allclose(shown[FULL_BOOMS[0]][1], ws.curves[FULL_BOOMS[0]].y, equal_nan=True)  # the variable, not f
+
+
+@pytest.mark.slow
+def test_a_derived_quantity_built_on_another_follows_it(window, qtbot):
+    panel = window.derived_panel
+    assert _define(panel, "ratio", "x/y", [("x", "boom_final|ws|mean", "none", None),
+                                           ("y", "boom_final|ustar|", "mrd", None)]), panel.status.text()
+    assert _define(panel, "twice", "2*r", [("r", "derived|ratio|", "none", None)]), panel.status.text()
+    assert panel.rows[0].quantity.findData("derived|twice|") < 0  # not itself
+    ratio = timeline.load(window.run, window.index, window.catalog["derived|ratio|"], "none", FULL_BOOMS)
+    twice = timeline.load(window.run, window.index, window.catalog["derived|twice|"], "none", FULL_BOOMS)
+    b = FULL_BOOMS[0]
+    assert twice.curves[b].y.size and np.allclose(twice.curves[b].y, 2 * ratio.curves[b].y, equal_nan=True)
+
+    panel.open(next(d for d in panel.store.items if d.name == "ratio"))  # ratio on twice: a loop
+    panel.rows[0].quantity.setCurrentIndex(panel.rows[0].quantity.findData("derived|twice|"))
+    panel.rows[0].sync("none", None)
+    assert not panel.save() and "would use itself (ratio → twice → ratio)" in panel.status.text()
+
+    panel.open(next(d for d in panel.store.items if d.name == "ratio"))
+    panel.delete()
+    assert "twice used it" in panel.status.text() and "derived|twice|" not in window.catalog.quantities
 
 
 @pytest.mark.slow

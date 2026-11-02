@@ -93,7 +93,7 @@ def _spec(kind):
                     "selected": {"x": x[:3], "y": x[:3]}},
         "profiles": {"panels": [{"title": "ws", "xlabel": "m/s", "groups": [
             {"label": "neutral", "color": "#9b5445", "x": x[:5], "z": x[:5] * 20, "spread": x[:5] / 10,
-             "fit": (x[:5], x[:5] * 20)}]}]},
+             "fit": (x[:5], x[:5] * 20), "values": True}]}]},
         "composite": {"title": "uw", "ylabel": "u'w'", "refs": (60.0,), "lines": [
             {"label": "10 m", "color": "#123456", "scale": x, "mid": -x, "lo": -x - 1, "hi": -x + 1}]},
         "diurnal": {"values": np.random.default_rng(0).random((24, 12)), "title": "ws", "months": diurnal.MONTHS},

@@ -15,6 +15,7 @@ from ttu_tower.viewer.timeaxis import slot_to_unix  # noqa: E402
 from ttu_tower.viewer.ui import view_state  # noqa: E402
 from ttu_tower.viewer.ui.app import configure_pyqtgraph  # noqa: E402
 from ttu_tower.viewer.ui.main_window import MainWindow  # noqa: E402
+from ttu_tower.viewer.ui.wrap_tabs import PLOT_FLOOR  # noqa: E402
 
 from viewer_fixtures import FULL_BOOMS, SPIKY_BOOM, SPIKY_SLOT  # noqa: E402
 
@@ -71,6 +72,28 @@ def test_profile_tab_ghosts_the_filtered_boom_and_switches_boom_on_click(window,
     qtbot.waitUntil(lambda: inspector.bundle is not None and inspector.bundle.boom == other and _idle(window),
                     timeout=60_000)
     assert inspector.boom == other and profile.boom == other
+
+
+def test_profile_tab_adds_a_profile_of_any_per_boom_quantity(window, qtbot):
+    inspector = _inspect(window, qtbot, "profile")
+    profile = inspector.profile
+    qtbot.waitUntil(lambda: bool(profile.plots), timeout=60_000)
+    assert profile.add_quantity.findData("boom_final|ws|mean") > 0
+    assert profile.add_quantity.findData("slot_final|night|") < 0  # per boom only
+    profile.add_quantity.setCurrentIndex(profile.add_quantity.findData("boom_final|ws|mean"))
+    profile.add_extra()
+    profile.add_extra("boom_final|ustar|", "")  # follows the inspector's variant
+    qtbot.waitUntil(lambda: {"extra:0", "extra:1"} <= set(profile.points) and _idle(window), timeout=60_000)
+    assert len(profile.plots) == 20 and profile.chip_flow.count() == 2
+    for extra, built_in in (("extra:0", "ws"), ("extra:1", "ustar")):
+        got = profile.points[extra].set_index("boom")["value"]
+        want = profile.points[built_in].set_index("boom")["value"]
+        assert got.notna().any() and np.allclose(got, want, equal_nan=True)
+    assert "reading" not in profile.plots["extra:1"].titleLabel.text and "mrd" in profile.plots["extra:1"].titleLabel.text
+
+    profile.remove_extra(0)
+    qtbot.waitUntil(lambda: "extra:0" in profile.points and _idle(window), timeout=60_000)
+    assert profile.extras == [("boom_final|ustar|", "")] and len(profile.plots) == 19
 
 
 def test_whatif_tab_reproduces_the_run_then_follows_an_edit(window, qtbot):
@@ -563,11 +586,51 @@ def test_profile_classes_sit_a_few_pixels_apart_with_capped_bars(window, qtbot):
     view.grouping.setCurrentIndex(view.grouping.findData("stability"))
     view.error_bars.setChecked(True)
     plot = view.plots[0]
-    (first, bars, _, z, _, _, _), (second, _, _, _, _, _, _) = plot._marks
+    (first, bars, _, z, _, _, _, _), (second, _, _, _, _, _, _, _) = plot._marks
     py = plot.plot.getViewBox().viewPixelSize()[1]
     gap = second.getData()[1] - first.getData()[1]
     assert np.allclose(gap, OFFSET_PX * py) and np.allclose(first.getData()[1], z - OFFSET_PX * py / 2)
     assert bars is not None and bars.opts["beam"] > 0
+
+
+def test_profiles_show_one_class_and_write_their_values(window, qtbot):
+    from ttu_tower.viewer import profiles
+    from ttu_tower.viewer.timeline import Curve, in_class
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.profiles)
+    view = window.profiles
+    data = window.datas[0]
+    slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
+    names = ["strongly unstable", "unstable", "neutral", "stable", "strongly stable"]
+    stability = (Curve(slots=slots, y=(slots % 5).astype(float)), names)
+    view.set_sources([(data, list(data.curves)), None], None, stability)
+    assert not view.only_class.isEnabled()  # only by stability
+    view.grouping.setCurrentIndex(view.grouping.findData("stability"))
+    assert view.only_class.isEnabled() and view.only_class.findData("all unstable") > 0
+    plot = view.plots[0]
+    assert len(plot._marks) == 5
+    view.only_class.setCurrentIndex(view.only_class.findData("all unstable"))
+    assert len(plot._marks) == 1 and list(plot.stats["group"].unique()) == ["all unstable"]
+    b = FULL_BOOMS[0]
+    curve = data.curves[b]
+    both = in_class(stability, curve.slots, "all unstable")
+    row = plot.stats[plot.stats["boom"] == b].iloc[0]
+    assert row["centre"] == pytest.approx(np.nanmean(curve.y[both])) and row["n"] == np.isfinite(curve.y[both]).sum()
+    assert "all unstable" in view.key.text() and "neutral" not in view.key.text()
+
+    view.values.setChecked(True)
+    (_, _, x, _, _, _, _, labels), = plot._marks
+    assert [lab.toPlainText() for lab in labels] == [f"{v:.3g}" for v in x]
+    assert all(lab.pos().x() > xi for lab, xi in zip(labels, x))  # beside, to the right of, each point
+    kind, spec = view.figure_spec()
+    assert kind == "profiles" and spec["panels"][0]["groups"][0]["values"] is True
+    assert profiles.ALL not in set(plot.stats["group"])
+
+    state = view_state.save(view, view.STATE_FIELDS)
+    view.only_class.setCurrentIndex(0)
+    view_state.restore(view, state, view.STATE_FIELDS)
+    assert view.only_class.currentData() == "all unstable" and view.values.isChecked()
 
 
 def _drag(qtbot, widget, points, modifiers):
@@ -1401,6 +1464,17 @@ def test_a_constrained_linear_fit_takes_its_intercept_and_old_views_still_load(w
     qtbot.waitUntil(lambda: scatter.fit_result is not None and not scatter._fitting, timeout=60_000)
     assert scatter.fit_result.params["a"] == 0.5 and "intercept 0.5" in scatter.fit_list.item(0).text()
 
+    assert scatter.fit_settings["b"].text() == "" and scatter.fit_settings["b"].placeholderText() == "fitted"
+    scatter.fit_settings["b"].setText("3")  # the slope too: one must go
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: not scatter._fitting and "not both" in scatter.fit_status.text(), timeout=60_000)
+    scatter.fit_settings["a"].setText("")  # the slope held, the intercept fitted
+    scatter.run_fit()
+    qtbot.waitUntil(lambda: not scatter._fitting and scatter.fit_result.params["b"] == 3.0, timeout=60_000)
+    assert "slope 3" in scatter.fit_list.item(0).text() and "intercept" not in scatter.fit_list.item(0).text()
+    scatter.fit_settings["a"].setText("0.5")
+    scatter.fit_settings["b"].setText("")
+
     state = view_state.save(scatter, scatter.STATE_FIELDS)
     state["fit_name"] = {"data": "linear through origin", "text": "linear through origin"}  # a view saved before
     state["fits_state"]["fits"][0].update(name="linear through origin", settings={})
@@ -1408,8 +1482,35 @@ def test_a_constrained_linear_fit_takes_its_intercept_and_old_views_still_load(w
     state.pop("fit_settings", None)
     assert "fit_name" not in view_state.restore(scatter, state, scatter.STATE_FIELDS)
     assert scatter.fit_name.currentData() == "constrained linear" and scatter.fit_settings["a"].text() == "0"
-    assert scatter.fits[0].spec.settings == {"a": "0"}
+    assert scatter.fits[0].spec.settings == {"a": "0", "b": ""}  # the slope fitted, as before
     assert not scatter.fit_shown_bins.isChecked()  # older fits had bins of their own
+
+
+def test_a_short_window_scrolls_the_scatter_instead_of_squeezing_its_plot(window, qtbot):
+    scatter = window.scatter
+    window.right_tabs.setCurrentWidget(scatter)
+    window.resize(1400, 520)
+    qtbot.waitUntil(lambda: window.height() <= 560, timeout=5_000)  # the timelines scroll rather than hold it tall
+    qtbot.wait(50)
+    assert scatter.plot.height() >= PLOT_FLOOR
+    assert window.right_tabs.scroll.verticalScrollBar().maximum() > 0  # the page scrolls instead
+    plot_h, lower_h = scatter.split.sizes()
+    scatter.split.setSizes([plot_h + lower_h, 0])  # the fit's controls dragged shut: all plot
+    assert scatter.split.sizes()[1] == 0 and scatter.split.sizes()[0] > plot_h
+
+    assert scatter.split.widget(1).minimumSizeHint().height() <= 40  # shut, it gives the plot its room
+    before = scatter.minimumSizeHint().height()
+    scatter.fold.button.setChecked(False)  # the seven rows of options fold to one line
+    qtbot.waitUntil(lambda: scatter.minimumSizeHint().height() < before - 100, timeout=5_000)
+    assert not scatter.fold.body.isVisible() and "x: " in scatter.fold.line.text()
+    window.resize(1400, 700)  # room for the folded page: the plot takes it
+    qtbot.waitUntil(lambda: window.right_tabs.scroll.verticalScrollBar().maximum() == 0, timeout=5_000)
+    qtbot.waitUntil(lambda: scatter.plot.height() > PLOT_FLOOR + 50, timeout=5_000)
+    state = view_state.get(scatter.fold), view_state.get(scatter.split)
+    assert state[0] is False and state[1][1] == 0
+    view_state.put(scatter.fold, True)
+    view_state.put(scatter.split, [300, 200])
+    assert scatter.fold.body.isVisible() and scatter.fold.line.text() == "" and scatter.split.sizes()[1] > 0
 
 
 def test_a_fit_in_ln_y_is_relative_and_both_fits_score_in_ln_y(window, qtbot):

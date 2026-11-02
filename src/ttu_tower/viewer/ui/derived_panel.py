@@ -115,9 +115,10 @@ class DerivedPanel(QWidget):
         self.add_button.clicked.connect(lambda: self.add_row())
         self.formula = QLineEdit()
         self.formula.setPlaceholderText("formula of the variables, e.g. x/y")
+        site = "\n".join(f"  {name}: {what}" for name, what in derived.SITE.items())
         self.formula.setToolTip("numbers, the variables' names, + - * / ^, brackets, pi, e, exp, ln, log10, sqrt, abs, "
-                                "tanh, sin, cos, tan, arctan, sinh, cosh; z is the boom's height (m) for a per-boom "
-                                "quantity")
+                                "tanh, sin, cos, tan, arctan, sinh, cosh, min(a, b, ...), max(a, b, ...); z is the boom's height (m) for a per-boom "
+                                f"quantity.\nThe site's constants (a variable of the same name hides one):\n{site}")
         self.save_button = QPushButton("Save")
         self.save_button.clicked.connect(self.save)
         self.status = QLabel()
@@ -167,8 +168,8 @@ class DerivedPanel(QWidget):
     def choices(self) -> list:
         if self.catalog is None:
             return []
-        return [q for qs in self.catalog.grouped().values() for q in qs
-                if not q.categorical and q.table != derived.TABLE]
+        own = f"{derived.TABLE}|{self.editing}|" if self.editing else None
+        return [q for qs in self.catalog.grouped().values() for q in qs if not q.categorical and q.key != own]
 
     def _fill_list(self, notes=()) -> None:
         self.list.blockSignals(True)
@@ -273,6 +274,11 @@ class DerivedPanel(QWidget):
             q = derived.resolve(d, self.catalog)
             if d.name != self.editing and any(x.name == d.name for x in self.store.items):
                 raise ValueError(f"there's already a derived quantity named {d.name}")
+            after = derived.DerivedStore(items=list(self.store.items))  # in memory: the store as it would be
+            after.put(d, replacing=self.editing)
+            loop = derived.in_order(after.items)[1].get(d.name)
+            if loop:
+                raise ValueError(f"it would use itself ({' → '.join(loop)})")
         except ValueError as exc:
             self.status.setText(f"<span style='color:#b00'>{exc}</span>")
             return False
@@ -287,7 +293,11 @@ class DerivedPanel(QWidget):
     def delete(self) -> None:
         if self.editing is None:
             return
-        self.store.remove(self.editing)
+        gone = self.editing
+        self.store.remove(gone)
         self.new()
         self._fill_list()
+        users = sorted(x.name for x in self.store.items if gone in derived.uses(x))
+        if users:
+            self.status.setText(f"deleted {gone}: {', '.join(users)} used it, and can't be computed without it")
         self.changed.emit()

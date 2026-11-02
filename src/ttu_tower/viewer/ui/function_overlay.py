@@ -22,7 +22,7 @@ class _Piece:
         self.formula.setPlaceholderText("y = …, e.g. 0.18*x^0.5")
         names = "".join(f", {name} ({what})" for name, what in (variables or {}).items())
         self.formula.setToolTip(f"y in terms of x: numbers, x{names}, + - * / ^, brackets, pi, e, and "
-                                + ", ".join(expression.FUNCTIONS) + "()")
+                                + ", ".join(expression.FUNCTIONS) + "(), and min, max of two or more")
         for edit, which in ((self.lo, "from"), (self.hi, "to")):
             edit.setPlaceholderText("−∞" if which == "from" else "∞")
             edit.setMaximumWidth(70)

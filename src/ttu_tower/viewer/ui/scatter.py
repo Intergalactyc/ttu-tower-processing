@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 import shiboken6
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
@@ -36,6 +36,7 @@ from ttu_tower.viewer.ui import variant_combo
 from ttu_tower.viewer.ui.timeline_plot import brush_mode
 from ttu_tower.viewer.ui.search_combo import SearchCombo
 from ttu_tower.viewer.ui.view_state import LateCombo, put_combo
+from ttu_tower.viewer.ui.wrap_tabs import FitScroll, Fold, Split, keep_tall
 
 _POINT = "#1f4e9c"
 _FIT = "#2ca02c"
@@ -175,7 +176,8 @@ class ScatterView(QWidget):
                     "pct_show", "fit_bins", "fit_bin_method", "fit_bin_log", "fit_min_count", "fit_shown_bins",
                     "fit_errors",
                     "fit_name", "fit_auto",
-                    "fit_settings", "fit_subset", "fits_state", "overlay", "overlay_on")  # saved in a view, restored in this order
+                    "fit_settings", "fit_subset", "fits_state", "overlay", "overlay_on",
+                    "fold", "split")  # saved in a view, restored in this order
 
     pointClicked = Signal(int, object)  # slot, the point's member (its boom, by height)
     brushed = Signal(object, str)  # the lassoed slots, and "replace" / "add" / "remove"
@@ -468,20 +470,33 @@ class ScatterView(QWidget):
         self.overlay.changed.connect(self.redraw)
         self.overlay.from_fit.clicked.connect(self._overlay_from_fit)
 
+        options = QWidget()
+        options_layout = QVBoxLayout(options)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        for rows in (axes, look, z_row, chosen, lines):
+            options_layout.addLayout(rows)
+        self.fold = Fold(options, self._options_summary)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.addLayout(axes)
-        layout.addLayout(look)
-        layout.addLayout(z_row)
-        layout.addLayout(chosen)
-        layout.addLayout(lines)
-        plots = QHBoxLayout()
-        plots.setSpacing(0)
-        plots.addWidget(self.plot, stretch=1)
-        plots.addWidget(self.zbar)
-        layout.addLayout(plots, stretch=1)
-        layout.addWidget(self.stats)
-        layout.addWidget(self.lower_tabs)
+        layout.addWidget(self.fold)
+        plots = QWidget()
+        plots_layout = QHBoxLayout(plots)
+        plots_layout.setContentsMargins(0, 0, 0, 0)
+        plots_layout.setSpacing(0)
+        plots_layout.addWidget(keep_tall(self.plot), stretch=1)
+        plots_layout.addWidget(self.zbar)
+        below = QWidget()
+        below_layout = QVBoxLayout(below)
+        below_layout.setContentsMargins(0, 0, 0, 0)
+        below_layout.addWidget(self.stats)
+        below_layout.addWidget(self.lower_tabs, stretch=1)
+        self.split = Split(Qt.Orientation.Vertical)  # drag to trade the plot's height for the fit's
+        self.split.addWidget(plots)
+        self.split.addWidget(FitScroll(below, floor=QSize(240, 40)))  # squeezed or shut, it scrolls
+        self.split.setCollapsible(0, False)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 0)
+        layout.addWidget(self.split, stretch=1)
         self._items: list = []
         self.drawn_lines: list = []  # what's drawn, for figure_spec
         self.drawn_groups: list = []
@@ -736,6 +751,16 @@ class ScatterView(QWidget):
         centred = self.z_map.currentData() == "diverging" and not self.log_z.isChecked()
         return Z_MAPS["diverging" if centred else "sequential"]
 
+    def _options_summary(self) -> str:
+        """The folded options in a line: the axes (and z where it colors or stacks the points)."""
+        parts = []
+        for axis, name in ((1, "y"), (0, "x"), (2, "z")):
+            title = self.axis_title(axis)
+            if not title or (axis == 2 and not (self.by_height() or self.colors_by_z())):
+                continue
+            parts.append(f"{name}: {title}{' (log)' if self._log_box(name).isChecked() else ''}")
+        return "   ".join(parts) or "options"
+
     def axis_title(self, axis: int) -> str:
         """x, y or z as plotted (−q on a log axis's negative side)."""
         if axis == 2 and self.by_height():
@@ -801,6 +826,8 @@ class ScatterView(QWidget):
         chosen = self.selection.size > 0
         for i in (1, 2):
             self.fit_subset.model().item(i).setEnabled(chosen or self.fit_subset.currentIndex() == i)
+        if hasattr(self, "fold"):
+            self.fold.refresh()
 
     def redraw(self) -> None:
         self._redraw()
@@ -1168,8 +1195,10 @@ class ScatterView(QWidget):
                 item.widget().deleteLater()
         self.fit_settings = {}
         for arg, (label, default) in curvefits.FIT_SETTINGS.get(self.fit_name.currentData(), {}).items():
-            edit = QLineEdit((values or {}).get(arg, f"{default:g}"))
+            edit = QLineEdit((values or {}).get(arg, "" if default is None else f"{default:g}"))
             edit.setMaximumWidth(70)
+            edit.setPlaceholderText("fitted")
+            edit.setToolTip(f"{label}: a number to hold it there, or blank to fit it")
             edit.textChanged.connect(lambda *_: self._show_stats())
             self.fit_settings[arg] = edit
             self.fit_settings_row.addWidget(QLabel(label))
@@ -1183,6 +1212,9 @@ class ScatterView(QWidget):
         """A fit's own settings as (argument, value) pairs (ValueError if unreadable)."""
         out = []
         for arg, text in spec.settings.items():
+            if not text.strip() and spec.name in curvefits.BLANK_FITTED:
+                out.append((arg, None))  # blank: fitted
+                continue
             try:
                 out.append((arg, float(text)))
             except ValueError:
@@ -1318,7 +1350,7 @@ class ScatterView(QWidget):
         if spec.errors == "ln y" and spec.name not in curvefits.IN_LN_Y | curvefits.IN_Y:
             parts.append("errors in ln y")
         labels = {k: label for k, (label, _) in curvefits.FIT_SETTINGS.get(spec.name, {}).items()}
-        parts += [f"{labels.get(k, k)} {v}" for k, v in spec.settings.items()]
+        parts += [f"{labels.get(k, k)} {v}" for k, v in spec.settings.items() if v.strip()]
         return ", ".join(parts)
 
     def _fill_fit_list(self) -> None:

@@ -20,6 +20,7 @@ from ttu_tower.viewer.decimate import visible_slice
 from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _STATS = ("N", "NaN %", "mean", "σ", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
 _QUANTILES = (0, 5, 25, 50, 75, 95, 100)  # min to max, as percentiles
@@ -142,7 +143,7 @@ class DistributionView(QWidget):
         self.bin_auto.toggled.connect(self._on_bin_auto)
         self.fits: dict = {}
         self._fitted = None  # (args, inputs, fits) of the last fit, reused while only the view changes
-        self.plot = pg.PlotWidget(axisItems={"bottom": SwitchLogAxis(orientation="bottom")})
+        self.plot = keep_tall(pg.PlotWidget(axisItems={"bottom": SwitchLogAxis(orientation="bottom")}), 160)
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         self.table = tables.new_table()
         self.note = QLabel()

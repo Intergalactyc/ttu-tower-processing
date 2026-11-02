@@ -161,6 +161,10 @@ def _profiles(spec, size):
                             capsize=2, alpha=0.7)
             ax.plot(g["x"], g["z"], ls="-" if g.get("lines") else "none", marker=marker, ms=4, color=g["color"],
                     label=g["label"])
+            if g.get("values"):
+                for x, z in zip(g["x"], g["z"]):
+                    ax.annotate(f"{x:.3g}", (x, z), xytext=(4, 0), textcoords="offset points", fontsize=6,
+                                color=g["color"], va="center")
             if g.get("fit") is not None:
                 ax.plot(g["fit"][0], g["fit"][1], ls="--", lw=1, color=g["color"])
         if p.get("log_z"):

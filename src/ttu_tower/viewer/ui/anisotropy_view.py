@@ -21,6 +21,7 @@ from ttu_tower.viewer.ui import style, tables, variant_combo
 from ttu_tower.viewer.ui.inspector.anisotropy_tab import draw_frame
 from ttu_tower.viewer.ui.scatter import LassoViewBox
 from ttu_tower.viewer.ui.timeline_plot import SELECTED_COLOR
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _VARIANTS = (("mrd", "mrd"), ("naive", "naive"), ("mrd_unexcised", "mrd unexcised"))
 _VIRIDIS = pg.colormap.get("viridis")
@@ -93,7 +94,7 @@ class AnisotropyMapView(QWidget):
             w.toggled.connect(lambda *_: self.redraw())
         self.info = QLabel()
         self.info.setWordWrap(True)
-        self.graphics = pg.GraphicsLayoutWidget()
+        self.graphics = keep_tall(pg.GraphicsLayoutWidget())
         self.graphics.setToolTip("Shift-drag (or drag in brush mode) to lasso slots on any panel; Ctrl adds, "
                                  "Alt removes")
         self.table = tables.new_table()

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 
 from ttu_tower.viewer import compare
 from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 
 class CompareView(QWidget):
@@ -33,7 +34,7 @@ class CompareView(QWidget):
         self.title.setTextFormat(Qt.TextFormat.RichText)
         self.table = tables.new_table()
         self.table.setToolTip("N: finite values in range; the rest over the slots both runs have a value for")
-        self.plot = pg.PlotWidget()
+        self.plot = keep_tall(pg.PlotWidget())
         self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         layout = QVBoxLayout(self)

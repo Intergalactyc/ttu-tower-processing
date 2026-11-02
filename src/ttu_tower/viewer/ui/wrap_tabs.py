@@ -6,9 +6,12 @@ than a page needs, so no page can widen the window past the screen (a
 window's minimum is the sum of its parts', and a maximized window wider than
 the screen runs off its edge) and the buttons always span the visible width.
 """
+from typing import Callable
+
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QLayout, QScrollArea, QSizePolicy, QTabWidget, QToolButton, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea, QSizePolicy, QSplitter, QTabWidget, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 _TAB_STYLE = """
@@ -96,13 +99,82 @@ class _FillLayout(QVBoxLayout):
         return False
 
 
+PLOT_FLOOR = 220  # a page's plot is never squeezed below this: the page scrolls instead
+
+
+def keep_tall(widget: QWidget, height: int = PLOT_FLOOR) -> QWidget:
+    widget.setMinimumHeight(height)
+    return widget
+
+
+class Fold(QWidget):
+    """Controls that fold away to one line saying what they're set to (`summary()`), leaving a
+    short panel to its plot. Saved in a view (folded or not).
+    """
+
+    def __init__(self, body: QWidget, summary: Callable[[], str]):
+        super().__init__()
+        self.body, self._summary = body, summary
+        self.button = QToolButton()
+        self.button.setCheckable(True)
+        self.button.setChecked(True)
+        self.button.setAutoRaise(True)
+        self.button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.button.setToolTip("fold these options away to one line, leaving the room to the plot")
+        self.button.toggled.connect(self._fold)
+        self.line = QLabel()
+        self.line.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # long text mustn't widen it
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(self.button)
+        head.addWidget(self.line, stretch=1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addLayout(head)
+        layout.addWidget(body)
+        self._fold(True)
+
+    def _fold(self, shown: bool) -> None:
+        self.body.setVisible(shown)
+        self.button.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+        self.button.setText("options" if shown else "")
+        self.refresh()
+
+    def refresh(self) -> None:
+        text = "" if self.button.isChecked() else self._summary()
+        self.line.setText(text)
+        self.line.setToolTip(text)
+
+    def get_state(self):
+        return self.button.isChecked()
+
+    def put_state(self, value) -> bool:
+        self.button.setChecked(bool(value))
+        return True
+
+
+class Split(QSplitter):
+    """A splitter whose sizes are saved in a view."""
+
+    def get_state(self):
+        return self.sizes()
+
+    def put_state(self, value) -> bool:
+        if value and len(value) == self.count():
+            self.setSizes([int(v) for v in value])
+        return True
+
+
 class FitScroll(QScrollArea):
     """Its widget, filling it where there's room and scrolling where there isn't."""
 
     FLOOR = QSize(240, 150)  # it can't be squeezed below this
 
-    def __init__(self, widget: QWidget):
+    def __init__(self, widget: QWidget, floor: QSize | None = None):
         super().__init__()
+        if floor is not None:
+            self.FLOOR = floor
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         holder = QWidget()

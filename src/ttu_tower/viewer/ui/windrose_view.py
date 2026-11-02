@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer import windrose
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _VIRIDIS = pg.colormap.get("viridis")
 _COMPASS = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}
@@ -158,7 +159,7 @@ class WindRoseView(QWidget):
         self.info = QLabel()
         self.info.setWordWrap(True)
         self.info.setTextFormat(Qt.TextFormat.RichText)
-        self.tower_plot, self.meso_plot = RosePlot(), RosePlot()
+        self.tower_plot, self.meso_plot = keep_tall(RosePlot(), 160), keep_tall(RosePlot(), 160)
         labels = _speed_labels(windrose.SPEED_EDGES)
         key = QLabel("speed [m/s]: " + "  ".join(
             f"<span style='color:{_VIRIDIS.map(j / (len(labels) - 1), mode='qcolor').name()}'>■</span> {s}"

@@ -122,12 +122,22 @@ def _linear(x, y, relative=False):
     return lambda v: a + b * v, {"a": a, "b": b}, f"y = {a:.4g} + {b:.4g}·x"
 
 
-def _constrained(x, y, a=0.0, relative=False):
-    """y = a + b·x with the intercept a given."""
-    _, b = constrained_linear_fit(x, y, a=a)
-    if relative:
-        (b,) = _in_ln_y(lambda v, b: a + b * v, x, y, [b])
-    label = f"y = {b:.4g}·x" if a == 0 else f"y = {a:g} + {b:.4g}·x (intercept fixed)"
+def _constrained(x, y, a=0.0, b=None, relative=False):
+    """y = a + b·x with the intercept a or the slope b given (both None: the linear fit)."""
+    if a is not None and b is not None:
+        raise ValueError("give the intercept or the slope, not both (leave one blank)")
+    if b is not None:
+        a = float(np.mean(y - b * x))
+        if relative:
+            (a,) = _in_ln_y(lambda v, a: a + b * v, x, y, [a])
+        label = f"y = {a:.4g} + {b:g}·x (slope fixed)"
+    elif a is not None:
+        _, b = constrained_linear_fit(x, y, a=a)
+        if relative:
+            (b,) = _in_ln_y(lambda v, b: a + b * v, x, y, [b])
+        label = f"y = {b:.4g}·x" if a == 0 else f"y = {a:g} + {b:.4g}·x (intercept fixed)"
+    else:
+        return _linear(x, y, relative=relative)
     return lambda v: a + b * np.asarray(v, dtype=float), {"a": a, "b": b}, label
 
 
@@ -191,23 +201,30 @@ def _double_linear_model(x, A, B, C, D):
     return (B - A) * C * (np.exp(-x / C) - 1) + B * x + D
 
 
-def _double_linear(x, y, intercept=None, relative=False):
+def _double_linear(x, y, A=None, B=None, D=None, relative=False):
+    """Slope A at x = 0 bending to B at large x over a scale C, through y(0) = D; any of A, B and D
+    given (up to two), the rest fitted.
+    """
+    fixed = {k: float(v) for k, v in (("A", A), ("B", B), ("D", D)) if v is not None}
+    if len(fixed) == 3:
+        raise ValueError("give at most two of slope 1, slope 2 and the intercept")
     a0, b0 = ls_linear_fit(x, y)
-    c0 = max((x.max() - x.min()) / 4, 1e-6)
-    if intercept is None:
-        (A, B, C, D), *_ = curve_fit(_double_linear_model, x, y, p0=[b0, b0, c0, a0], maxfev=5000,
-                                     bounds=([-np.inf, -np.inf, 1e-9, -np.inf], [np.inf] * 4))
-    else:
-        D = intercept
-        (A, B, C), *_ = curve_fit(lambda v, A, B, C: _double_linear_model(v, A, B, C, D), x, y, p0=[b0, b0, c0],
-                                  maxfev=5000, bounds=([-np.inf, -np.inf, 1e-9], [np.inf] * 3))
-    if relative and intercept is None:
-        A, B, C, D = _in_ln_y(_double_linear_model, x, y, [A, B, C, D], lower=[-np.inf, -np.inf, 1e-9, -np.inf])
-    elif relative:
-        A, B, C = _in_ln_y(lambda v, A, B, C: _double_linear_model(v, A, B, C, D), x, y, [A, B, C],
-                           lower=[-np.inf, -np.inf, 1e-9])
-    return (lambda v: _double_linear_model(np.asarray(v, dtype=float), A, B, C, D),
-            {"A": A, "B": B, "C": C, "D": D}, f"double linear: slopes {A:.4g} → {B:.4g}, scale {C:.4g}, y(0) {D:.4g}")
+    guess = {"A": b0, "B": b0, "C": max((x.max() - x.min()) / 4, 1e-6), "D": a0}
+    lowest = {"A": -np.inf, "B": -np.inf, "C": 1e-9, "D": -np.inf}
+    free = [k for k in "ABCD" if k not in fixed]
+
+    def model(v, *p):
+        return _double_linear_model(v, **fixed, **dict(zip(free, p)))
+
+    lower = [lowest[k] for k in free]
+    p, *_ = curve_fit(model, x, y, p0=[guess[k] for k in free], maxfev=5000, bounds=(lower, [np.inf] * len(free)))
+    if relative:
+        p = _in_ln_y(model, x, y, list(p), lower=lower)
+    q = {**fixed, **{k: float(v) for k, v in zip(free, p)}}
+    given = f" ({', '.join(fixed)} fixed)" if fixed else ""
+    return (lambda v: _double_linear_model(np.asarray(v, dtype=float), q["A"], q["B"], q["C"], q["D"]),
+            {k: q[k] for k in "ABCD"},
+            f"double linear: slopes {q['A']:.4g} → {q['B']:.4g}, scale {q['C']:.4g}, y(0) {q['D']:.4g}{given}")
 
 
 def _double_power_model(lx, la, b1, b2, lxb, width):
@@ -301,20 +318,24 @@ FITS: dict[str, Callable] = {
     "exponential": _exponential,
     "neutral log law (x = height)": _loglaw,
     "double linear": _double_linear,
-    "constrained double linear": lambda x, y, D=0.0, relative=False: _double_linear(x, y, intercept=D,
-                                                                                    relative=relative),
+    "constrained double linear": lambda x, y, A=None, B=None, D=0.0, relative=False: _double_linear(x, y, A, B, D,
+                                                                                                  relative),
     "ζ(Ri) (stability parameter)": _sparam_ri,
     ALPHA_RI: _alpha_ri,
 }
 
-# fits with settings of their own: name -> {argument: (label, default)}
-FIT_SETTINGS: dict[str, dict[str, tuple[str, float]]] = {
-    "constrained linear": {"a": ("intercept", 0.0)},
-    "constrained double linear": {"D": ("intercept", 0.0)},
+# fits with settings of their own: name -> {argument: (label, default)}; a default of None (left
+# blank) is fitted
+FIT_SETTINGS: dict[str, dict[str, tuple[str, float | None]]] = {
+    "constrained linear": {"a": ("intercept", 0.0), "b": ("slope", None)},
+    "constrained double linear": {"A": ("slope 1 (x → 0)", None), "B": ("slope 2 (large x)", None),
+                                  "D": ("intercept", 0.0)},
     "power law, fixed exponent": {"b": ("exponent", 0.5)},
     ALPHA_RI: {"ri_neutral_lo": ("neutral band from Ri", -0.05), "ri_neutral_hi": ("to Ri", 0.05),
                "ri_critical": ("Ri_c (α held above)", 0.25)},
 }
+
+BLANK_FITTED = {"constrained linear", "constrained double linear"}  # a setting left blank is fitted (None)
 
 IN_LN_Y = {"exponential", "double power law"}  # always fitted in ln y
 IN_Y = {"ζ(Ri) (stability parameter)", ALPHA_RI}  # always in y: ζ changes sign; α-Ri is fitted in pieces

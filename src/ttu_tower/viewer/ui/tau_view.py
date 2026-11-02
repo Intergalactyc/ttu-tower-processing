@@ -26,6 +26,7 @@ from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.timeline_plot import LegendBar
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _RULES = ("priority", "longest_significant")
 _PRIORITIES = (("heat", "momentum"), ("momentum", "heat"))
@@ -47,7 +48,7 @@ def _fmt(col, v):
 
 
 def _category_plot(title: str) -> pg.PlotWidget:
-    w = pg.PlotWidget()
+    w = keep_tall(pg.PlotWidget())
     item = w.getPlotItem()
     item.setTitle(title, size="9pt")
     item.showGrid(y=True, alpha=0.2)

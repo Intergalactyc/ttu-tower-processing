@@ -1,9 +1,11 @@
 """Formulas typed by hand, y in terms of x, evaluated with numpy: numbers, x,
-+ - * / ^ (or **), brackets, a few functions, pi, e, and any further variables
++ - * / ^ (or **), brackets, a few functions (min and max of two or more
+values), pi, e, and any further variables
 the caller names (e.g. boom heights). Parsed to a syntax tree and checked node
 by node, so nothing but arithmetic ever runs.
 """
 import ast
+from functools import reduce
 from typing import Callable
 
 import numpy as np
@@ -11,6 +13,7 @@ import numpy as np
 FUNCTIONS = {"exp": np.exp, "ln": np.log, "log": np.log, "log10": np.log10, "sqrt": np.sqrt, "abs": np.abs,
              "tanh": np.tanh, "sin": np.sin, "cos": np.cos, "tan": np.tan, "arctan": np.arctan, "sinh": np.sinh,
              "cosh": np.cosh}
+SEVERAL = {"min": np.minimum, "max": np.maximum}  # of two or more values, element by element (NaN if any is)
 CONSTANTS = {"pi": np.pi, "e": np.e}
 _BINARY = {ast.Add: np.add, ast.Sub: np.subtract, ast.Mult: np.multiply, ast.Div: np.divide, ast.Pow: np.power}
 _UNARY = {ast.UAdd: np.positive, ast.USub: np.negative}
@@ -43,13 +46,20 @@ def _check(node, variables=()) -> None:
     elif isinstance(node, ast.Name):
         if node.id not in CONSTANTS and node.id not in variables:
             raise ValueError(f"unknown name '{node.id}' ({', '.join((*variables, *CONSTANTS))}, or a function: "
-                             f"{', '.join(FUNCTIONS)})")
+                             f"{', '.join((*FUNCTIONS, *SEVERAL))})")
     elif isinstance(node, ast.Call):
-        if not isinstance(node.func, ast.Name) or node.func.id not in FUNCTIONS:
-            raise ValueError(f"'{ast.unparse(node.func)}' isn't one of the functions: {', '.join(FUNCTIONS)}")
-        if node.keywords or len(node.args) != 1:
-            raise ValueError(f"{node.func.id}() takes one value")
-        _check(node.args[0], variables)
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name not in FUNCTIONS and name not in SEVERAL:
+            raise ValueError(f"'{ast.unparse(node.func)}' isn't one of the functions: "
+                             f"{', '.join((*FUNCTIONS, *SEVERAL))}")
+        if node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+            raise ValueError(f"{name}() takes values separated by commas")
+        if name in FUNCTIONS and len(node.args) != 1:
+            raise ValueError(f"{name}() takes one value")
+        if name in SEVERAL and len(node.args) < 2:
+            raise ValueError(f"{name}() takes two or more values, e.g. {name}(x, y)")
+        for a in node.args:
+            _check(a, variables)
     else:
         raise ValueError(f"'{ast.unparse(node)}' isn't arithmetic")
 
@@ -65,6 +75,8 @@ def _evaluate(node, names: dict):
         return float(node.value)
     if isinstance(node, ast.Name):
         return names[node.id] if node.id in names else CONSTANTS[node.id]
+    if node.func.id in SEVERAL:
+        return reduce(SEVERAL[node.func.id], (_evaluate(a, names) for a in node.args))
     return FUNCTIONS[node.func.id](_evaluate(node.args[0], names))
 
 

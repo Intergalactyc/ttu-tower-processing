@@ -15,6 +15,18 @@ def test_a_formula_is_arithmetic_on_x_and_nothing_else():
             expression.compile_expression(bad)
 
 
+def test_min_and_max_take_two_or_more_values_element_by_element():
+    f = expression.compile_expression("min(x, a, 2) + max(x, a)", ("a",))
+    x, a = np.array([0.0, 1.0, 3.0, np.nan]), np.array([1.0, 0.5, 5.0, 1.0])
+    assert np.allclose(f(x, a=a), [0 + 1, 0.5 + 1, 2 + 5, np.nan], equal_nan=True)  # NaN if any is
+    assert np.allclose(expression.compile_expression("max(x, 0)")(np.array([-1.0, 2.0])), [0.0, 2.0])
+    for bad, why in (("min(x)", "two or more"), ("max()", "two or more"), ("exp(x, 1)", "one value"),
+                     ("min(*x)", "separated by commas"), ("mean(x, 1)", "isn't one of the functions")):
+        with pytest.raises(ValueError, match=why):
+            expression.compile_expression(bad)
+    assert expression.compile_expression("max + 1", ("max",), x=False)(max=np.array([2.0]))[0] == 3.0  # a variable may be max
+
+
 def test_pieces_cover_their_ranges_and_the_first_wins_where_they_overlap():
     pieces = [(expression.compile_expression("1"), -np.inf, 0.0), (expression.compile_expression("x"), 0.0, 2.0),
               (expression.compile_expression("10"), 1.0, np.inf)]

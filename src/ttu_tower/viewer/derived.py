@@ -5,24 +5,35 @@ A definition names its variables: each one of the catalog's quantities (with
 its own variant), at "each boom" (the derived quantity's own member) or at one
 fixed member. The result is per boom if an "each boom" variable is per boom
 (a slot quantity's value then holds at every boom, and `z` is the boom's
-height), per boom pair if one is per pair, else per slot.
+height), per boom pair if one is per pair, else per slot. A formula may also
+use the site's constants (`SITE`): g, local gravity as the pipeline takes it,
+at the result's height; f, the Coriolis parameter; kappa, cp and Rd. A
+variable of the same name hides one. A variable may be another derived
+quantity, so long as none ends up using itself.
 """
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import reduce
 from pathlib import Path
 
 import numpy as np
 
-from ttu_tower.constants import HEIGHTS
+from ttu_tower.constants import HEIGHTS, SITE_ELEVATION, SITE_LATITUDE
 from ttu_tower.io.runs import locate_home
+from ttu_tower.physics.constants import CP, KAPPA, R
+from ttu_tower.physics.earth import coriolis, local_gravity
 from ttu_tower.viewer import expression
 from ttu_tower.viewer.catalog import Catalog, Quantity
 
 GROUP = "Derived"
 TABLE = "derived"
 HEIGHT = "z"  # a per-boom result's height, m
+SITE = {"g": "local gravity, m/s² (at the boom's height; a pair's mean height; the ground for a per-slot quantity)",
+        "f": "Coriolis parameter at the tower, 1/s",
+        "kappa": "von Kármán constant",
+        "cp": "specific heat of dry air at constant pressure, J/(kg K)",
+        "Rd": "gas constant of dry air, J/(kg K)"}
 _VERSION = 1
 
 
@@ -66,8 +77,21 @@ class Resolved:
     quantities: tuple[Quantity, ...]
 
 
+def site_values(kind: str, member) -> dict[str, float]:
+    """The site's constants for a result's `member` ("boom": a boom; "pair": a (boom, boom2) pair)."""
+    height = (HEIGHTS[member] if kind == "boom" else
+              (HEIGHTS[member[0]] + HEIGHTS[member[1]]) / 2 if kind == "pair" else 0.0)
+    return {"g": float(local_gravity(SITE_LATITUDE, SITE_ELEVATION + height)), "f": float(coriolis(SITE_LATITUDE)),
+            "kappa": KAPPA, "cp": CP, "Rd": R}
+
+
+def _names(variables, kind: str) -> tuple[str, ...]:
+    """What a formula may use: the variables, the site's constants, and z for a per-boom result."""
+    return (*variables, *SITE, *((HEIGHT,) if kind == "boom" else ()))
+
+
 def reserved() -> set[str]:
-    return {HEIGHT, *expression.FUNCTIONS, *expression.CONSTANTS}
+    return {HEIGHT, *expression.FUNCTIONS, *expression.CONSTANTS}  # min, max: a variable may still be called so
 
 
 def result_kind(quantities, variables) -> str:
@@ -93,15 +117,18 @@ def resolve(d: Definition, catalog: Catalog) -> Quantity:
     quantities = []
     for v in d.variables:
         q = catalog.quantities.get(v.key)
+        if q is None and v.key.startswith(f"{TABLE}|"):
+            raise ValueError(f"{v.name}: the derived quantity {derived_name(v.key)} isn't defined, or can't be on "
+                             f"this run")
         if q is None:
             raise ValueError(f"{v.name}: {v.key} isn't in this run")
-        if q.categorical or q.table == TABLE:
-            raise ValueError(f"{v.name}: {q.title} can't be used (categories, or another derived quantity)")
+        if q.categorical:
+            raise ValueError(f"{v.name}: {q.title} can't be used (categories)")
         if v.variant not in q.variants:
             raise ValueError(f"{v.name}: {q.title} has no {v.variant} variant")
         quantities.append(q)
     kind = result_kind(quantities, d.variables)
-    expression.compile_expression(d.formula, (*names, *((HEIGHT,) if kind == "boom" else ())), x=False)
+    expression.compile_expression(d.formula, _names(names, kind), x=False)
     pairs = ()
     if kind == "pair":
         sets = [set(q.pairs) for q, v in zip(quantities, d.variables) if v.member is None and q.kind == "pair"]
@@ -115,13 +142,53 @@ def definition_of(q: Quantity) -> Resolved:
     return dict(q.extra)["definition"]
 
 
+def derived_name(key: str) -> str:
+    return key.split("|")[1]
+
+
+def uses(d: Definition) -> set[str]:
+    """The derived quantities `d`'s variables are."""
+    return {derived_name(v.key) for v in d.variables if v.key.startswith(f"{TABLE}|")}
+
+
+def in_order(definitions) -> tuple[list[Definition], dict[str, list[str]]]:
+    """The definitions, each after the derived quantities it uses; and {name: its loop} for those
+    that use themselves (directly or through others).
+    """
+    by_name = {d.name: d for d in definitions}
+    order, done, loops = [], set(), {}
+
+    def visit(d, path):
+        if d.name in done:
+            return
+        if d.name in path:
+            cycle = path[path.index(d.name):]
+            for i, n in enumerate(cycle):  # each told from itself: b → a → b
+                loops.setdefault(n, cycle[i:] + cycle[:i] + [n])
+            return
+        for n in sorted(uses(d)):
+            if n in by_name:
+                visit(by_name[n], path + [d.name])
+        done.add(d.name)
+        order.append(d)
+
+    for d in definitions:
+        visit(d, [])
+    return order, loops
+
+
 def add_to(catalog: Catalog, definitions) -> list[str]:
-    """Add every definition this run can resolve (replacing earlier derived ones); why the others can't be."""
+    """Add every definition this run can resolve (replacing earlier derived ones), each after those it
+    uses; why the others can't be.
+    """
     for key in [k for k, q in catalog.quantities.items() if q.table == TABLE]:
         del catalog.quantities[key]
+    order, loops = in_order(definitions)
     notes = []
-    for d in definitions:
+    for d in order:
         try:
+            if d.name in loops:
+                raise ValueError(f"it uses itself ({' → '.join(loops[d.name])})")
             catalog.add(resolve(d, catalog))
         except ValueError as exc:
             notes.append(f"{d.name}: {exc}")
@@ -134,8 +201,7 @@ def load(run, index, q: Quantity, members) -> dict:
 
     resolved = definition_of(q)
     d = resolved.definition
-    func = expression.compile_expression(d.formula, (*(v.name for v in d.variables),
-                                                     *((HEIGHT,) if q.kind == "boom" else ())), x=False)
+    func = expression.compile_expression(d.formula, _names([v.name for v in d.variables], q.kind), x=False)
     out = {}
     for m in members:
         curves = []
@@ -147,7 +213,8 @@ def load(run, index, q: Quantity, members) -> dict:
             out[m] = (np.empty(0, dtype=np.int64), np.empty(0))
             continue
         slots = reduce(lambda a, b: np.intersect1d(a, b, assume_unique=True), (c.slots for c in curves))
-        values = {v.name: c.y[np.searchsorted(c.slots, slots)] for v, c in zip(d.variables, curves)}
+        values = site_values(q.kind, m) | {v.name: c.y[np.searchsorted(c.slots, slots)]
+                                           for v, c in zip(d.variables, curves)}  # a variable hides a constant
         if q.kind == "boom":
             values[HEIGHT] = HEIGHTS[m]
         y = func(**values) if slots.size else np.empty(0)
@@ -189,6 +256,10 @@ class DerivedStore:
         """Add `d`, replacing the one named `replacing` (renamed) or of its own name."""
         gone = {d.name, replacing}
         self.items = [x for x in self.items if x.name not in gone] + [d]
+        if replacing is not None and replacing != d.name:  # what used it follows the new name
+            old = f"{TABLE}|{replacing}|"
+            self.items = [replace(x, variables=tuple(replace(v, key=d.key) if v.key == old else v
+                                                     for v in x.variables)) for x in self.items]
         self.save()
 
     def remove(self, name: str) -> None:

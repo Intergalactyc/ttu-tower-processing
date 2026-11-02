@@ -87,6 +87,21 @@ def profile_points(across, pq: ProfileQuantity, variant: str) -> pd.DataFrame:
     return out
 
 
+def points_at(data, slot: int, booms) -> pd.DataFrame:
+    """Per boom, a catalog quantity's value at `slot` (from its timeline data), as `profile_points`
+    gives them (nothing marked filtered: the stored value is all there is).
+    """
+    booms = list(booms)
+    values = []
+    for b in booms:
+        curve = data.curves.get(b)
+        i = int(np.searchsorted(curve.slots, slot)) if curve is not None else 0
+        values.append(float(curve.y[i]) if curve is not None and i < curve.slots.size and curve.slots[i] == slot
+                      else np.nan)
+    return pd.DataFrame({"boom": booms, "height": [HEIGHTS[b] for b in booms], "value": values, "prefilter": values,
+                         "reasons": "", "filtered": False})
+
+
 def _excluded(across, variant: str, exclude_tau) -> set[int]:
     if variant == "naive":
         return set()

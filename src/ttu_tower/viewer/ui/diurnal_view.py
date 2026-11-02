@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 
 from ttu_tower.viewer import diurnal
 from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _SEQUENTIAL = pg.colormap.get("viridis")
 _CYCLIC = pg.colormap.get("CET-C6")  # directions wrap around
@@ -54,7 +55,7 @@ class DiurnalView(QWidget):
         self.title = QLabel()
         self.title.setWordWrap(True)
         self.vb = _CellViewBox(self._clicked)
-        self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot = keep_tall(pg.PlotWidget(viewBox=self.vb))
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.hideButtons()
         item = self.plot.getPlotItem()

@@ -263,7 +263,39 @@ def test_a_constrained_linear_fit_keeps_the_intercept_given():
     off = curvefits.fit("constrained linear", x, y, a=4.0)
     assert off.params["a"] == 4.0 and off.func(np.array([0.0]))[0] == pytest.approx(4.0)
     assert "intercept fixed" in off.label and "intercept" not in curvefits.fit("constrained linear", x, 2 * x).label
-    assert curvefits.FIT_SETTINGS["constrained linear"] == {"a": ("intercept", 0.0)}
+    assert curvefits.FIT_SETTINGS["constrained linear"] == {"a": ("intercept", 0.0), "b": ("slope", None)}
+
+
+def test_a_constrained_linear_fit_may_hold_the_slope_instead():
+    x = np.linspace(0.0, 6.0, 61)
+    y = 1.0 + 2.0 * x + np.where(np.arange(x.size) % 2, 0.1, -0.1)
+    res = curvefits.fit("constrained linear", x, y, a=None, b=2.0)
+    assert res.params["b"] == 2.0 and res.params["a"] == pytest.approx(np.mean(y - 2.0 * x)) and "slope fixed" in res.label
+    rel = curvefits.fit("constrained linear", x[1:], y[1:], curvefits.FitOptions(errors="ln y"), a=None, b=2.0)
+    assert rel.params["b"] == 2.0 and rel.params["a"] != pytest.approx(res.params["a"], abs=1e-6)
+    free = curvefits.fit("constrained linear", x, y, a=None, b=None)  # neither: the linear fit
+    assert free.params == pytest.approx(curvefits.fit("linear", x, y).params)
+    with pytest.raises(ValueError, match="not both"):
+        curvefits.fit("constrained linear", x, y, a=0.0, b=2.0)
+
+
+@pytest.mark.parametrize("given", [{"A": 2.0, "D": None}, {"B": 0.5, "D": None}, {"A": 2.0, "B": 0.5, "D": None},
+                                   {"A": 2.0, "D": 1.5}, {"B": 0.5, "D": 1.5}, {"D": None}])  # D held at 0 unless given
+def test_a_constrained_double_linear_fit_holds_up_to_two_of_its_slopes_and_intercept(given):
+    x = np.linspace(0.0, 8.0, 200)
+    truth = curvefits._double_linear_model(x, 2.0, 0.5, 1.0, 1.5)
+    res = curvefits.fit("constrained double linear", x, truth, **given)
+    for k, v in given.items():
+        assert res.params[k] == (v if v is not None else pytest.approx(1.5, abs=1e-3))
+    assert res.params == pytest.approx({"A": 2.0, "B": 0.5, "C": 1.0, "D": 1.5}, abs=1e-3) and res.rmse < 1e-6
+    assert ("fixed" in res.label) == any(v is not None for v in given.values())
+
+
+def test_a_constrained_double_linear_fit_leaves_at_least_one_to_fit():
+    x = np.linspace(0.0, 8.0, 50)
+    with pytest.raises(ValueError, match="at most two"):
+        curvefits.fit("constrained double linear", x, x, A=1.0, B=1.0, D=0.0)
+    assert curvefits.FIT_SETTINGS["constrained double linear"]["A"][1] is None
 
 
 def test_relative_errors_weigh_each_decade_alike():

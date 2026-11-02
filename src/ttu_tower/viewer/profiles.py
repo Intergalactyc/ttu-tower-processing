@@ -46,16 +46,19 @@ def _centre(values: np.ndarray, method: str, circular: bool) -> tuple[float, flo
 
 
 def profile_stats(data, members, x_range, stability, method: str = "mean", by_stability: bool = False,
-                  selection: np.ndarray | None = None) -> pd.DataFrame:
+                  selection: np.ndarray | None = None, classes=None) -> pd.DataFrame:
     """One row per (group, boom): height, centre, spread and N, where group is
-    "all", each stability class, or (given brushed `selection` slots) the
+    "all", each stability class (or only `classes`, which may be combined
+    groups such as "all stable"), or (given brushed `selection` slots) the
     selected slots and the rest.
     """
     q = data.quantity
     if selection is not None:
         groups = [SELECTED, REST]
+    elif not by_stability or stability is None:
+        groups = [ALL]
     else:
-        groups = [ALL] if not by_stability or stability is None else list(stability[1])
+        groups = list(classes) if classes else list(stability[1])
     rows = []
     for m in members:
         curve = data.curves.get(m)

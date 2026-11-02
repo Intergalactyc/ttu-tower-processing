@@ -16,6 +16,7 @@ from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.axes import Log10Axis
 from ttu_tower.viewer.ui.timeline_plot import LegendBar
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _VARIANTS = (("mrd", "mrd"), ("mrd_unexcised", "mrd unexcised"))
 
@@ -68,7 +69,7 @@ class CompositeSpectraView(QWidget):
         self.boom_bar.toggled.connect(self.redraw)
         self.info = QLabel()
         self.info.setWordWrap(True)
-        self.plot = pg.PlotWidget(axisItems={"bottom": Log10Axis(orientation="bottom")})
+        self.plot = keep_tall(pg.PlotWidget(axisItems={"bottom": Log10Axis(orientation="bottom")}))
         item = self.plot.getPlotItem()
         item.showGrid(x=True, y=True, alpha=0.15)
         item.setLabel("bottom", "averaging scale τ [s]")

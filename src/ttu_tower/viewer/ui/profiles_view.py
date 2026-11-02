@@ -6,14 +6,27 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ttu_tower.viewer import profiles
+from ttu_tower.viewer.timeline import COMBINED, class_choices
 from ttu_tower.viewer.ui import style, tables
+from ttu_tower.viewer.ui.view_state import LateCombo
+from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _GROUP_COLORS = {profiles.ALL: "#1f4e99", profiles.SELECTED: style.SELECTED_COLOR, profiles.REST: "#7a7a7a"}
 OFFSET_PX = 3  # between stability classes' points at one height, so their bars don't overlap
 CAP_PX = 6  # error-bar cap length
+LABEL_PX = 5  # a value written beside its point
+
+
+def group_color(g: str, names) -> pg.QtGui.QColor:
+    """A group's color: its own, a stability class's, or a combined group's milder class's."""
+    if g in _GROUP_COLORS:
+        return pg.mkColor(_GROUP_COLORS[g])
+    shade = {"all unstable": COMBINED["all unstable"][1], "all stable": COMBINED["all stable"][0]}.get(g, g)
+    return style.stability_color(shade, names.index(shade) if shade in names else 0)
 
 
 class ProfilePlot(QWidget):
@@ -30,7 +43,7 @@ class ProfilePlot(QWidget):
         for f in profiles.FITS:
             self.fit_box.addItem(f, f)
         self.fit_box.setToolTip("a curve of the value against height, fitted to each profile's points (dashed)")
-        self.plot = pg.PlotWidget()
+        self.plot = keep_tall(pg.PlotWidget())
         item = self.plot.getPlotItem()
         self.plot.getPlotItem().export_layout = "per curve"  # CSV: x and y columns per curve
         item.showGrid(x=True, y=True, alpha=0.15)
@@ -39,7 +52,7 @@ class ProfilePlot(QWidget):
         self.stats: pd.DataFrame | None = None
         self.drawn_quantity = None
         self.fits: dict = {}
-        self._marks: list = []  # (points item, bars item or None, x, height, spread, class position, classes)
+        self._marks: list = []  # (points, bars or None, x, height, spread, class position, classes, value labels)
         self._log_z = False
         vb = self.plot.getViewBox()
         vb.sigYRangeChanged.connect(lambda *_: self._place())
@@ -73,7 +86,7 @@ class ProfilePlot(QWidget):
         tables.fit_rows(self.table)
 
     def draw(self, q, stats: pd.DataFrame, method: str, error_bars: bool, lines: bool, log_z: bool, scope: str,
-             stability) -> None:
+             stability, values: bool = False) -> None:
         self.plot.clear()
         self._marks = []
         self._log_z = log_z
@@ -85,12 +98,14 @@ class ProfilePlot(QWidget):
         item.setLogMode(y=log_z)
         names = list(stability[1]) if stability is not None else []
         fit_name = self.fit_box.currentData() if self.fit_box.isEnabled() else None
+        font = QFont()
+        font.setPointSize(8)  # value labels
         self.fits = {}
         rows = {}
         groups = [(g, part[np.isfinite(part["centre"])]) for g, part in stats.groupby("group", sort=False)]
         groups = [(g, part) for g, part in groups if not part.empty]
         for position, (g, part) in enumerate(groups):
-            color = pg.mkColor(_GROUP_COLORS[g]) if g in _GROUP_COLORS else style.stability_color(g, names.index(g))
+            color = group_color(g, names)
             x, z = part["centre"].to_numpy(), part["height"].to_numpy()
             curve = pg.PlotDataItem(x, z, pen=pg.mkPen(color, width=1.5) if lines else None, symbol="o",
                                     symbolSize=7, symbolBrush=color, symbolPen=None)
@@ -102,7 +117,14 @@ class ProfilePlot(QWidget):
             if error_bars:
                 bars = pg.ErrorBarItem(x=x, y=z, left=spread, right=spread, pen=pg.mkPen(color, width=1))
                 self.plot.addItem(bars)
-            self._marks.append((curve, bars, x, z, spread, position, len(groups)))
+            labels = []
+            if values:
+                for v in x:
+                    label = pg.TextItem(f"{v:.3g}", color=color, anchor=(0, 0.5))
+                    label.setFont(font)
+                    self.plot.addItem(label)
+                    labels.append(label)
+            self._marks.append((curve, bars, x, z, spread, position, len(groups), labels))
             rows[g] = {"slots (median)": int(part["n"].median())}
             if fit_name is not None:
                 result, shown = profiles.fit_profile(fit_name, z, x)
@@ -133,19 +155,23 @@ class ProfilePlot(QWidget):
         """
         if not self._marks:
             return
-        py = self.plot.getViewBox().viewPixelSize()[1]
+        px, py = self.plot.getViewBox().viewPixelSize()
+        px = px if np.isfinite(px) and px > 0 else 0.0
         py = py if np.isfinite(py) and py > 0 else 0.0
-        for curve, bars, x, z, spread, position, count in self._marks:
+        for curve, bars, x, z, spread, position, count, labels in self._marks:
             v = np.log10(z) if self._log_z else z
             shifted = v + (position - (count - 1) / 2) * OFFSET_PX * py
             # points go through log mode themselves; error bars don't, so they get view units
             curve.setData(x, 10 ** shifted if self._log_z else shifted)
             if bars is not None:
                 bars.setData(x=x, y=shifted, left=spread, right=spread, beam=2 * CAP_PX * py)
+            for label, xi, yi in zip(labels, x, shifted):  # labels sit in view units, as the bars
+                label.setPos(xi + LABEL_PX * px, yi)
 
 
 class ProfilesView(QWidget):
-    STATE_FIELDS = ("method", "error_bars", "lines", "log_z", "grouping")  # saved in a view, restored in this order
+    STATE_FIELDS = ("method", "error_bars", "lines", "log_z", "grouping", "only_class",
+                    "values")  # saved in a view, restored in this order
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,9 +187,15 @@ class ProfilesView(QWidget):
         self.grouping.addItem("selection vs rest", "selection")
         self.grouping.setToolTip("one profile over every slot, one per stability class (Ri_b of the configured "
                                  "pair), or the brushed slots' profile beside the rest's")
-        for w in (self.method, self.grouping):
+        self.only_class = LateCombo()  # its classes come with the stability criterion
+        self.only_class.addItem("every class", None)
+        self.only_class.setToolTip("by stability: every class's profile, or only one class's (or both unstable or "
+                                   "both stable classes' slots together)")
+        self.values = QCheckBox("values")
+        self.values.setToolTip("write each point's value beside it")
+        for w in (self.method, self.grouping, self.only_class):
             w.currentIndexChanged.connect(lambda *_: self.redraw())
-        for w in (self.error_bars, self.lines, self.log_z):
+        for w in (self.error_bars, self.lines, self.log_z, self.values):
             w.toggled.connect(lambda *_: self.redraw())
         self.key = QLabel()
         self.key.setTextFormat(Qt.TextFormat.RichText)
@@ -177,7 +209,7 @@ class ProfilesView(QWidget):
         self.selection = np.empty(0, dtype=np.int64)
 
         controls = QHBoxLayout()
-        for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z):
+        for w in (self.method, self.grouping, self.only_class, self.error_bars, self.lines, self.log_z, self.values):
             controls.addWidget(w)
         controls.addStretch(1)
         row = QHBoxLayout()
@@ -202,17 +234,19 @@ class ProfilesView(QWidget):
             q = plot.drawn_quantity
             names = list(self.stability[1]) if self.stability is not None else []
             groups = []
+            values = self.values.isChecked()
             for g, part in plot.stats.groupby("group", sort=False):
                 part = part[np.isfinite(part["centre"])]
                 if part.empty:
                     continue
-                color = _GROUP_COLORS.get(g) or style.stability_color(g, names.index(g)).name()
+                color = group_color(g, names).name()
                 fit = plot.fits.get(g)
                 z = part["height"].to_numpy()
                 zz = np.geomspace(z.min(), z.max(), 100) if fit is not None else None
                 groups.append({"label": g if g != profiles.ALL else "all slots", "color": color,
                                "x": part["centre"].to_numpy(), "z": z, "lines": self.lines.isChecked(),
                                "spread": part["spread"].to_numpy() if self.error_bars.isChecked() else None,
+                               "values": values,
                                "fit": (fit.func(zz), zz) if fit is not None else None})
             panels.append({"title": plot.title.text().replace("<b>", "").replace("</b>", ""),
                            "xlabel": q.unit or q.label, "log_z": self.log_z.isChecked(), "groups": groups})
@@ -221,7 +255,28 @@ class ProfilesView(QWidget):
     def set_sources(self, sources, x_range, stability) -> None:
         """`sources`: (TimelineData or None, members shown) per panel."""
         self.sources, self.x_range, self.stability = list(sources), x_range, stability
+        self._fill_classes()
         self.redraw()
+
+    def _fill_classes(self) -> None:
+        names = class_choices(self.stability[1]) if self.stability is not None else []
+        if [self.only_class.itemData(i) for i in range(self.only_class.count())] == [None] + names:
+            return
+        current = self.only_class.currentData()
+        self.only_class.blockSignals(True)
+        self.only_class.clear()
+        self.only_class.addItem("every class", None)
+        for name in names:
+            self.only_class.addItem(name, name)
+        self.only_class.setCurrentIndex(max(self.only_class.findData(current), 0))
+        self.only_class.take_pending()
+        self.only_class.blockSignals(False)
+
+    def chosen_class(self) -> str | None:
+        """The one class (or combined group) shown, by stability; None for every class."""
+        name = self.only_class.currentData()
+        by_stability = self.grouping.currentData() == "stability" and self.stability is not None
+        return name if by_stability and name in class_choices(self.stability[1]) else None
 
     def set_selection(self, slots: np.ndarray) -> None:
         self.selection = slots
@@ -255,8 +310,10 @@ class ProfilesView(QWidget):
         self.error_bars.setText(f"± {spread}")
         what = "standard deviation" if spread == "σ" else "median absolute deviation"
         self.error_bars.setToolTip(f"horizontal bars: ± the {what}")
-        for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z):
+        for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z, self.values):
             w.setEnabled(bool(shown))
+        self.only_class.setEnabled(bool(shown) and self.grouping.currentData() == "stability"
+                                   and self.only_class.count() > 1)
 
     def redraw(self) -> None:
         self._enable_controls()
@@ -264,9 +321,10 @@ class ProfilesView(QWidget):
         grouping = self.grouping.currentData()
         by_stability = grouping == "stability" and self.stability is not None
         selection = self.selection if grouping == "selection" and self.selection.size else None
+        one = self.chosen_class()
         if by_stability:
             names = list(self.stability[1])
-            key = [(style.stability_color(n, i).name(), n) for i, n in enumerate(names)]
+            key = [(group_color(n, names).name(), n) for n in ([one] if one else names)]
         elif selection is not None:
             key = [(_GROUP_COLORS[profiles.SELECTED], f"selected ({selection.size} slots)"),
                    (_GROUP_COLORS[profiles.REST], "the rest")]
@@ -285,9 +343,9 @@ class ProfilesView(QWidget):
             data, members = source
             method = "mean" if q.circular else self.method.currentData()
             stats = profiles.profile_stats(data, members, self.x_range, self.stability, method, by_stability,
-                                           selection)
+                                           selection, classes=[one] if one else None)
             if stats.empty or not np.isfinite(stats["centre"]).any():
                 plot.clear(f"<b>{q.title}</b>: no values in range")
                 continue
             plot.draw(q, stats, method, self.error_bars.isChecked(), self.lines.isChecked(), self.log_z.isChecked(),
-                      scope, self.stability)
+                      scope, self.stability, self.values.isChecked())

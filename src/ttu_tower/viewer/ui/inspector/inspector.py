@@ -90,7 +90,9 @@ class InspectorWindow(QWidget):
         self.spectra = SpectraTab()
         self.scales = ScalesTab()
         self.qc = QCTab(index, runner)
+        self.catalog_of = lambda: None  # the viewer's catalog, for the profiles a user adds
         self.profile = ProfileTab()
+        self.profile.attach(run, index, runner, lambda: self.catalog_of())
         self.profile.boomClicked.connect(self._set_boom)
         self.hodograph = HodographTab(index, runner, run.booms)
         self.anisotropy = AnisotropyTab(run, index, runner)

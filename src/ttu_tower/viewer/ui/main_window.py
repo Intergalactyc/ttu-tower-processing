@@ -48,7 +48,7 @@ from ttu_tower.viewer.ui.hover_readout import HoverReadout
 from ttu_tower.viewer.ui.jets_controller import JetsController
 from ttu_tower.viewer.ui.stability_panel import StabilityPanel
 from ttu_tower.viewer.ui.tau_panel import TauPanel
-from ttu_tower.viewer.ui.wrap_tabs import WrapTabWidget
+from ttu_tower.viewer.ui.wrap_tabs import FitScroll, WrapTabWidget
 from ttu_tower.viewer.ui.overview import AnisotropyBand, OverviewStrip, StabilityBand
 from ttu_tower.viewer.ui import style, view_state
 from ttu_tower.viewer.ui.panel import PanelControls, PanelSpec
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addWidget(self.banner)
-        layout.addWidget(splitter, stretch=1)
+        layout.addWidget(FitScroll(splitter), stretch=1)  # scrolls on a short screen, not off its bottom
         self.setCentralWidget(central)
 
         self.panels = [PanelControls("Panel A"), PanelControls("Panel B")]
@@ -1110,6 +1110,7 @@ class MainWindow(QMainWindow):
             window.loaded.connect(lambda ok, w=window: self._opened(w, ok))
             window.bookmarkRequested.connect(self._add_bookmark)
             window.bookmarks_at = lambda slot, boom: self.bookmarks.at(self.run.tag, slot, boom)
+            window.catalog_of = lambda: self.catalog
             self.inspectors.append(window)
         window.set_sequence(sequence, label)
         self._opening = window

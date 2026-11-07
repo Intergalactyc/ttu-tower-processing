@@ -465,7 +465,7 @@ Each phase lists its goal, modules, specification and acceptance tests, then end
 **Deliverables**
 - `pyproject.toml`:
   - setuptools with the `src` layout;
-  - `name = "ttu-tower-processing"`, `version = "2.0.0"`, `requires-python = ">=3.13,<3.14"`;
+  - `name = "ttu-tower-processing"`, `version = "2.0.0"`, `requires-python = ">=3.13"`;
   - dependencies `numpy`, `pandas`, `pyarrow`, `astral`, `tqdm`;
   - extras `mesonet = ["wtxmeso @ git+https://github.com/Intergalactyc/wtxmesonet@main"]` and
     `dev = ["pytest", "scipy"]`;

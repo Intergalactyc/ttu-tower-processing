@@ -22,7 +22,7 @@ a dependency; the pieces needed are ported.
   61302V barometer (≈ 1 s). 30-min raw files. No generality beyond this tower; it keeps the
   code simple.
     - Primary data target is Nov 2013 - Oct 2014.
-- **Environment:** Python 3.13 (`>=3.13,<3.14`, because `wtxmeso` needs < 3.14). No
+- **Environment:** Python `>=3.13` (the old `<3.14` cap for `wtxmeso` was dropped once it moved its plotting deps to an extra). No
   `windprofiles`; `wtxmeso` stays an external dependency at `@main`; `arch`/`statsmodels` are
   dropped until the stationarity flag is built (L).
 - **Consumers:** `ttu-windprofiles` (the paper) will be rebuilt on this output, out of scope

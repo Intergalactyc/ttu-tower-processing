@@ -20,7 +20,7 @@ from ttu_tower.io.stage import check_hash_guard, write_config_copies, write_run_
 from ttu_tower.logs import configure_worker, log_listener
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.primary.stream import run_unit
-from ttu_tower.timegrid import slot_to_time
+from ttu_tower.timegrid import Cadence
 
 _TABLES = ("coverage", "means", "slot_qc", "flags", "mrd", "mrd_frame", "ladder", "ladder_coverage", "slot_boom")
 
@@ -47,15 +47,15 @@ def _worker(batch: Batch, boom: int, file_table: pd.DataFrame, period_slots: tup
 
 
 def _write_slots_and_outages(stage_dir: Path, file_table: pd.DataFrame, period_slots: tuple[int, int],
-                              outage_half_hours: list[int], booms, timezone: str) -> None:
+                              outage_half_hours: list[int], booms, timezone: str, cadence: Cadence) -> None:
     slot_a, slot_b = period_slots
     accepted = file_table[file_table["status"] == "accepted"].set_index("half_hour")
 
     slots = list(range(slot_a, slot_b))
-    half_hours = [k // 3 for k in slots]
+    half_hours = [cadence.slot_file(k) for k in slots]
     is_file = [h in accepted.index for h in half_hours]
     records = [int(accepted.loc[h, "record"]) if is_file[i] else None for i, h in enumerate(half_hours)]
-    slot_start = slot_to_time(slots).tz_convert(timezone) if slots else []
+    slot_start = cadence.slot_to_time(slots).tz_convert(timezone) if slots else []
     slots_df = pd.DataFrame({
         "slot": slots, "slot_start": slot_start,
         "half_hour": half_hours, "file_status": ["file" if f else "no_file" for f in is_file], "record": records,
@@ -64,7 +64,7 @@ def _write_slots_and_outages(stage_dir: Path, file_table: pd.DataFrame, period_s
 
     outage_rows = []
     for h in outage_half_hours:
-        for k in (3 * h, 3 * h + 1, 3 * h + 2):
+        for k in cadence.file_slots(h):
             if slot_a <= k < slot_b:
                 for boom in booms:
                     outage_rows.append((k, boom, "no_file", False))
@@ -92,11 +92,13 @@ def run_primary(cfg, args) -> dict:
     store.write_fragment(stage_dir, "files", file_table)
 
     period_slots = resolve_period_slots(cfg, file_table)
-    batches, outage_half_hours = plan_batches(file_table, period_slots, cfg.primary.batch_max_files)
+    cadence = Cadence.of(cfg)
+    batches, outage_half_hours = plan_batches(file_table, period_slots, cfg.primary.batch_max_files, cadence)
     if args.test:
         batches = batches[:1]
 
-    _write_slots_and_outages(stage_dir, file_table, period_slots, outage_half_hours, cfg.files.booms, cfg.output.timezone)
+    _write_slots_and_outages(stage_dir, file_table, period_slots, outage_half_hours, cfg.files.booms, cfg.output.timezone,
+                              cadence)
 
     manifest = store.read_manifest(stage_dir / "manifest")
     units = []

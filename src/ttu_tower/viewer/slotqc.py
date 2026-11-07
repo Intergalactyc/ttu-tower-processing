@@ -7,11 +7,10 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower.flags import BOOM_LEVEL_VARIABLES, TESTS, FlagStore
-from ttu_tower.primary.products import detection_window, ladder_window
 from ttu_tower.tertiary.filtering import (
-    _GROUP_INPUT_VARIABLES, _GROUP_REQUIRED_FAMILIES, _WINDOW_MARGIN_SAMPLES, QUANTITY_GROUPS, build_candidate,
+    _GROUP_INPUT_VARIABLES, _GROUP_REQUIRED_FAMILIES, QUANTITY_GROUPS, build_candidate,
 )
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.viewer.timeaxis import cadence
 
 LAYERS = ("present", "filled", "usable_l1", "usable", "unexcised")
 COVERAGE_VARIABLES = ("ue", "vn", "w", "ts", "vpts", "t", "rh", "p", "momentum", "heat")
@@ -26,13 +25,24 @@ def coverage_ladder(coverage: pd.DataFrame) -> pd.DataFrame:
     return table.reindex(index=list(COVERAGE_VARIABLES), columns=list(LAYERS))
 
 
+def ladder_window_name() -> str:
+    return f"ladder window ({2 * cadence().slot_min} min)"
+
+
+def detection_window_name() -> str:
+    return f"detection window ({cadence().detection_window_min} min)"
+
+
 def windows(k: int) -> dict[str, tuple[int, int]]:
-    """[start, end) sample ranges the QC tab reports flag fractions over."""
-    g0, n = detection_window(k)
-    l0, ln = ladder_window(k)
-    s0 = SAMPLES_PER_SLOT * k
-    return {"slot": (s0, s0 + SAMPLES_PER_SLOT), "ladder window (20 min)": (l0, l0 + ln),
-            "detection window (80 min)": (g0, g0 + n)}
+    """[start, end) sample ranges the QC tab reports flag fractions over
+    (named by their lengths at the current cadence: `detection_window_name()`).
+    """
+    c = cadence()
+    g0, n = c.detection_window(k)
+    l0, ln = c.ladder_window(k)
+    s0 = c.samples_per_slot * k
+    return {"slot": (s0, s0 + c.samples_per_slot), ladder_window_name(): (l0, l0 + ln),
+            detection_window_name(): (g0, g0 + n)}
 
 
 def flag_fractions(flags: pd.DataFrame, boom: int, start: int, end: int) -> pd.DataFrame:
@@ -88,7 +98,9 @@ def filter_gates(k: int, boom: int, means: pd.DataFrame, slow: pd.DataFrame, boo
     variant_cov = {(r.variant, r.variable): r.value
                    for r in candidate[candidate["stat"] == "coverage"].itertuples(index=False)}
     store = FlagStore(flags)
-    s0 = SAMPLES_PER_SLOT * k
+    c = cadence()
+    n_slot, margin = c.samples_per_slot, c.ladder_margin_samples
+    s0 = n_slot * k
 
     rows = []
     for variant, group in sorted(keys.itertuples(index=False, name=None), key=lambda r: (str(r[0]), str(r[1]))):
@@ -96,9 +108,8 @@ def filter_gates(k: int, boom: int, means: pd.DataFrame, slow: pd.DataFrame, boo
             v = usable.get(fam) if variant == "none" else variant_cov.get((variant, fam))
             v = 0.0 if v is None or pd.isna(v) else float(v)
             rows.append((variant, group, "coverage", fam, v, cfg_tertiary.min_coverage, v < cfg_tertiary.min_coverage))
-        wide = variant != "none" and tau.get(variant) == 1200.0
-        start, end = (s0 - _WINDOW_MARGIN_SAMPLES, s0 + SAMPLES_PER_SLOT + _WINDOW_MARGIN_SAMPLES) if wide else (
-            s0, s0 + SAMPLES_PER_SLOT)
+        wide = variant != "none" and tau.get(variant) == c.top_rung_s
+        start, end = (s0 - margin, s0 + n_slot + margin) if wide else (s0, s0 + n_slot)
         for var in _GROUP_INPUT_VARIABLES[group]:
             for test, limits in (("bounds", cfg_tertiary.max_bounds_fraction), ("spike", cfg_tertiary.max_spike_fraction)):
                 limit = limits[var]

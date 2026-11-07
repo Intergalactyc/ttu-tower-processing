@@ -21,7 +21,8 @@ from ttu_tower.primary.rawrung import rung_its_te
 from ttu_tower.primary.slow import vpts as compute_vpts
 from ttu_tower.primary.stage_a import StageA, couple_triplet, rotate_to_earth, stage_a, tilt_correct, to_si
 from ttu_tower.primary.stage_b import StageBOut, build_span, stage_b
-from ttu_tower.timegrid import SAMPLES_PER_SLOT, BlockGrid, majority_block
+from ttu_tower.timegrid import Cadence, majority_block
+from ttu_tower.viewer.timeaxis import cadence
 from ttu_tower.viewer.cache import LRUCache
 from ttu_tower.viewer.fragments import alias_bounds_variables
 
@@ -65,7 +66,7 @@ class HFWindow:
 
 def slot_window(k: int, before_min: float = 10.0, after_min: float = 20.0) -> tuple[int, int]:
     """(g0, n) of a window from `before_min` before slot k's start to `after_min` after it."""
-    g0 = SAMPLES_PER_SLOT * k - round(before_min * 60 * SAMPLE_HZ)
+    g0 = cadence().samples_per_slot * k - round(before_min * 60 * SAMPLE_HZ)
     return g0, round((before_min + after_min) * 60 * SAMPLE_HZ)
 
 
@@ -211,11 +212,13 @@ class Reprocessor:
         """Slot k's ITS/TE rows at every rung, recomputed, and the pooled
         autocorrelation behind each ITS: trace["acf"][rung_s][variable].
         """
-        g0, n = ladder_window(k)
+        run_cadence = Cadence.of(self.cfg)
+        g0, n = ladder_window(k, run_cadence)
         B = {h: self.stage_b(boom, h)[0] for h in half_hours_overlapping(g0, n)}
         series, masks = assemble_series_window(B, variant, g0, n)
         trace: dict = {}
-        values, _ = rung_its_te(series, masks, g0, k, self.cfg.ladder, self.cfg.qc.min_coverage, trace=trace)
+        values, _ = rung_its_te(series, masks, g0, k, self.cfg.ladder, self.cfg.qc.min_coverage, trace=trace,
+                                cadence=run_cadence)
         return values, trace
 
     def verify(self, boom: int, k: int, stored: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -224,8 +227,9 @@ class Reprocessor:
         rows present on only one side, and the largest absolute and relative
         difference.
         """
-        h = k // 3
-        B = {hh: self.stage_b(boom, hh)[0] for hh in range(h - 2, h + 3)}
+        run_cadence = Cadence.of(self.cfg)
+        h = run_cadence.slot_file(k)
+        B = {hh: self.stage_b(boom, hh)[0] for hh in range(run_cadence.slot_file(k - 4), run_cadence.slot_file(k + 4) + 1)}
         fresh = file_products(h, B, boom, self.cfg)
         rows = []
         for table, keys, values in _VERIFY_TABLES:
@@ -277,16 +281,18 @@ def _compare(table, new, old, keys, values) -> tuple:
             int((merged["_merge"] == "right_only").sum()), max_abs, max_rel)
 
 
-def tau_block_ids(g0: int, n: int, rung_s: float) -> np.ndarray | None:
+def tau_block_ids(g0: int, n: int, rung_s: float, cad: Cadence | None = None) -> np.ndarray | None:
     """The ladder's τ-block index of each sample in [g0, g0 + n) at a rung up
-    to 600 s (blocks tile each slot from its start, by majority assignment on
-    the 9.375-s grid, as the ladder uses them); None for the 1200-s rung,
-    which is a single centered window rather than a tiling.
+    to the slot (blocks tile each slot from its start, by majority assignment
+    on the finest grid, as the ladder uses them); None for the top rung,
+    which is a single centered window rather than a tiling. `cad` defaults
+    to the viewer's current cadence (600 s / 9.375 s / 1200 s at the default).
     """
-    group = round(rung_s / 9.375)
-    if group > 64:
+    cad = cad or cadence()
+    group = round(rung_s / cad.min_rung_s)
+    if group > cad.finest_per_slot:
         return None
-    finest = majority_block(g0 + np.arange(n, dtype=np.int64), BlockGrid.FINEST)
+    finest = majority_block(g0 + np.arange(n, dtype=np.int64), cad.finest)
     return finest // group
 
 
@@ -310,7 +316,7 @@ def removed_by_test(flags: pd.DataFrame, boom: int, g0: int, n: int) -> dict[str
 
 
 def to_streamwise(win: HFWindow, mean_by_slot: dict | None = None) -> tuple[HFWindow, dict[int, float]]:
-    """`win` with ue/vn rotated, slot by slot, into each 10-min slot's own mean
+    """`win` with ue/vn rotated, slot by slot, into each slot's own mean
     wind: u along it and v 90° to its left, so v averages to zero over the
     slot. A slot's mean wind comes from `mean_by_slot` (k -> (ue, vn), e.g.
     the run's stored slot means), or else from the window's own usable samples
@@ -320,11 +326,12 @@ def to_streamwise(win: HFWindow, mean_by_slot: dict | None = None) -> tuple[HFWi
     usable = win.masks.get("ue", np.isfinite(ue)) & win.masks.get("vn", np.isfinite(vn))
     u, v = np.full(win.n, np.nan), np.full(win.n, np.nan)
     bearings = {}
-    k0 = win.g0 // SAMPLES_PER_SLOT
-    k1 = (win.g0 + win.n - 1) // SAMPLES_PER_SLOT
+    n_slot = cadence().samples_per_slot
+    k0 = win.g0 // n_slot
+    k1 = (win.g0 + win.n - 1) // n_slot
     for k in range(k0, k1 + 1):
-        lo = max(k * SAMPLES_PER_SLOT - win.g0, 0)
-        hi = min((k + 1) * SAMPLES_PER_SLOT - win.g0, win.n)
+        lo = max(k * n_slot - win.g0, 0)
+        hi = min((k + 1) * n_slot - win.g0, win.n)
         mean = (mean_by_slot or {}).get(k)
         if mean is None or not np.all(np.isfinite(mean)):
             finite = np.isfinite(ue[lo:hi]) & np.isfinite(vn[lo:hi])

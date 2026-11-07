@@ -16,7 +16,7 @@ from ttu_tower.primary.products import file_products
 from ttu_tower.primary.runner import run_primary
 from ttu_tower.primary.stage_a import StageA, stage_a
 from ttu_tower.primary.stage_b import Span, StageBOut, stage_b
-from ttu_tower.timegrid import SAMPLES_PER_HALF_HOUR, half_hour_to_time
+from ttu_tower.timegrid import SAMPLES_PER_HALF_HOUR, Cadence, half_hour_to_time
 from ttu_tower.validation.synthetic import write_raw_dataset
 
 _HALF_HOURS = list(range(5000, 5012))  # 12 half-hours
@@ -24,6 +24,8 @@ _BOOMS = [1, 2]
 _MISSING = [5005, 5008, 5009]  # 5005 isolated; 5008-5009 a 2-file outage
 _TABLES = ("coverage", "means", "slot_qc", "flags", "mrd", "mrd_frame", "ladder", "ladder_coverage", "slot_boom")
 _MARGIN = STAGE_B_MARGIN_S * SAMPLE_HZ
+# every invariance test below runs at the default cadence and at 15-min slots with a 9-rung ladder
+_CADENCES = pytest.mark.parametrize("cadence", [None, {"slot_min": 15, "n_rungs": 9}], ids=["10min", "15min"])
 
 
 def _mutate(h, boom, df):
@@ -48,7 +50,7 @@ def _args(config, **overrides):
     return SimpleNamespace(**base)
 
 
-def _cfg(raw_dir, tag, **sections):
+def _cfg(raw_dir, tag, cadence=None, **sections):
     start = half_hour_to_time(_HALF_HOURS[0] + 1).strftime("%Y-%m-%d %H:%M")
     end = half_hour_to_time(_HALF_HOURS[-1]).strftime("%Y-%m-%d %H:%M")
     raw = {
@@ -58,6 +60,8 @@ def _cfg(raw_dir, tag, **sections):
         "tertiary": {"veer_reference_boom": 1, "fits": {k: [1] for k in
                      ("alpha_booms", "gamma_booms", "wdgamma_booms", "loglaw_booms")}},
     }
+    if cadence is not None:
+        raw["cadence"] = dict(cadence)
     raw.update(sections)
     return config_from_dict(raw)
 
@@ -162,7 +166,7 @@ def _reference_tables(raw_dir, cfg, boom: int, edge_margin: int) -> dict[str, pd
     file_table = build_file_table(cfg.paths.raw_dirs, cfg.files)
     accepted = file_table[file_table["status"] == "accepted"].set_index("half_hour")["path"]
     slot_a, slot_b = resolve_period_slots(cfg, file_table)
-    h_a, h_b = slot_a // 3, (slot_b - 1) // 3
+    h_a, h_b = Cadence.of(cfg).slot_file(slot_a), Cadence.of(cfg).slot_file(slot_b - 1)
 
     stage_a_by_h = {int(h): stage_a(load_boom(p, boom, str(raw_dir)), boom, cfg.qc) for h, p in accepted.items()}
 
@@ -181,14 +185,15 @@ def _reference_tables(raw_dir, cfg, boom: int, edge_margin: int) -> dict[str, pd
     return {t: (pd.concat(collected[t], ignore_index=True) if collected[t] else _empty_table(t)) for t in _TABLES}
 
 
-def test_seam_invariance_against_whole_run_reference(tmp_path, monkeypatch, raw_dir):
+@_CADENCES
+def test_seam_invariance_against_whole_run_reference(tmp_path, monkeypatch, raw_dir, cadence):
     # The streamed pipeline processes Stage B on a file +-10-min-margin span;
     # this proves that gives the same result as using the whole accepted file
     # run as context, which batch-partition invariance alone cannot show
     # (both configurations build Stage B the same margin-based way, so a
     # reach bug beyond the margin would be wrong identically in both).
     monkeypatch.setenv("TTU_TOWER_HOME", str(tmp_path / "home"))
-    cfg = _cfg(raw_dir, "seam", primary={"batch_max_files": 3})
+    cfg = _cfg(raw_dir, "seam", cadence, primary={"batch_max_files": 3})
     run_primary(cfg, _args(str(tmp_path / "seam.toml")))
 
     streamed = _read_all_tables(find_home() / "results" / "seam")
@@ -206,10 +211,11 @@ def test_seam_invariance_against_whole_run_reference(tmp_path, monkeypatch, raw_
     _assert_tables_equal(reference, reference_bigger)
 
 
-def test_batch_partition_invariance(tmp_path, monkeypatch, raw_dir):
+@_CADENCES
+def test_batch_partition_invariance(tmp_path, monkeypatch, raw_dir, cadence):
     monkeypatch.setenv("TTU_TOWER_HOME", str(tmp_path / "home"))
-    cfg_small = _cfg(raw_dir, "batchsmall", primary={"batch_max_files": 2})
-    cfg_big = _cfg(raw_dir, "batchbig", primary={"batch_max_files": 96})
+    cfg_small = _cfg(raw_dir, "batchsmall", cadence, primary={"batch_max_files": 2})
+    cfg_big = _cfg(raw_dir, "batchbig", cadence, primary={"batch_max_files": 96})
 
     run_primary(cfg_small, _args(str(tmp_path / "small.toml")))
     run_primary(cfg_big, _args(str(tmp_path / "big.toml")))
@@ -234,9 +240,11 @@ def test_parallel_equals_serial(tmp_path, monkeypatch, raw_dir):
     _assert_tables_equal(serial, parallel)
 
 
-def test_statuses_cover_every_slot_boom_of_the_period(tmp_path, monkeypatch, raw_dir):
+@_CADENCES
+def test_statuses_cover_every_slot_boom_of_the_period(tmp_path, monkeypatch, raw_dir, cadence):
     monkeypatch.setenv("TTU_TOWER_HOME", str(tmp_path / "home"))
-    cfg = _cfg(raw_dir, "statuses")
+    cfg = _cfg(raw_dir, "statuses", cadence)
+    c = Cadence.of(cfg)
     run_primary(cfg, _args(str(tmp_path / "statuses.toml")))
 
     run_dir = find_home() / "results" / "statuses"
@@ -246,17 +254,21 @@ def test_statuses_cover_every_slot_boom_of_the_period(tmp_path, monkeypatch, raw
     assert not (run_dir / "primary" / "config.toml").exists()  # this test never writes its toml
 
     period_half_hours = range(_HALF_HOURS[0] + 1, _HALF_HOURS[-1])
-    expected_slots = {3 * h + i for h in period_half_hours for i in range(3)}
+    expected_slots = {k for h in period_half_hours for k in c.file_slots(h)}
     assert set(zip(slot_boom["slot"], slot_boom["boom"])) == {(s, b) for s in expected_slots for b in _BOOMS}
+
+    slots_table = pd.read_parquet(run_dir / "primary" / "slots.parquet")
+    steps = slots_table.sort_values("slot")["slot_start"].diff().dropna().unique()
+    assert list(steps) == [pd.Timedelta(minutes=c.slot_min)]
 
     by_slot_boom = slot_boom.set_index(["slot", "boom"])["status"]
     for h in (5005, 5008, 5009):  # outage / isolated missing -> no_file
-        for i in range(3):
+        for k in c.file_slots(h):
             for b in _BOOMS:
-                assert by_slot_boom[(3 * h + i, b)] == "no_file"
-    for i in range(3):  # boom 2's all-NaN file -> no_data
-        assert by_slot_boom[(3 * 5003 + i, 2)] == "no_data"
-        assert by_slot_boom[(3 * 5003 + i, 1)] == "computed"  # boom 1 is unaffected
+                assert by_slot_boom[(k, b)] == "no_file"
+    for k in c.file_slots(5003):  # boom 2's all-NaN file -> no_data
+        assert by_slot_boom[(k, 2)] == "no_data"
+        assert by_slot_boom[(k, 1)] == "computed"  # boom 1 is unaffected
 
 
 def test_context_beyond_isolated_missing_file(tmp_path, monkeypatch, raw_dir):

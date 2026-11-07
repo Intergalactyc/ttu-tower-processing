@@ -24,6 +24,7 @@ from ttu_tower.post.classify import stability_classes
 from ttu_tower.primary.despike import despike
 from ttu_tower.primary.gaps import fill_short
 from ttu_tower.primary.ladder import RUNG_SECONDS
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 from ttu_tower.primary.report import flags_report, predates_flagged_counts
 from ttu_tower.primary.stage_a import stage_a
 from ttu_tower.validation.synthetic import correlated_ou, inject_spikes, ou
@@ -53,7 +54,8 @@ def _quantity_mask(df: pd.DataFrame, variant: str, variable: str, stat: str | No
 # --- 3.1 tau_agreement -------------------------------------------------------------
 
 
-def tau_agreement(tau: pd.DataFrame, tau_selected: pd.DataFrame, classes: pd.Series) -> dict[str, pd.DataFrame]:
+def tau_agreement(tau: pd.DataFrame, tau_selected: pd.DataFrame, classes: pd.Series,
+                  rungs: tuple[float, ...] = RUNG_SECONDS) -> dict[str, pd.DataFrame]:
     mrd = tau[tau["variant"] == "mrd"]
     heat = mrd[mrd["cospectrum"] == "heat"][["slot", "boom", "status", "tau_s"]]
     heat = heat.rename(columns={"status": "heat_status", "tau_s": "heat_tau"})
@@ -64,7 +66,7 @@ def tau_agreement(tau: pd.DataFrame, tau_selected: pd.DataFrame, classes: pd.Ser
     active_status = ("found", "capped")
     active = merged[merged["heat_status"].isin(active_status) & merged["momentum_status"].isin(active_status)].copy()
     active["log2_ratio"] = np.log2(active["heat_tau"] / active["momentum_tau"])
-    rung_index = {r: i for i, r in enumerate(RUNG_SECONDS)}
+    rung_index = {r: i for i, r in enumerate(rungs)}
     active["rung_diff"] = active["heat_tau"].map(rung_index) - active["momentum_tau"].map(rung_index)
     active["agree_exact"] = active["heat_tau"] == active["momentum_tau"]
     active["agree_within_1"] = active["rung_diff"].abs() <= 1
@@ -106,15 +108,16 @@ def _old_despike(x: np.ndarray, z_threshold: float = 5.0) -> np.ndarray:
     return np.abs(detrended - median) / sigma > z_threshold
 
 
-def _file_stability_class(half_hour: int, classes: pd.Series):
-    labels = [classes.get(3 * half_hour + i) for i in range(3)]
+def _file_stability_class(half_hour: int, classes: pd.Series, cadence: Cadence = DEFAULT_CADENCE):
+    labels = [classes.get(k) for k in cadence.file_slots(half_hour)]
     labels = [label for label in labels if pd.notna(label)]
     return pd.Series(labels).mode().iloc[0] if labels else None
 
 
-def _stratified_files(file_table: pd.DataFrame, classes: pd.Series, rng: np.random.Generator, n_per_class: int) -> pd.DataFrame:
+def _stratified_files(file_table: pd.DataFrame, classes: pd.Series, rng: np.random.Generator, n_per_class: int,
+                      cadence: Cadence = DEFAULT_CADENCE) -> pd.DataFrame:
     accepted = file_table[file_table["status"] == "accepted"].copy()
-    accepted["stability_class"] = accepted["half_hour"].map(lambda h: _file_stability_class(int(h), classes))
+    accepted["stability_class"] = accepted["half_hour"].map(lambda h: _file_stability_class(int(h), classes, cadence))
     accepted = accepted.dropna(subset=["stability_class"])
     chosen = []
     for _, group in accepted.groupby("stability_class"):
@@ -202,7 +205,7 @@ def despike_calibration(cfg, run_dir: Path, rng: np.random.Generator, n_per_clas
     """
     classes = stability_classes(read_table(Path(run_dir) / "tertiary" / "data" / "pairs"), cfg.post)
     file_table = build_file_table(cfg.paths.raw_dirs, cfg.files)
-    sample = _stratified_files(file_table, classes, rng, n_per_class)
+    sample = _stratified_files(file_table, classes, rng, n_per_class, Cadence.of(cfg))
 
     seeds = rng.integers(0, 2**31 - 1, size=len(sample))
     tasks = [
@@ -264,12 +267,13 @@ def _pooled_its(x: np.ndarray, block_samples: int, max_lag_fraction: float) -> f
 
 def _its_bias_synthetic(cfg, rng: np.random.Generator, T_values, n_realizations: int, n_top_blocks: int) -> pd.DataFrame:
     max_lag_fraction = cfg.ladder.its_max_lag_fraction
-    n = n_top_blocks * round(RUNG_SECONDS[-1] * SAMPLE_HZ)
+    rungs = Cadence.of(cfg).rung_seconds
+    n = n_top_blocks * round(rungs[-1] * SAMPLE_HZ)
     rows = []
     for T in T_values:
         for _ in range(n_realizations):
             x = ou(n, T, 1.0, rng)
-            for rung_s in RUNG_SECONDS:
+            for rung_s in rungs:
                 its = _pooled_its(x, round(rung_s * SAMPLE_HZ), max_lag_fraction)
                 expected = (1.0 - np.exp(-1.0)) * T
                 rows.append((T, rung_s, rung_s / T, its, its / expected if expected else np.nan))
@@ -339,7 +343,7 @@ def _interp_bias_from_series(x_true: np.ndarray, y_true: np.ndarray, cfg, rng: n
         for _ in range(n_realizations):
             x_filled, _ = fill_short(_blank_random_gaps(x_true, fraction, rng), cfg.qc.max_fill_gap_samples)
             y_filled, _ = fill_short(_blank_random_gaps(y_true, fraction, rng), cfg.qc.max_fill_gap_samples)
-            for rung_s in RUNG_SECONDS:
+            for rung_s in Cadence.of(cfg).rung_seconds:
                 block_samples = round(rung_s * SAMPLE_HZ)
                 var_x_t, var_y_t, cov_t = _block_var_cov(x_true, y_true, block_samples)
                 var_x_f, var_y_f, cov_f = _block_var_cov(x_filled, y_filled, block_samples)
@@ -350,7 +354,7 @@ def _interp_bias_from_series(x_true: np.ndarray, y_true: np.ndarray, cfg, rng: n
 
 def interp_bias(cfg, run_dir: Path, rng: np.random.Generator, fractions=(0.001, 0.005, 0.01, 0.02, 0.05),
                  n_realizations: int = 10, n_top_blocks: int = 20) -> dict[str, pd.DataFrame]:
-    n = n_top_blocks * round(RUNG_SECONDS[-1] * SAMPLE_HZ)
+    n = n_top_blocks * round(Cadence.of(cfg).top_rung_s * SAMPLE_HZ)
     synthetic_series = correlated_ou(n, 1.0, [1.0, 1.0], [[1.0, -0.3], [-0.3, 1.0]], rng)
     synthetic = _interp_bias_from_series(synthetic_series[0], synthetic_series[1], cfg, rng, fractions, n_realizations)
 
@@ -426,7 +430,8 @@ def _survival_by_variant(boom_final: pd.DataFrame, slot_boom: pd.DataFrame, clas
     return pd.concat(rows, ignore_index=True)
 
 
-def yield_report(primary_dir: Path, tertiary_dir: Path, classes: pd.Series) -> dict[str, pd.DataFrame]:
+def yield_report(primary_dir: Path, tertiary_dir: Path, classes: pd.Series,
+                 cadence: Cadence = DEFAULT_CADENCE) -> dict[str, pd.DataFrame]:
     flags_df = read_table(Path(primary_dir) / "data" / "flags")
     coverage_df = read_table(Path(primary_dir) / "data" / "coverage")
     slot_qc_df = read_table(Path(primary_dir) / "data" / "slot_qc")
@@ -437,7 +442,7 @@ def yield_report(primary_dir: Path, tertiary_dir: Path, classes: pd.Series) -> d
     if predates_flagged_counts(slot_qc_df, flags_df):
         _logger.warning("flag_rates left empty: this run predates the per-slot flagged_<test> counts; rerun primary")
     return {
-        "flag_rates": flags_report(slot_qc_df, coverage_df, slots_df),
+        "flag_rates": flags_report(slot_qc_df, coverage_df, slots_df, cadence.samples_per_slot),
         "survival_by_variant": _survival_by_variant(boom_final, slot_boom, classes),
     }
 
@@ -495,7 +500,8 @@ def mrd_vs_naive(boom_final: pd.DataFrame, slot_boom: pd.DataFrame, classes: pd.
 
 
 def sanity(slow: pd.DataFrame, tau_selected: pd.DataFrame, slot_boom: pd.DataFrame, mrd: pd.DataFrame,
-           mrd_frame: pd.DataFrame, means: pd.DataFrame, classes: pd.Series) -> dict[str, pd.DataFrame]:
+           mrd_frame: pd.DataFrame, means: pd.DataFrame, classes: pd.Series,
+           cadence: Cadence = DEFAULT_CADENCE) -> dict[str, pd.DataFrame]:
     p_measured = _add_class(slow[slow["variable"] == "p_measured"], classes)
     p_measured_rate = p_measured.groupby(["stability_class", "boom"])["value"].apply(lambda s: (s == 0).mean())
     p_measured_rate = p_measured_rate.rename("p_measured_zero_rate").reset_index()
@@ -510,8 +516,9 @@ def sanity(slow: pd.DataFrame, tau_selected: pd.DataFrame, slot_boom: pd.DataFra
     computed = slot_boom[slot_boom["status"] == "computed"]
     unexcised_rate = computed.groupby("boom")["unexcised_computed"].mean().rename("unexcised_computed_fraction").reset_index()
 
-    mrd_1200 = _add_class(mrd[(mrd["variant"] == "mrd") & (mrd["scale_s"] == 1200.0)], classes)
-    n_pairs_dist = mrd_1200.groupby(["stability_class", "boom", "spectrum"], observed=True)["n_pairs"].describe().reset_index()
+    # the mode at the top rung (1200 s at the default): the coarsest whose blocks tile the window more than once
+    mrd_top = _add_class(mrd[(mrd["variant"] == "mrd") & np.isclose(mrd["scale_s"], cadence.top_rung_s)], classes)
+    n_pairs_dist = mrd_top.groupby(["stability_class", "boom", "spectrum"], observed=True)["n_pairs"].describe().reset_index()
 
     wd_slot = means[(means["variable"] == "wd") & (means["stat"] == "mean")][["slot", "boom", "value"]]
     wd_slot = wd_slot.rename(columns={"value": "wd_slot"})
@@ -535,11 +542,14 @@ def run_check(name: str, run_dir: Path, cfg, rng: np.random.Generator, nproc: in
     run_dir = Path(run_dir)
     primary_dir, secondary_dir, tertiary_dir = run_dir / "primary", run_dir / "secondary", run_dir / "tertiary"
 
+    cadence = Cadence.of(cfg)
+
     def classes() -> pd.Series:
         return stability_classes(read_table(tertiary_dir / "data" / "pairs"), cfg.post)
 
     if name == "tau_agreement":
-        return tau_agreement(read_table(secondary_dir / "data" / "tau"), read_table(secondary_dir / "data" / "tau_selected"), classes())
+        return tau_agreement(read_table(secondary_dir / "data" / "tau"), read_table(secondary_dir / "data" / "tau_selected"), classes(),
+                             cadence.rung_seconds)
     if name == "despike_calibration":
         return despike_calibration(cfg, run_dir, rng, nproc=nproc)
     if name == "its_bias":
@@ -549,7 +559,7 @@ def run_check(name: str, run_dir: Path, cfg, rng: np.random.Generator, nproc: in
     if name == "floor_peak":
         return floor_peak(read_table(primary_dir / "data" / "mrd"), read_table(secondary_dir / "data" / "tau"), classes(), cfg)
     if name == "yield":
-        return yield_report(primary_dir, tertiary_dir, classes())
+        return yield_report(primary_dir, tertiary_dir, classes(), cadence)
     if name == "tau_profile":
         return tau_profile(read_table(secondary_dir / "data" / "tau_selected"), classes())
     if name == "mrd_vs_naive":
@@ -558,7 +568,7 @@ def run_check(name: str, run_dir: Path, cfg, rng: np.random.Generator, nproc: in
         return sanity(
             read_table(secondary_dir / "data" / "slow"), read_table(secondary_dir / "data" / "tau_selected"),
             read_table(primary_dir / "data" / "slot_boom"), read_table(primary_dir / "data" / "mrd"),
-            read_table(primary_dir / "data" / "mrd_frame"), read_table(primary_dir / "data" / "means"), classes(),
+            read_table(primary_dir / "data" / "mrd_frame"), read_table(primary_dir / "data" / "means"), classes(), cadence,
         )
     raise ValueError(f"unknown check '{name}'; known checks: {CHECK_NAMES}")
 

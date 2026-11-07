@@ -2,7 +2,7 @@
 import numpy as np
 
 from ttu_tower.math.polar import vector_to_bearing
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 _SECOND_LAYER_TESTS = ("direction", "bounce")
 
@@ -40,7 +40,8 @@ def family_masks(masks: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     }
 
 
-def second_layer(ue: np.ndarray, vn: np.ndarray, momentum_mask_l1: np.ndarray, g0: int, slots, cfg_second, c: float):
+def second_layer(ue: np.ndarray, vn: np.ndarray, momentum_mask_l1: np.ndarray, g0: int, slots, cfg_second, c: float,
+                 cadence: Cadence = DEFAULT_CADENCE):
     """Per slot, only where first-layer momentum coverage >= c: wd of the
     vector mean, and the mean/population-std of per-sample horizontal speed.
     `direction` if wd falls in the (open) shadow sector; `bounce` if the mean
@@ -56,11 +57,12 @@ def second_layer(ue: np.ndarray, vn: np.ndarray, momentum_mask_l1: np.ndarray, g
 
     low, high = cfg_second.shadow_sector
 
+    slot_samples = cadence.samples_per_slot
     for i, k in enumerate(slots):
-        start = SAMPLES_PER_SLOT * int(k) - g0
-        sl = slice(start, start + SAMPLES_PER_SLOT)
+        start = slot_samples * int(k) - g0
+        sl = slice(start, start + slot_samples)
         mask = momentum_mask_l1[sl]
-        if mask.sum() < c * SAMPLES_PER_SLOT:
+        if mask.sum() < c * slot_samples:
             continue
         ue_s, vn_s = ue[sl][mask], vn[sl][mask]
         ws_sample = np.hypot(ue_s, vn_s)

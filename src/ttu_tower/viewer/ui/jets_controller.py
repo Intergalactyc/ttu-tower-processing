@@ -18,7 +18,7 @@ from ttu_tower.jets.analysis import JetResult, JetSettings, analyse, sweep, swee
 from ttu_tower.jets.edits import EditStore, new_edit
 from ttu_tower.jets.filters import context_needs
 from ttu_tower.viewer import hodograph
-from ttu_tower.viewer.timeaxis import slot_to_unix, unix_to_slot
+from ttu_tower.viewer.timeaxis import cadence, slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.jets_panel import JetsPanel
 from ttu_tower.viewer.ui.jets_edits_dialog import EditsDialog
@@ -128,7 +128,7 @@ class JetsController(QObject):
         context = self.contexts.get(context_needs(settings.filters))
         slot_range = self.view.slot_range
         self.window.runner.submit(
-            sweep, profiles, settings, part, name, values, context, self.tz, slot_range, key="jets-sweep",
+            sweep, profiles, settings, part, name, values, context, self.tz, slot_range, cadence(), key="jets-sweep",
             label=f"sweeping {name}", on_error=self._failed,
             on_done=lambda frame: (self.result is not None and self.result.settings == settings
                                    and self.view.diagnostics.set_sweep(part, name, frame)))
@@ -184,7 +184,7 @@ class JetsController(QObject):
         context = self.contexts.get(self._ensure_context(settings))
         try:
             result = analyse(self.profiles, settings, context, self.tz,
-                             edits=self.store.edits if self.store is not None else ())
+                             edits=self.store.edits if self.store is not None else (), cadence=cadence())
         except ValueError as exc:  # e.g. booms this run lacks
             self._show(None, str(exc))
             return

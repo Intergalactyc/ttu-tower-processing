@@ -1,7 +1,9 @@
-"""Global sample/slot/half-hour indices and the block grids they're summed
-onto.
+"""Global sample/slot/half-hour indices, the block grids they're summed onto,
+and a run's `Cadence` (slot length and tau ladder), from which every slot,
+window and block size derives.
 """
 from dataclasses import dataclass
+from math import gcd
 
 import numpy as np
 import pandas as pd
@@ -11,8 +13,8 @@ from ttu_tower.constants import ROWS_PER_FILE, SAMPLE_HZ
 EPOCH = pd.Timestamp("2000-01-01 00:00", tz="Etc/GMT+6")
 
 _SAMPLE_NS = 1_000_000_000 // SAMPLE_HZ  # 20 ms
-SAMPLES_PER_SLOT = 10 * 60 * SAMPLE_HZ  # 30_000
-SAMPLES_PER_HALF_HOUR = ROWS_PER_FILE  # 90_000 == 3 * SAMPLES_PER_SLOT
+SAMPLES_PER_SLOT = 10 * 60 * SAMPLE_HZ  # 30_000 at the default cadence; pipeline code uses Cadence.samples_per_slot
+SAMPLES_PER_HALF_HOUR = ROWS_PER_FILE  # 90_000 == 3 * SAMPLES_PER_SLOT at the default cadence
 
 
 def _require_tz_aware(t) -> None:
@@ -159,3 +161,161 @@ def majority_block(g, grid: BlockGrid):
     """
     g = np.asarray(g, dtype=np.int64) if not np.isscalar(g) else g
     return ((2 * g + 1) * grid.den) // (2 * grid.num)
+
+
+def _reduced_grid(num: int, den: int) -> BlockGrid:
+    g = gcd(num, den)
+    return BlockGrid(num // g, den // g)
+
+
+SLOT_MINUTE_CHOICES = (10, 15)
+
+
+@dataclass(frozen=True)
+class Cadence:
+    """A run's time geometry: the output slot length S and the number of
+    rungs on the tau ladder. Every window and block derives from these two:
+
+    - slots tile each half-hour file (S divides 30 min) and are anchored at EPOCH;
+    - the detection window is 8 S, centered on the slot: [start - 3.5 S, end + 3.5 S);
+    - the ladder is 2 S / 2^j, j = 0..n_rungs-1 (ascending in `rung_seconds`):
+      every rung up to S tiles the slot, and the top rung (2 S) is one window
+      centered on the slot, [start - S/2, end + S/2);
+    - the finest block is the smallest rung, 2^(n_rungs-2) of them per slot;
+    - the MRD floor grid at level K splits the detection window into 2^K blocks.
+
+    The default (10 min, 8 rungs: 9.375 s .. 20 min, 80-min detection window)
+    is the original fixed design, and the module-level constants and
+    BlockGrid.floor/FINEST above are that default. Pipeline code takes the
+    run's own cadence (`Cadence.of(cfg)`), never the module-level defaults.
+    """
+
+    slot_min: int = 10
+    n_rungs: int = 8
+
+    def __post_init__(self):
+        if self.slot_min not in SLOT_MINUTE_CHOICES:
+            raise ValueError(f"slot_min must be one of {SLOT_MINUTE_CHOICES}, not {self.slot_min}")
+        if self.n_rungs < 3:
+            raise ValueError(f"n_rungs must be >= 3, not {self.n_rungs}")
+
+    @classmethod
+    def of(cls, cfg) -> "Cadence":
+        """The cadence of a run Config (the default for a config-like object without one)."""
+        section = getattr(cfg, "cadence", None)
+        if section is None:
+            return cls()
+        return cls(slot_min=section.slot_min, n_rungs=section.n_rungs)
+
+    # slots and files
+    @property
+    def samples_per_slot(self) -> int:
+        return self.slot_min * 60 * SAMPLE_HZ
+
+    @property
+    def slot_s(self) -> float:
+        return float(self.slot_min * 60)
+
+    @property
+    def slots_per_file(self) -> int:
+        return SAMPLES_PER_HALF_HOUR // self.samples_per_slot
+
+    def file_slots(self, h: int) -> list[int]:
+        """The slots of half-hour file h, in order."""
+        m = self.slots_per_file
+        return list(range(m * h, m * h + m))
+
+    def slot_file(self, k):
+        """Slot index (or an array of them) -> the half-hour file holding it."""
+        return k // self.slots_per_file
+
+    def slot_to_time(self, k) -> pd.Timestamp | pd.DatetimeIndex:
+        """Slot index k -> its start time."""
+        return _index_to_time(k, self.samples_per_slot)
+
+    def time_to_slot(self, t):
+        """Time -> slot index k. t must fall exactly on a slot boundary."""
+        return _time_to_index(t, self.samples_per_slot, "slot")
+
+    # windows, in samples
+    @property
+    def detection_window_samples(self) -> int:
+        return 8 * self.samples_per_slot
+
+    @property
+    def detection_margin_samples(self) -> int:
+        return 7 * self.samples_per_slot // 2
+
+    @property
+    def detection_window_min(self) -> int:
+        return 8 * self.slot_min
+
+    def detection_window(self, k: int) -> tuple[int, int]:
+        """(g0, n) of slot k's MRD detection window."""
+        return self.samples_per_slot * k - self.detection_margin_samples, self.detection_window_samples
+
+    @property
+    def ladder_window_samples(self) -> int:
+        return 2 * self.samples_per_slot
+
+    @property
+    def ladder_margin_samples(self) -> int:
+        return self.samples_per_slot // 2
+
+    def ladder_window(self, k: int) -> tuple[int, int]:
+        """(g0, n) of slot k's top-rung window (the slot plus S/2 either side)."""
+        return self.samples_per_slot * k - self.ladder_margin_samples, self.ladder_window_samples
+
+    # the ladder
+    @property
+    def rung_seconds(self) -> tuple[float, ...]:
+        """Every rung, ascending: 2 S / 2^(n_rungs-1), ..., S, 2 S."""
+        top = 2 * self.slot_s
+        return tuple(top / 2 ** (self.n_rungs - 1 - j) for j in range(self.n_rungs))
+
+    @property
+    def min_rung_s(self) -> float:
+        return self.rung_seconds[0]
+
+    @property
+    def slot_rung_s(self) -> float:
+        """The rung equal to the slot: the `naive` variant's fixed tau."""
+        return self.slot_s
+
+    @property
+    def top_rung_s(self) -> float:
+        """The one rung whose block is the 2 S window rather than tiling the slot."""
+        return 2 * self.slot_s
+
+    @property
+    def finest_per_slot(self) -> int:
+        return 2 ** (self.n_rungs - 2)
+
+    @property
+    def finest_per_window(self) -> int:
+        return 2 * self.finest_per_slot
+
+    @property
+    def finest_per_half_hour(self) -> int:
+        return self.finest_per_slot * self.slots_per_file
+
+    @property
+    def finest(self) -> BlockGrid:
+        """The finest (smallest-rung) block grid."""
+        return _reduced_grid(self.samples_per_slot, self.finest_per_slot)
+
+    # MRD
+    def floor(self, floor_level: int) -> BlockGrid:
+        """The floor grid for `mrd.floor_level` K: the detection window split into 2^K blocks."""
+        return _reduced_grid(self.detection_window_samples, 2 ** floor_level)
+
+    def floor_blocks_per_half_hour(self, floor_level: int) -> int:
+        return 2 ** floor_level * self.slots_per_file // 8
+
+    def mode_scales_s(self, floor_level: int) -> np.ndarray:
+        """P_i (seconds) for MRD mode i = 1..K: 2^i floor blocks."""
+        floor_block_s = self.floor(floor_level).length_samples / SAMPLE_HZ
+        return floor_block_s * 2.0 ** np.arange(1, floor_level + 1)
+
+
+DEFAULT_CADENCE = Cadence()

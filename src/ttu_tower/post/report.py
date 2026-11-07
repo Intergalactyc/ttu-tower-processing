@@ -9,7 +9,7 @@ import pandas as pd
 from ttu_tower.flags import BOOM_LEVEL_VARIABLES, TESTS
 from ttu_tower.post.classify import stability_classes
 from ttu_tower.primary.report import flagged_present, predates_flagged_counts
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import SAMPLES_PER_SLOT, Cadence
 
 _logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ def stability_yield_report(classes: pd.Series, boom_final: pd.DataFrame, slot_bo
     return result[["stability_class", "boom", "variant", "quantity", "n_computed", "n_survived", "fraction"]]
 
 
-def stability_flags_report(classes: pd.Series, slot_qc_df: pd.DataFrame, coverage_df: pd.DataFrame, booms) -> pd.DataFrame:
+def stability_flags_report(classes: pd.Series, slot_qc_df: pd.DataFrame, coverage_df: pd.DataFrame, booms,
+                           slot_samples: int = SAMPLES_PER_SLOT) -> pd.DataFrame:
     """Per stability class x boom x test: the fraction of present samples the
     test flagged, within that class. Numerator (`flagged_<test>` rows) and
     denominator (`present` coverage) both sum over exactly the variables the
@@ -58,9 +59,9 @@ def stability_flags_report(classes: pd.Series, slot_qc_df: pd.DataFrame, coverag
     present = coverage_df[coverage_df["layer"] == "present"].copy()
     present["stability_class"] = present["slot"].map(classes)
     present = present.dropna(subset=["stability_class"])
-    present["samples"] = present["fraction"] * SAMPLES_PER_SLOT
+    present["samples"] = present["fraction"] * slot_samples
 
-    flagged = flagged_present(slot_qc_df)
+    flagged = flagged_present(slot_qc_df, slot_samples)
     flagged["stability_class"] = flagged["slot"].map(classes)
     flagged = flagged.dropna(subset=["stability_class"])
 
@@ -123,6 +124,6 @@ def write_stability_reports(run_dir: Path, reports_dir: Path, cfg) -> None:
     if predates_flagged_counts(slot_qc, flags):
         _logger.warning("stability_flags.csv skipped: this run predates the per-slot flagged_<test> counts; rerun primary")
     else:
-        stability_flags_report(classes, slot_qc, coverage, cfg.files.booms).to_csv(reports_dir / "stability_flags.csv",
+        stability_flags_report(classes, slot_qc, coverage, cfg.files.booms, Cadence.of(cfg).samples_per_slot).to_csv(reports_dir / "stability_flags.csv",
                                                                                    index=False)
     stability_tau_report(classes, tau_final).to_csv(reports_dir / "stability_tau.csv", index=False)

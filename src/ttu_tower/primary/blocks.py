@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ttu_tower.timegrid import BlockGrid, block_sums
+from ttu_tower.timegrid import DEFAULT_CADENCE, BlockGrid, Cadence, block_sums
 
 
 @dataclass
@@ -27,9 +27,10 @@ def _family_sums(columns: dict[str, np.ndarray], weight: np.ndarray, g0: int, gr
     return FamilySums(n=n, sx=sx, columns=names)
 
 
-def floor_sums(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, floor_level: int, b0: int, nb: int) -> dict[str, FamilySums]:
-    """First-order block sums on the floor grid, per family, for MRD."""
-    grid = BlockGrid.floor(floor_level)
+def floor_sums(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, floor_level: int, b0: int, nb: int,
+               cadence: Cadence = DEFAULT_CADENCE) -> dict[str, FamilySums]:
+    """First-order block sums on `cadence`'s floor grid, per family, for MRD."""
+    grid = cadence.floor(floor_level)
     theta = series["vpts"] - 273.15
     tau_s = series["ts"] - 273.15
     return {
@@ -41,13 +42,15 @@ def floor_sums(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: 
     }
 
 
-def finest_sums(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, b0: int, nb: int) -> dict[str, FamilySums]:
-    """First- and second-order block sums on the finest (9.375 s) grid, per
+def finest_sums(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, b0: int, nb: int,
+                cadence: Cadence = DEFAULT_CADENCE) -> dict[str, FamilySums]:
+    """First- and second-order block sums on `cadence`'s finest grid (the
+    smallest rung; 9.375 s at the default), per
     family, for the statistics ladder. The "direction" entry is a sub-sum of
     ue/ws, vn/ws over momentum-and-moving samples, for a later Yamartino
     wind-direction standard deviation.
     """
-    grid = BlockGrid.FINEST
+    grid = cadence.finest
     ue, vn, w = series["ue"], series["vn"], series["w"]
     ws = np.hypot(ue, vn)
     theta = series["vpts"] - 273.15

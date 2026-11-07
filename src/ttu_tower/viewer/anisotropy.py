@@ -7,6 +7,7 @@ import pandas as pd
 import pyarrow.dataset as pa_dataset
 
 from ttu_tower.constants import HEIGHTS
+from ttu_tower.viewer.timeaxis import cadence
 
 CASES = ("1c", "2c", "3c", "prolate", "oblate", "ellipse", "mixed")
 # the old plotting code's fixed palette
@@ -136,7 +137,7 @@ def slot_states(across, variant: str) -> pd.DataFrame:
 def boom_track(index, boom: int, variant: str, slot_lo: int, slot_hi: int) -> pd.DataFrame:
     """slot, x, y of one boom's final states over [slot_lo, slot_hi]."""
     f = pa_dataset.field
-    df = index.read("boom_final", half_hours=range(slot_lo // 3, slot_hi // 3 + 1),
+    df = index.read("boom_final", half_hours=range(cadence().slot_file(slot_lo), cadence().slot_file(slot_hi) + 1),
                     columns=["slot", "variable", "value"],
                     filter=(f("boom") == boom) & (f("variant") == variant) & (f("slot") >= slot_lo)
                     & (f("slot") <= slot_hi) & f("variable").isin(["aniso_l2", "aniso_l3"]))

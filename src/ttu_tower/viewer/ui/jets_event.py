@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.jets.analysis import JetResult
 from ttu_tower.jets.identify import Profiles
-from ttu_tower.timegrid import slot_to_time
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, slot_to_unix, unix_to_slot
+from ttu_tower.viewer.timeaxis import slot_to_time
+from ttu_tower.viewer.timeaxis import slot_seconds, display_offset_s, slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui import tables
 
 _SPEED_MAP = pg.colormap.get("viridis")
@@ -336,8 +336,8 @@ class EventView(QWidget):
 
     def _span_slots(self) -> tuple[int, int]:
         x0, x1 = self.span.getRegion()
-        first = int(round(x0 / SLOT_SECONDS)) * SLOT_SECONDS
-        last = int(round(x1 / SLOT_SECONDS)) * SLOT_SECONDS
+        first = int(round(x0 / slot_seconds())) * slot_seconds()
+        last = int(round(x1 / slot_seconds())) * slot_seconds()
         a = int(unix_to_slot(first + 1))
         return a, max(int(unix_to_slot(last - 1)), a)
 
@@ -423,7 +423,7 @@ class EventView(QWidget):
         top = float(np.nanpercentile(finite, 99)) if finite.size else 1.0
         self.colorbar.setLevels((0.0, max(top, 1.0)))
         self.image.setImage(ws.T, autoLevels=False, levels=(0.0, max(top, 1.0)))
-        self.image.setRect(slot_to_unix(lo), 0, (hi - lo + 1) * SLOT_SECONDS, len(self.rows))
+        self.image.setRect(slot_to_unix(lo), 0, (hi - lo + 1) * slot_seconds(), len(self.rows))
         ticks = [(i + 0.5, f"{HEIGHTS[bm]:g}") for i, bm in enumerate(self.rows)]
         self.map.getPlotItem().getAxis("left").setTicks([ticks])
         self.map.setYRange(0, len(self.rows), padding=0)
@@ -441,7 +441,7 @@ class EventView(QWidget):
             detected = detection["u_nose"].notna().to_numpy(bool)
         row_of = {bm: i for i, bm in enumerate(self.rows)}
         boom = detection["nose_boom"]
-        x = slot_to_unix(slots) + SLOT_SECONDS / 2
+        x = slot_to_unix(slots) + slot_seconds() / 2
         y = np.array([row_of.get(int(v), np.nan) + 0.5 if pd.notna(v) else np.nan for v in boom])
         self.noses.setData(x[detected], y[detected])
         self.bridged.setData(x[filled], np.full(filled.sum(), len(self.rows) - 0.5))

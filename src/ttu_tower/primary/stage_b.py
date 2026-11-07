@@ -18,14 +18,13 @@ from ttu_tower.primary.qc_windows import higher_moments, resolution_dropouts
 from ttu_tower.primary.slotstats import slot_means
 from ttu_tower.primary.slow import hann_kernel, smooth, vpts as compute_vpts
 from ttu_tower.primary.stage_a import StageA, couple_triplet
-from ttu_tower.timegrid import BlockGrid, SAMPLES_PER_HALF_HOUR, SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, SAMPLES_PER_HALF_HOUR, Cadence
 
 _SONIC = ("ue", "vn", "w")
 _SONIC_TS = _SONIC + ("ts",)  # despiked and gap-filled; QC windows applied
 _SLOW = ("t", "rh", "p")  # despiked, then smoothed
 _ALL_DESPIKED = _SONIC_TS + _SLOW
 _MASK_VARS = ("ue", "vn", "w", "ts", "vpts")  # participate in first/second-layer masking
-_N_FINEST = 192
 
 
 @dataclass
@@ -62,13 +61,13 @@ class StageBOut:
     finest_unexcised: dict[str, FamilySums] | None = None
 
 
-def _empty_out(h: int) -> StageBOut:
+def _empty_out(h: int, cadence: Cadence = DEFAULT_CADENCE) -> StageBOut:
     """A placeholder for a missing file: NaN series, zero weights, no rows."""
     coverage = schema.cast("coverage", pd.DataFrame(columns=["slot", "boom", "variable", "layer", "fraction"]))
     means = schema.cast("means", pd.DataFrame(columns=["slot", "boom", "variable", "stat", "value"]))
     slot_qc = schema.cast("slot_qc", pd.DataFrame(columns=["slot", "boom", "variable", "stat", "value"]))
     flags = FlagRows().frame()
-    mask_differs = {3 * h: False, 3 * h + 1: False, 3 * h + 2: False}
+    mask_differs = {k: False for k in cadence.file_slots(h)}
     return StageBOut(coverage=coverage, means=means, slot_qc=slot_qc, flags=flags, mask_differs=mask_differs,
                       is_placeholder=True)
 
@@ -115,13 +114,13 @@ def build_span(stage_a_by_half_hour: dict[int, StageA | None], h: int, margin: i
                 core_present=core_present)
 
 
-def _slot_flag_intervals(flag: np.ndarray, slots: list[int]) -> tuple[np.ndarray, np.ndarray]:
-    starts = np.array([SAMPLES_PER_SLOT * k for k, f in zip(slots, flag) if f], dtype=np.int64)
-    return starts, starts + SAMPLES_PER_SLOT
+def _slot_flag_intervals(flag: np.ndarray, slots: list[int], slot_samples: int) -> tuple[np.ndarray, np.ndarray]:
+    starts = np.array([slot_samples * k for k, f in zip(slots, flag) if f], dtype=np.int64)
+    return starts, starts + slot_samples
 
 
 def _flagged_present_rows(flags_df: pd.DataFrame, present: dict[str, np.ndarray], core_g0: int, slots: list[int],
-                          boom: int) -> list[tuple]:
+                          boom: int, slot_samples: int) -> list[tuple]:
     """`slot_qc` rows (slot, boom, variable, "flagged_<test>", fraction): the
     fraction of each core slot's samples that are present (non-NaN in the
     source file) and inside one of `test`'s intervals for `variable`. A
@@ -135,10 +134,10 @@ def _flagged_present_rows(flags_df: pd.DataFrame, present: dict[str, np.ndarray]
             flagged[s:e] = True
         variables = BOOM_LEVEL_VARIABLES if pd.isna(variable) else (str(variable),)
         for var in variables:
-            counts = (flagged & present[var]).reshape(len(slots), SAMPLES_PER_SLOT).sum(axis=1)
+            counts = (flagged & present[var]).reshape(len(slots), slot_samples).sum(axis=1)
             for k, n in zip(slots, counts):
                 if n:
-                    rows.append((k, boom, var, f"flagged_{test}", float(n) / SAMPLES_PER_SLOT))
+                    rows.append((k, boom, var, f"flagged_{test}", float(n) / slot_samples))
     return rows
 
 
@@ -171,12 +170,14 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
     core_lo = core_g0 - span.g0
     core = slice(core_lo, core_lo + SAMPLES_PER_HALF_HOUR)
 
+    cadence = Cadence.of(cfg)
     if span.file_run_id[core_lo] == -1:
-        return _empty_out(h)
+        return _empty_out(h, cadence)
 
     qc = cfg.qc
     c = qc.min_coverage
-    slots = [3 * h, 3 * h + 1, 3 * h + 2]
+    slots = cadence.file_slots(h)
+    slot_samples = cadence.samples_per_slot
     flag_rows = FlagRows()
 
     def clip_add(test, variable, starts, ends):
@@ -212,10 +213,10 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
     # 3. higher_moments (core slots)
     higher = {}
     for var in _SONIC_TS:
-        skew, kurt, skew_flag, kurt_flag = higher_moments(filled[var], span.g0, slots, qc.windows, c)
+        skew, kurt, skew_flag, kurt_flag = higher_moments(filled[var], span.g0, slots, qc.windows, c, cadence)
         higher[var] = (skew, kurt, skew_flag, kurt_flag)
-        clip_add("skew", var, *_slot_flag_intervals(skew_flag, slots))
-        clip_add("kurt", var, *_slot_flag_intervals(kurt_flag, slots))
+        clip_add("skew", var, *_slot_flag_intervals(skew_flag, slots, slot_samples))
+        clip_add("kurt", var, *_slot_flag_intervals(kurt_flag, slots, slot_samples))
 
     # 4. resolution_dropouts (ue, vn, w, ts)
     resolution_iv, dropout_iv = {}, {}
@@ -247,8 +248,8 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
             "unchecked": mask_to_intervals(despiked[var].unchecked, g0=span.g0),
             "resolution": resolution_iv[var],
             "dropouts": dropout_iv[var],
-            "skew": _slot_flag_intervals(higher[var][2], slots),
-            "kurt": _slot_flag_intervals(higher[var][3], slots),
+            "skew": _slot_flag_intervals(higher[var][2], slots, slot_samples),
+            "kurt": _slot_flag_intervals(higher[var][3], slots, slot_samples),
         }
         for var in _SONIC_TS
     }
@@ -258,18 +259,18 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
     # 8. second_layer (core slots)
     l1_momentum = l1_masks["ue"] & l1_masks["vn"] & l1_masks["w"]
     wd, ws_mean, ws_std, direction_flag, bounce_flag = second_layer(
-        filled["ue"], filled["vn"], l1_momentum, span.g0, slots, qc.second_layer, c
+        filled["ue"], filled["vn"], l1_momentum, span.g0, slots, qc.second_layer, c, cadence
     )
-    clip_add("direction", None, *_slot_flag_intervals(direction_flag, slots))
-    clip_add("bounce", None, *_slot_flag_intervals(bounce_flag, slots))
+    clip_add("direction", None, *_slot_flag_intervals(direction_flag, slots, slot_samples))
+    clip_add("bounce", None, *_slot_flag_intervals(bounce_flag, slots, slot_samples))
 
     # 9. final masks (core-only): first layer, minus direction/bounce slots
     boom_level_bad = np.zeros(SAMPLES_PER_HALF_HOUR, dtype=bool)
     for i, k in enumerate(slots):
-        lo = SAMPLES_PER_SLOT * (k - 3 * h)
+        lo = slot_samples * (k - slots[0])
         excluded = ("direction" in qc.unusable_tests and direction_flag[i]) or ("bounce" in qc.unusable_tests and bounce_flag[i])
         if excluded:
-            boom_level_bad[lo : lo + SAMPLES_PER_SLOT] = True
+            boom_level_bad[lo : lo + slot_samples] = True
     final_masks_var = {var: l1_masks[var][core] & ~boom_level_bad for var in _MASK_VARS}
     final_series = {
         "ue": filled["ue"][core], "vn": filled["vn"][core], "w": filled["w"][core],
@@ -289,15 +290,17 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
 
     # 11. floor_sums and finest_sums for both variants
     floor_level = cfg.mrd.floor_level
-    floor_grid = BlockGrid.floor(floor_level)
-    n_floor = int(round(SAMPLES_PER_HALF_HOUR / floor_grid.length_samples))
+    floor_grid = cadence.floor(floor_level)
+    n_floor = cadence.floor_blocks_per_half_hour(floor_level)
     floor_b0 = core_g0 * floor_grid.den // floor_grid.num
-    finest_b0 = core_g0 * BlockGrid.FINEST.den // BlockGrid.FINEST.num
+    finest_grid = cadence.finest
+    finest_b0 = core_g0 * finest_grid.den // finest_grid.num
+    n_finest = cadence.finest_per_half_hour
 
-    floor = compute_floor_sums(final_series, final_family, core_g0, floor_level, floor_b0, n_floor)
-    finest = compute_finest_sums(final_series, final_family, core_g0, finest_b0, _N_FINEST)
-    floor_unexcised = compute_floor_sums(unexcised, unexcised_family, core_g0, floor_level, floor_b0, n_floor)
-    finest_unexcised = compute_finest_sums(unexcised, unexcised_family, core_g0, finest_b0, _N_FINEST)
+    floor = compute_floor_sums(final_series, final_family, core_g0, floor_level, floor_b0, n_floor, cadence)
+    finest = compute_finest_sums(final_series, final_family, core_g0, finest_b0, n_finest, cadence)
+    floor_unexcised = compute_floor_sums(unexcised, unexcised_family, core_g0, floor_level, floor_b0, n_floor, cadence)
+    finest_unexcised = compute_finest_sums(unexcised, unexcised_family, core_g0, finest_b0, n_finest, cadence)
 
     # 12. per-slot coverage, means, slot_qc, mask_differs
     present = {v: span.core_present[v] for v in _SONIC_TS}
@@ -310,8 +313,8 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
 
     coverage_rows, slot_qc_rows, mask_differs = [], [], {}
     for i, k in enumerate(slots):
-        lo = SAMPLES_PER_SLOT * (k - 3 * h)
-        sl = slice(lo, lo + SAMPLES_PER_SLOT)
+        lo = slot_samples * (k - slots[0])
+        sl = slice(lo, lo + slot_samples)
 
         for var in _MASK_VARS:
             for layer, mask_dict in (
@@ -336,7 +339,7 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
         mask_differs[k] = bool(any((unexcised_masks_var[v][sl] & ~final_masks_var[v][sl]).any() for v in _MASK_VARS))
 
     flags_df = flag_rows.frame()
-    slot_qc_rows += _flagged_present_rows(flags_df, span.core_present, core_g0, slots, boom)
+    slot_qc_rows += _flagged_present_rows(flags_df, span.core_present, core_g0, slots, boom, slot_samples)
 
     coverage_df = schema.cast("coverage", pd.DataFrame(coverage_rows, columns=["slot", "boom", "variable", "layer", "fraction"]))
     slot_qc_df = schema.cast("slot_qc", pd.DataFrame(slot_qc_rows, columns=["slot", "boom", "variable", "stat", "value"]))
@@ -345,7 +348,7 @@ def stage_b(span: Span, h: int, boom: int, cfg, trace: dict | None = None) -> St
     slow_for_means = {v: (slow_smoothed[v][0][core], slow_smoothed[v][1][core]) for v in _SLOW}
     masks_for_means = {"momentum": final_family["momentum"], "ts": final_masks_var["ts"]}
     for k in slots:
-        for var, stat, value in slot_means(final_series, masks_for_means, slow_for_means, core_g0, k, cfg.ladder, c):
+        for var, stat, value in slot_means(final_series, masks_for_means, slow_for_means, core_g0, k, cfg.ladder, c, cadence):
             means_rows.append((k, boom, var, stat, value))
     means_df = schema.cast("means", pd.DataFrame(means_rows, columns=["slot", "boom", "variable", "stat", "value"]))
 

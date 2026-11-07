@@ -3,7 +3,7 @@ span covers, and how a new selection combines with the old one.
 """
 import numpy as np
 
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, unix_to_slot
+from ttu_tower.viewer.timeaxis import slot_seconds, unix_to_slot
 
 EMPTY = np.empty(0, dtype=np.int64)
 
@@ -58,6 +58,6 @@ def describe(slots: np.ndarray) -> str:
     if slots.size == 0:
         return "no selection"
     stretches = len(runs(slots))
-    hours = slots.size * SLOT_SECONDS / 3600
+    hours = slots.size * slot_seconds() / 3600
     return (f"{slots.size} slot{'s' if slots.size != 1 else ''} ({hours:.3g} h) in {stretches} "
             f"stretch{'es' if stretches != 1 else ''}")

@@ -18,6 +18,7 @@ from ttu_tower.viewer.slotdata import (
 )
 from ttu_tower.viewer.ui import tables
 from ttu_tower.viewer.ui.axes import Log10Axis
+from ttu_tower.viewer.timeaxis import cadence
 
 _STORED = "#000000"
 _UNUSED = "#8c8c8c"  # the smoothing detection would use, where it didn't run
@@ -32,7 +33,7 @@ _COLUMNS = {"boom": "boom", "variant": "variant", "heat_stored": "heat (run)", "
 
 def _rung_box() -> QComboBox:
     box = QComboBox()
-    for rung in whatif.LADDER_RUNGS:
+    for rung in whatif.ladder_rungs():
         box.addItem(f"{rung:g} s", rung)
     return box
 
@@ -291,7 +292,8 @@ class WhatIfTab(QWidget):
                 # the slot has no usable samples of this family, so detection stops before smoothing; show
                 # what it would have seen, greyed, since it plays no part in tau
                 trace: dict = {}
-                detect(raw.value, raw.se, raw.n_pairs, True, cfg.detection, trace=trace, kernel=kernel)
+                detect(raw.value, raw.se, raw.n_pairs, True, cfg.detection, trace=trace, kernel=kernel,
+                       cadence=cadence())
                 self._draw_trace(plot, trace, x, color=_UNUSED, factor=factor)
                 note = pg.TextItem(f"{family}: no_data (no usable {family} samples in the slot) - detection didn't "
                                    "run; grey: what it would see", color=_UNUSED, anchor=(0, 0))

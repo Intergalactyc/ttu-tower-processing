@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QVBoxL
 
 from ttu_tower.viewer import tauvariants
 from ttu_tower.viewer.decimate import break_wraps, nearest_on_curve
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, unix_to_slot
+from ttu_tower.viewer.timeaxis import slot_seconds, display_offset_s, unix_to_slot
 from ttu_tower.viewer.timeline import Curve, FilteredOverlay, TimelineData, values_at as _values_at
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator, pass_clicks
@@ -435,7 +435,7 @@ class TimelinePlot(QWidget):
         edges = np.flatnonzero(np.diff(np.concatenate(([0], is_night.astype(np.int8), [0]))))
         x = night.x
         for start, end in zip(edges[0::2], edges[1::2]):
-            region = pg.LinearRegionItem((x[start], x[end - 1] + SLOT_SECONDS), movable=False,
+            region = pg.LinearRegionItem((x[start], x[end - 1] + slot_seconds()), movable=False,
                                          brush=pg.mkBrush(style.NIGHT_BRUSH), pen=pg.mkPen(None))
             region.setZValue(-100)
             region.setAcceptedMouseButtons(Qt.MouseButton.NoButton)

@@ -21,7 +21,6 @@ _COL_MAP = {
     "Precip": "precip",
 }
 _MB_TO_KPA = 0.1
-_AVG_PERIOD = "10min"
 
 
 def get_df(data_path: str) -> pd.DataFrame:
@@ -90,24 +89,25 @@ def _convert_units(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def mesonet_data(data_path: str, timezone: str) -> pd.DataFrame:
-    """The mesonet station's columns, resampled to the fixed 10-min slot
-    cadence and indexed by `slot_start` (tz-aware, in `timezone`).
+def mesonet_data(data_path: str, timezone: str, slot_min: int = 10) -> pd.DataFrame:
+    """The mesonet station's columns, resampled to the run's slot cadence
+    (`slot_min` minutes) and indexed by `slot_start` (tz-aware, in `timezone`).
     """
+    avg_period = f"{slot_min}min"
     df = get_df(data_path)
     df = df.drop(columns=[c for c in df.columns if c not in _COL_MAP])
     df = df.rename(mapper=_COL_MAP, axis="columns")
     df["u_meso_mean"], df["v_meso_mean"] = bearing_to_vector(df["_WSVEC"], df["_WD"])
     df = df.drop(columns=["_WSVEC", "_WD"])
     df = _convert_units(df)
-    df = df.resample(_AVG_PERIOD).mean()
+    df = df.resample(avg_period).mean()
     df = _fill_resampling_gaps(df)
     # wd_meso_mean genuinely needs a vector average (direction can't be
     # scalar-averaged); computed AFTER gap-filling so it's always consistent
     # with u_meso_mean/v_meso_mean, and so a wrapping bearing (e.g. 350deg ->
     # 10deg) is never interpolated directly through 180deg.
     df["ws_meso_vector_mean"], df["wd_meso_mean"] = vector_to_bearing(df["u_meso_mean"], df["v_meso_mean"])
-    df = df.asfreq(_AVG_PERIOD)
+    df = df.asfreq(avg_period)
     df["ti_meso"] = df["ws_meso_std"] / df["ws_meso_mean"].replace(0, np.nan)
     df.index = df.index.tz_convert(timezone)
     df.index.name = "slot_start"

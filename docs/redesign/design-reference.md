@@ -99,7 +99,12 @@ a dependency; the pieces needed are ported.
 
 ## D. Cadence, windows and the τ ladder
 
-- **Output cadence: 10-minute slots**, the same for every boom. 60-minute records mix stability
+- **Output cadence: 10-minute slots** by default, the same for every boom. The slot length
+  and the number of rungs are configurable (`[cadence]`; 15-min slots are supported, for
+  matching 15-min model output): every window below scales with the slot (detection 8 S, ladder
+  2 S / 2^j, top-rung window 2 S), so all the identities and tiling arguments here hold
+  unchanged. At 15 min a ninth rung keeps the smallest τ (7.03 s) below the default's 9.375 s;
+  with eight it would rise to 14.06 s, which clips many nocturnal stable slots. 60-minute records mix stability
   regimes and smear out the brief near-neutral transitions the study cares about; per-boom record
   lengths would stagger timestamps across booms.
 - **Detection and averaging are decoupled.** An **80-minute detection window** centered on each

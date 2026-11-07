@@ -22,7 +22,7 @@ _PREFIX = {"coverage": "coverage_", "flags": "flag_", "slot_qc": "qc_", "mrd_fra
 _TAU_FINAL = {"tau_s": "tau_s", "source": "tau_source", "source_status": "tau_status"}
 FILTER_GROUPS = ("momentum", "heat", "ts", "t", "rh", "p", "vpt")
 BUILTINS = {
-    "slot": "slot index (10-min slots since the epoch)",
+    "slot": "slot index (slots since the epoch, at the run's slot length)",
     "boom": "boom number",
     "height": "boom height [m]",
     "time": "slot start, wall-clock time in the run's zone (compare with strings: time > '2014-01-05')",

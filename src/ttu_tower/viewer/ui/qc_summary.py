@@ -12,7 +12,7 @@ from ttu_tower.viewer.catalog import variable_label
 from ttu_tower.viewer.timeaxis import unix_to_slot
 from ttu_tower.viewer.ui import tables, variant_combo
 
-_VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (10 min)"), ("mrd_unexcised", "mrd unexcised"))
+_VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (slot τ)"), ("mrd_unexcised", "mrd unexcised"))
 _FLAGGED_TIP = ("% of the variable's samples each test flagged, over the slots with a file; excursion only "
                 "records (it removes nothing), and boom-level tests count toward ue/vn/w/ts")
 

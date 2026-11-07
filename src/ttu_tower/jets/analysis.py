@@ -17,6 +17,7 @@ from ttu_tower.jets.edits import apply_edits
 from ttu_tower.jets.events import EventParams, Events, find_events, nose_rows, nose_stats
 from ttu_tower.jets.filters import FILTERS, JetFilters, apply_filters, event_quantities
 from ttu_tower.jets.identify import ALGORITHMS, Params, Profiles
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 DEFAULT_ALGORITHM = "nose"
 _FILTER_QUANTITY = {"night": "start_night", "inversion": "dvpt_mean", "richardson": "rib_median"}
@@ -140,7 +141,7 @@ class JetResult:
 
 
 def analyse(profiles: Profiles, settings: JetSettings, context: pd.DataFrame | None = None,
-            tz: str = SOURCE_TIMEZONE, edits=()) -> JetResult:
+            tz: str = SOURCE_TIMEZONE, edits=(), cadence: Cadence = DEFAULT_CADENCE) -> JetResult:
     """Detection, events (then the manual `edits`), the filters, and their
     verdicts. The detection gains each peak's estimated nose (`noses.estimate`).
     """
@@ -151,8 +152,8 @@ def analyse(profiles: Profiles, settings: JetSettings, context: pd.DataFrame | N
     detection = identify.detect(settings.algorithm, profiles, params)
     # the estimated nose, for describing the events only
     detection = detection.join(noses.estimate(detection, profiles, getattr(params, "profile_booms", None)))
-    events = find_events(detection, settings.events, profiles, tz)
-    events, report = apply_edits(events, detection, edits, profiles, tz)
+    events = find_events(detection, settings.events, profiles, tz, cadence)
+    events, report = apply_edits(events, detection, edits, profiles, tz, cadence)
     quantities = event_quantities(events, detection, context, settings.filters)
     verdicts = apply_filters(quantities, settings.filters)
     verdicts["rejected"] = events.table["rejected"]
@@ -179,7 +180,7 @@ def sweep_values(field: dict, current) -> np.ndarray:
 
 
 def sweep(profiles: Profiles, settings: JetSettings, part: str, name: str, values, context=None,
-          tz: str = SOURCE_TIMEZONE, slot_range=None) -> pd.DataFrame:
+          tz: str = SOURCE_TIMEZONE, slot_range=None, cadence: Cadence = DEFAULT_CADENCE) -> pd.DataFrame:
     """Jet slots, events and events kept as one parameter (`part` "params" or
     "events", field `name`) takes each of `values`, the rest as in `settings`.
     An event parameter reuses one detection.
@@ -197,7 +198,7 @@ def sweep(profiles: Profiles, settings: JetSettings, part: str, name: str, value
             continue
         if part == "params" or detection is None:
             detection = identify.detect(trial.algorithm, profiles, trial.algorithm_params())
-        events = find_events(detection, trial.events, profiles, tz)
+        events = find_events(detection, trial.events, profiles, tz, cadence)
         quantities = event_quantities(events, detection, context, trial.filters)
         verdicts = apply_filters(quantities, trial.filters)
         verdicts["rejected"] = events.table["rejected"]

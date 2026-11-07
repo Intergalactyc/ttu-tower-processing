@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.secondary.detect import SMOOTHING
 from ttu_tower.viewer import taustats, whatif
-from ttu_tower.viewer.taustats import RUNGS, SOURCES, VARIANTS
+from ttu_tower.viewer.taustats import SOURCES, VARIANTS, rungs
 from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
@@ -34,7 +34,7 @@ _PRIORITIES = (("heat", "momentum"), ("momentum", "heat"))
 
 def _rung_box() -> QComboBox:
     box = QComboBox()
-    for r in RUNGS:
+    for r in rungs():
         box.addItem(f"{r:g} s", r)
     return box
 
@@ -70,7 +70,7 @@ def _draw_categories(plot: pg.PlotWidget, which: str, lines, legend: bool = Fals
     names = taustats.labels(which)
     item.getAxis("bottom").setTicks([list(enumerate(names))])
     item.getAxis("bottom").setLabel("τ [s] (found or capped) · then no τ")
-    item.addItem(pg.InfiniteLine(len(RUNGS) - 0.5, pen=pg.mkPen("#999999", style=Qt.PenStyle.DotLine)))
+    item.addItem(pg.InfiniteLine(len(rungs()) - 0.5, pen=pg.mkPen("#999999", style=Qt.PenStyle.DotLine)))
     for values, color, dashed, _name in lines:
         pen = pg.mkPen(color, width=1.8, style=Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
         item.plot(np.arange(len(names)), values, pen=pen, symbol="o", symbolSize=5, symbolBrush=color,
@@ -428,7 +428,7 @@ class TauView(QWidget):
                 item = QTableWidgetItem(f"{pct:.1f}" if counts[i, j] else "")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 shade = int(255 - 150 * (counts[i, j] / peak) ** 0.5)
-                diagonal = i == j and i < len(RUNGS)
+                diagonal = i == j and i < len(rungs())
                 item.setBackground(QBrush(QColor(shade, shade, 255) if diagonal else QColor(255, shade, shade)))
                 item.setToolTip(f"heat {names[i]}, momentum {names[j]}: {counts[i, j]:,} slots ({pct:.2f} %)")
                 table.setItem(i, j, item)

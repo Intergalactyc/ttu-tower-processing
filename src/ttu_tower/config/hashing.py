@@ -4,7 +4,9 @@ the sections each stage depends on, plus the package's major.minor version.
 import hashlib
 import json
 
-from ttu_tower.config.model import Config, to_jsonable
+from ttu_tower.config.model import CadenceConfig, Config, to_jsonable
+
+DEFAULT_CADENCE_CONFIG = CadenceConfig(slot_min=10, n_rungs=8)
 
 
 def major_minor(version: str) -> str:
@@ -32,6 +34,9 @@ def primary_hash(cfg: Config, version: str) -> str:
         "period": to_jsonable(cfg.period),
         "version": major_minor(version),
     }
+    if cfg.cadence != DEFAULT_CADENCE_CONFIG:
+        # only when non-default, so runs made before [cadence] existed keep their hashes
+        payload["cadence"] = to_jsonable(cfg.cadence)
     return _hash_payload(payload)
 
 

@@ -28,6 +28,7 @@ from ttu_tower.constants import SOURCE_TIMEZONE
 from ttu_tower.io.runs import locate_home
 from ttu_tower.jets.events import Events, assemble
 from ttu_tower.jets.identify import Profiles
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 KINDS = ("span", "add", "reject")
 _VERSION = 1
@@ -99,7 +100,7 @@ def _overlaps(a, b) -> bool:
 
 
 def apply_edits(events: Events, detection: pd.DataFrame, edits, profiles: Profiles | None = None,
-                tz: str = SOURCE_TIMEZONE) -> tuple[Events, pd.DataFrame]:
+                tz: str = SOURCE_TIMEZONE, cadence: Cadence = DEFAULT_CADENCE) -> tuple[Events, pd.DataFrame]:
     """The events after the edits, and a report of what each edit did."""
     slots = detection.index.to_numpy(np.int64)
     report = []
@@ -171,7 +172,7 @@ def apply_edits(events: Events, detection: pd.DataFrame, edits, profiles: Profil
     manual = covered & ~detection["is_jet"].to_numpy(bool) & ~filled
     result = assemble(detection, starts, ends, filled & covered, manual, profiles, tz,
                       source=[s["source"] for s in merged], rejected=[s["rejected"] for s in merged],
-                      edits=[s["edits"] for s in merged])
+                      edits=[s["edits"] for s in merged], cadence=cadence)
     report = pd.DataFrame(report, columns=["id", "kind", "start", "end", "anchor", "created", "note", "status"])
     report["event_id"] = [next((int(i) for i, ids in result.table["edits"].items() if r in ids), None)
                           for r in report["id"]]

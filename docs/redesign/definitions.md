@@ -1,7 +1,11 @@
 # Definitions
 
 The terms used in these documents, with their exact meaning here. Durations assume 50-Hz
-sampling and the default floor level K = 15.
+sampling, the default floor level K = 15 and the default cadence (10-min slots, 8 rungs). The
+slot length and rung count are configurable (`[cadence]`, config-reference.md); every window and
+block below scales with the slot S: the detection window is 8 S, the top-rung window 2 S, and
+the ladder 2 S / 2^j. At 15-min slots with 9 rungs, for example, the finest block is 7.03 s
+(128 per slot), the top-rung window 30 min, and the detection window 120 min.
 
 ---
 

@@ -210,7 +210,7 @@ class TauPanel(QWidget):
         cache.addWidget(self.disk, stretch=1)
         cache.addWidget(self.clear_button)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Fixed τ at every rung (τ = 9.375 s … 20 min) is in every variant menu; a saved "
+        layout.addWidget(QLabel("Fixed τ at every rung of the run's ladder is in every variant menu; a saved "
                                 "scheme is too."))
         layout.itemAt(0).widget().setWordWrap(True)
         layout.addLayout(schemes_row)

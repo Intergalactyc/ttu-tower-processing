@@ -16,6 +16,7 @@ from ttu_tower.primary.products import file_products
 from ttu_tower.viewer import whatif
 from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.slotdata import SlotAcross, _plain
+from ttu_tower.viewer.timeaxis import cadence
 
 QUALITY_TESTS = tuple(name for name, spec in TESTS.items() if spec.kind == "quality")
 _SECTION_TITLES = {"": "coverage and gaps", "bounds": "bounds", "despike": "despiking", "windows": "window tests",
@@ -136,7 +137,7 @@ def slot_comparison(index, rp: Reprocessor, boom: int, slots) -> pd.DataFrame:
     """
     slots = list(slots)
     f = pa_dataset.field
-    half_hours = sorted({k // 3 for k in slots})
+    half_hours = sorted({cadence().slot_file(k) for k in slots})
     flt = (f("boom") == boom) & f("slot").isin(slots)
     stored = _slot_rows(index.read("coverage", booms=[boom], half_hours=half_hours, filter=flt),
                         index.read("means", booms=[boom], half_hours=half_hours, filter=flt), slots)
@@ -159,7 +160,7 @@ def slot_tau(index, rp: Reprocessor, boom: int, k: int, cfg_secondary) -> pd.Dat
     and as they come out of the what-if QC (primary's products recomputed, then
     secondary's detection and selection with the run's own parameters).
     """
-    h = k // 3
+    h = cadence().slot_file(k)
     products = file_products(h, {hh: rp.stage_b(boom, hh)[0] for hh in range(h - 2, h + 3)}, boom, rp.cfg)
 
     def at_slot(name):

@@ -26,7 +26,7 @@ from ttu_tower.viewer.ui.inspector.whatif_tab import WhatIfTab
 from ttu_tower.viewer.ui.series_view import SeriesPanel
 
 TABS = ("series", "spectra", "scales", "qc", "profile", "hodograph", "anisotropy", "whatif", "numbers")
-_VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (10 min)"), ("mrd_unexcised", "mrd unexcised"))
+_VARIANTS = (("mrd", "mrd (selected τ)"), ("naive", "naive (slot τ)"), ("mrd_unexcised", "mrd unexcised"))
 
 
 def _num(df, **eq):

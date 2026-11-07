@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower.tertiary import gradients
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
-_WINDOW_MARGIN_SAMPLES = 15_000
 _CANDIDATE_COLUMNS = ["slot", "boom", "variant", "variable", "stat", "value"]
 _FILTER_LOG_COLUMNS = ["slot", "boom", "variant", "group", "criterion", "variable"]
 
@@ -97,18 +96,20 @@ def build_candidate(means: pd.DataFrame, slow: pd.DataFrame, boom_stats: pd.Data
     )
 
 
-def _support_bounds(keys: pd.DataFrame) -> pd.DataFrame:
-    """Per key, the [start, end) sample support: the slot, or the 20-min
-    window when a variant row's selected tau is 1200s. A `variant` row's own
+def _support_bounds(keys: pd.DataFrame, cadence: Cadence = DEFAULT_CADENCE) -> pd.DataFrame:
+    """Per key, the [start, end) sample support: the slot, or the top-rung
+    window when a variant row's selected tau is the top rung (the 20-min
+    window at 1200 s by default). A `variant` row's own
     coverage (from `boom_stats`) is already computed over the right support;
     only the `bounds`/`spike` FlagStore reach needs the wider window
     explicitly.
     """
     keys = keys.copy()
-    g0 = SAMPLES_PER_SLOT * keys["slot"]
-    use_window = (keys["variant"] != "none") & (keys["tau_s"] == 1200.0)
-    keys["start"] = np.where(use_window, g0 - _WINDOW_MARGIN_SAMPLES, g0).astype(np.int64)
-    keys["end"] = np.where(use_window, g0 + SAMPLES_PER_SLOT + _WINDOW_MARGIN_SAMPLES, g0 + SAMPLES_PER_SLOT).astype(np.int64)
+    slot_samples, margin = cadence.samples_per_slot, cadence.ladder_margin_samples
+    g0 = slot_samples * keys["slot"]
+    use_window = (keys["variant"] != "none") & (keys["tau_s"] == cadence.top_rung_s)
+    keys["start"] = np.where(use_window, g0 - margin, g0).astype(np.int64)
+    keys["end"] = np.where(use_window, g0 + slot_samples + margin, g0 + slot_samples).astype(np.int64)
     return keys
 
 
@@ -117,7 +118,7 @@ def _variant_coverage(candidate: pd.DataFrame) -> pd.DataFrame:
     variant's already-selected tau, from `boom_stats`'s own coverage rows
     (`secondary.derived.selected_stats`). Unlike primary's `ladder_coverage`,
     these exist for every variant `boom_stats` actually has a row for -
-    `naive` (which borrows `mrd`'s 600-s rung, never a `ladder_coverage` row
+    `naive` (which borrows `mrd`'s slot rung, never a `ladder_coverage` row
     of its own) and the slots where `mrd_unexcised` was copied from `mrd`
     (`materialize_missing_unexcised` copies `boom_stats`, so its coverage
     rows come along) - so no join here can miss a variant `ladder_coverage`
@@ -165,17 +166,18 @@ def _flag_fraction_checks(keys: pd.DataFrame, flag_stores: dict) -> pd.DataFrame
 
 
 def evaluate(candidate: pd.DataFrame, coverage: pd.DataFrame,
-             tau_selected: pd.DataFrame, flag_stores: dict, cfg_tertiary) -> tuple[set, pd.DataFrame]:
+             tau_selected: pd.DataFrame, flag_stores: dict, cfg_tertiary,
+             cadence: Cadence = DEFAULT_CADENCE) -> tuple[set, pd.DataFrame]:
     """Per (slot, boom, variant, group) present in `candidate`: whether it
     fails, and the `filter_log` rows explaining why. `flag_stores` maps
     boom -> a `FlagStore` built from that boom's flag fragments reaching
-    +-5 min past the batch (so a 20-min-window query can see the halves of
-    the neighbouring slots).
+    half a slot past the batch (so a top-rung-window query can see the halves
+    of the neighbouring slots).
     """
     group = candidate["variable"].map(QUANTITY_GROUPS)
     keys = candidate.assign(group=group)[["slot", "boom", "variant", "group"]].drop_duplicates()
     keys = keys.merge(tau_selected[["slot", "boom", "variant", "tau_s"]], on=["slot", "boom", "variant"], how="left")
-    keys = _support_bounds(keys)
+    keys = _support_bounds(keys, cadence)
 
     coverage_fail = _coverage_fail_keys(keys, coverage, _variant_coverage(candidate), cfg_tertiary.min_coverage)
     checks = _flag_fraction_checks(keys, flag_stores)

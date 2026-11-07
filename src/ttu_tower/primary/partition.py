@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
+
 
 @dataclass(frozen=True)
 class Batch:
@@ -14,13 +16,14 @@ class Batch:
         return f"bat{self.h_a:07d}-{self.h_b:07d}"
 
 
-def plan_batches(file_table: pd.DataFrame, period_slots: tuple[int, int], batch_max_files: int) -> tuple[list[Batch], list[int]]:
+def plan_batches(file_table: pd.DataFrame, period_slots: tuple[int, int], batch_max_files: int,
+                 cadence: Cadence = DEFAULT_CADENCE) -> tuple[list[Batch], list[int]]:
     """Split the half-hours overlapping the period's slots `[slot_a, slot_b)`
     into batches of at most `batch_max_files`, around outages (runs of >= 2
     consecutive non-accepted half-hours), which belong to no batch.
     """
     slot_a, slot_b = period_slots
-    h_a, h_b = slot_a // 3, (slot_b - 1) // 3
+    h_a, h_b = cadence.slot_file(slot_a), cadence.slot_file(slot_b - 1)
     half_hours = list(range(h_a, h_b + 1))
 
     accepted = set(file_table.loc[file_table["status"] == "accepted", "half_hour"].tolist())

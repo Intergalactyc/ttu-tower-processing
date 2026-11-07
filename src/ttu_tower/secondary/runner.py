@@ -21,6 +21,7 @@ from ttu_tower.secondary.derived import (
     derived, materialize_missing_unexcised, naive_tau_selected, selected_stats, tau_tables,
 )
 from ttu_tower.secondary.slow import slow_table
+from ttu_tower.timegrid import Cadence
 
 _PRIMARY_TABLES = ("ladder", "ladder_coverage", "mrd", "coverage", "means", "slot_boom")
 _SECONDARY_TABLES = ("tau", "tau_selected", "boom_stats", "boom_labels", "slow", "slot_stats")
@@ -51,21 +52,22 @@ def _read_primary_batch(primary_dir: Path, batch: Batch, booms) -> dict[str, pd.
 
 def _process_batch(batch: Batch, primary_dir: Path, booms, slots_all: pd.DataFrame, cfg) -> dict[str, pd.DataFrame]:
     primary = _read_primary_batch(primary_dir, batch, booms)
+    cadence = Cadence.of(cfg)
 
-    tau_df, tau_selected_real = tau_tables(primary["mrd"], primary["coverage"], cfg.secondary)
+    tau_df, tau_selected_real = tau_tables(primary["mrd"], primary["coverage"], cfg.secondary, cadence=cadence)
     slow_df = slow_table(primary["means"], primary["coverage"], cfg)
     p_factor = slow_df[slow_df["variable"] == "p_factor"].set_index(["slot", "boom"])["value"]
 
-    naive_df = naive_tau_selected(tau_selected_real[tau_selected_real["variant"] == "mrd"])
+    naive_df = naive_tau_selected(tau_selected_real[tau_selected_real["variant"] == "mrd"], cadence.slot_rung_s)
     tau_selected_all = pd.concat([tau_selected_real, naive_df], ignore_index=True)
 
     stats_ladder = selected_stats(primary["ladder"], primary["ladder_coverage"], tau_selected_all, p_factor)
     stats_extra, labels_df = derived(stats_ladder, tau_selected_all, slow_df, cfg)
     boom_stats_df = pd.concat([stats_ladder, stats_extra], ignore_index=True)
 
-    slot_a, slot_b = 3 * batch.h_a, 3 * (batch.h_b + 1)
+    slot_a, slot_b = cadence.file_slots(batch.h_a)[0], cadence.file_slots(batch.h_b + 1)[0]
     batch_slots = slots_all[(slots_all["slot"] >= slot_a) & (slots_all["slot"] < slot_b)]
-    slot_stats_df = sun.slot_stats(batch_slots, cfg.output.timezone)
+    slot_stats_df = sun.slot_stats(batch_slots, cfg.output.timezone, cadence.slot_s)
 
     tables = {
         "tau": tau_df, "tau_selected": tau_selected_all, "boom_stats": boom_stats_df,
@@ -101,7 +103,7 @@ def run_secondary(cfg, args) -> dict:
     file_table = pd.read_parquet(primary_dir / "files.parquet")
     slots_all = pd.read_parquet(primary_dir / "slots.parquet")
     period_slots = period_slots_from_table(slots_all)
-    batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files)
+    batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files, Cadence.of(cfg))
     if args.test:
         batches = batches[:1]
 

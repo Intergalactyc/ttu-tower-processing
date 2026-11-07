@@ -8,16 +8,13 @@ from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.math.polar import rotate_streamwise, streamwise_angle
 from ttu_tower.math.stats import autocovariance, efolding_integral
 from ttu_tower.physics.turbulence import transport_efficiency
-from ttu_tower.timegrid import BlockGrid, majority_block
+from ttu_tower.timegrid import DEFAULT_CADENCE, BlockGrid, Cadence, majority_block
 
-RUNG_SECONDS = tuple(9.375 * 2.0**j for j in range(8))
-_SLOT_SAMPLES = 30_000
-_WINDOW_SAMPLES = 60_000
-_WINDOW_MARGIN_SAMPLES = 15_000
+RUNG_SECONDS = DEFAULT_CADENCE.rung_seconds  # the default cadence's; pipeline code uses Cadence.rung_seconds
 
 
-def _tau_block_index(g: np.ndarray, group: int, slot_first_finest: int) -> np.ndarray:
-    finest_idx = majority_block(g, BlockGrid.FINEST) - slot_first_finest
+def _tau_block_index(g: np.ndarray, group: int, slot_first_finest: int, finest: BlockGrid) -> np.ndarray:
+    finest_idx = majority_block(g, finest) - slot_first_finest
     return finest_idx // group
 
 
@@ -103,43 +100,47 @@ def _te_momentum_heat(ue, vn, w, theta, momentum_mask, heat_mask, block_idx, n_b
 
 
 def rung_its_te(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], g0: int, k: int, cfg_ladder, c: float,
-                trace: dict | None = None):
-    """ITS (u, v, w, vpts) and TE (uw, wvpts) at every rung, for slot k.
-    `series`/`masks` must cover samples [30000k-15000, 30000k+45000). Returns
+                trace: dict | None = None, cadence: Cadence = DEFAULT_CADENCE):
+    """ITS (u, v, w, vpts) and TE (uw, wvpts) at every rung of `cadence`, for
+    slot k. `series`/`masks` must cover slot k's ladder window
+    (`cadence.ladder_window(k)`; [30000k-15000, 30000k+45000) at the default). Returns
     (values, coverage): values rows (rung_s, variable, stat, value); coverage
     rows (rung_s, family, blocks_used, blocks_total, coverage=blocks_used/blocks_total).
     `trace`, if given, receives the pooled autocorrelation behind each ITS as
     trace["acf"][rung_s][variable] (None where no block was fully usable).
     """
-    slot_start_g = _SLOT_SAMPLES * k
-    slot_first_finest = 64 * k
+    slot_samples = cadence.samples_per_slot
+    per_slot = cadence.finest_per_slot
+    n_rungs = cadence.n_rungs
+    slot_start_g = slot_samples * k
+    slot_first_finest = per_slot * k
     values, coverage = [], []
 
     ue, vn, w, vpts = series["ue"], series["vn"], series["w"], series["vpts"]
     momentum_mask, heat_mask, ts_mask = masks["momentum"], masks["heat"], masks["ts"]
     theta = vpts - 273.15
 
-    for j in range(8):
-        rung_s = RUNG_SECONDS[j]
+    for j in range(n_rungs):
+        rung_s = cadence.rung_seconds[j]
         group = 2**j
         nominal_len = round(rung_s * SAMPLE_HZ)
         max_lag = int(np.floor(cfg_ladder.its_max_lag_fraction * nominal_len))
 
-        if j < 7:
-            # 64 // group, not _SLOT_SAMPLES // nominal_len: nominal_len is
-            # already rounded (469, not 468.75), which would silently lose
+        if j < n_rungs - 1:
+            # per_slot // group, not slot_samples // nominal_len: nominal_len
+            # is already rounded (469, not 468.75), which would silently lose
             # a block (63 instead of 64) at the finest rungs.
-            span_g0, span_n, n_blocks = slot_start_g, _SLOT_SAMPLES, 64 // group
+            span_g0, span_n, n_blocks = slot_start_g, slot_samples, per_slot // group
         else:
-            span_g0, span_n, n_blocks = slot_start_g - _WINDOW_MARGIN_SAMPLES, _WINDOW_SAMPLES, 1
+            span_g0, span_n, n_blocks = (slot_start_g - cadence.ladder_margin_samples, cadence.ladder_window_samples, 1)
 
         local = slice(span_g0 - g0, span_g0 - g0 + span_n)
         ue_l, vn_l, w_l, vpts_l, theta_l = ue[local], vn[local], w[local], vpts[local], theta[local]
         mom_l, heat_l, ts_l = momentum_mask[local], heat_mask[local], ts_mask[local]
 
-        if j < 7:
+        if j < n_rungs - 1:
             g_arr = span_g0 + np.arange(span_n)
-            block_idx = _tau_block_index(g_arr, group, slot_first_finest)
+            block_idx = _tau_block_index(g_arr, group, slot_first_finest, cadence.finest)
         else:
             block_idx = np.zeros(span_n, dtype=np.int64)
 

@@ -10,6 +10,7 @@ import pandas as pd
 import pyarrow.dataset as pa_dataset
 
 from ttu_tower.constants import HEIGHTS
+from ttu_tower.viewer.timeaxis import cadence
 from ttu_tower.math.polar import bearing_to_vector, vector_to_bearing
 from ttu_tower.viewer import timeline
 from ttu_tower.viewer.windrose import _quantity
@@ -76,7 +77,7 @@ def slot_window(index, k: int, booms, around: int = 0) -> dict:
     """{boom or "mesonet": UV} for slots k - around .. k + around (one slot's hodograph and its neighbours)."""
     f = pa_dataset.field
     lo, hi = k - around, k + around
-    half_hours = list(range(lo // 3, hi // 3 + 1))
+    half_hours = list(range(cadence().slot_file(lo), cadence().slot_file(hi) + 1))
     flt = ((f("slot") >= lo) & (f("slot") <= hi) & (f("variant") == "none") & f("boom").isin(list(booms))
            & (((f("variable") == "ws") & (f("stat") == "vector_mean")) | ((f("variable") == "wd") & (f("stat") == "mean"))))
     rows = index.read("boom_final", half_hours=half_hours, columns=["slot", "boom", "variable", "value"], filter=flt)

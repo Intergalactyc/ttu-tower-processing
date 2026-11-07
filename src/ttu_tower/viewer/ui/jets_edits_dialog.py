@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ttu_tower.timegrid import slot_to_time
+from ttu_tower.viewer.timeaxis import slot_to_time
 
 _KIND_TEXT = {"span": "new boundaries", "add": "made by hand", "reject": "rejected"}
 

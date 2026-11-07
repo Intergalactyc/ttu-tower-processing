@@ -4,7 +4,7 @@ import numpy as np
 from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.flags import mask_to_intervals
 from ttu_tower.math import stats
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 
 def _bin_range(sub: np.ndarray) -> tuple[float, float]:
@@ -106,7 +106,7 @@ def resolution_dropouts(x: np.ndarray, g0: int, cfg_windows, c: float, is_ts: bo
     )
 
 
-def higher_moments(x: np.ndarray, g0: int, slots, cfg_windows, c: float):
+def higher_moments(x: np.ndarray, g0: int, slots, cfg_windows, c: float, cadence: Cadence = DEFAULT_CADENCE):
     """Per-slot skewness and kurtosis of the linearly detrended slot, and
     whether each falls outside skew_range/kurt_range. NaN (no flag) if
     coverage < c.
@@ -121,10 +121,11 @@ def higher_moments(x: np.ndarray, g0: int, slots, cfg_windows, c: float):
     skew_lo, skew_hi = cfg_windows.skew_range
     kurt_lo, kurt_hi = cfg_windows.kurt_range
 
+    slot_samples = cadence.samples_per_slot
     for i, k in enumerate(slots):
-        start = SAMPLES_PER_SLOT * int(k) - g0
-        seg = x[start : start + SAMPLES_PER_SLOT]
-        if np.isfinite(seg).sum() < c * SAMPLES_PER_SLOT:
+        start = slot_samples * int(k) - g0
+        seg = x[start : start + slot_samples]
+        if np.isfinite(seg).sum() < c * slot_samples:
             continue
         detrended = stats.linear_detrend(seg)
         s, ku = stats.moments(detrended)

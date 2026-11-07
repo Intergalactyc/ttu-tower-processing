@@ -19,6 +19,7 @@ from ttu_tower.io.stage import check_hash_guard, write_config_copies, write_run_
 from ttu_tower.io.warncapture import capture_warnings
 from ttu_tower.primary.partition import Batch, plan_batches
 from ttu_tower.tertiary import filtering, gradients, mesonet, multiboom, profiles, wide
+from ttu_tower.timegrid import Cadence
 
 _PRIMARY_TABLES = ("coverage", "means")
 _PRIMARY_MARKER_TABLE = "means"  # any primary unit's fragment existing implies the unit succeeded
@@ -54,9 +55,9 @@ def _read_primary_batch(primary_dir: Path, batch: Batch, booms) -> tuple[dict[st
 
 def _flag_store_for_boom(primary_dir: Path, batches: list[Batch], i: int, boom: int) -> FlagStore:
     """A `FlagStore` from this batch's own flags fragment plus its immediate
-    neighbours' - the +-5 min reach a 20-min-window bounds/spike query can
-    need at a batch edge. The 1200s rung's own `ladder_coverage` needs no
-    such reach: primary already computed it over the full 20-min window.
+    neighbours' - the half-slot reach a top-rung-window bounds/spike query
+    can need at a batch edge. The top rung's own `ladder_coverage` needs no
+    such reach: primary already computed it over the full window.
     """
     neighbours = ([batches[i - 1]] if i > 0 else []) + [batches[i]] + ([batches[i + 1]] if i + 1 < len(batches) else [])
     frames = [f for b in neighbours if (f := _read_boom_fragment(primary_dir, "flags", b.id, boom)) is not None]
@@ -101,10 +102,11 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
         return None
 
     flag_stores = {b: _flag_store_for_boom(primary_dir, batches, i, b) for b in usable_booms}
+    cadence = Cadence.of(cfg)
 
     candidate = filtering.build_candidate(primary["means"], secondary["slow"], secondary["boom_stats"])
     fail_keys, filter_log = filtering.evaluate(
-        candidate, primary["coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary,
+        candidate, primary["coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary, cadence,
     )
     boom_final = filtering.apply(candidate, fail_keys)
     grads = gradients.gradients(boom_final, cfg.files.booms, cfg.tertiary.gradients.stencils)
@@ -115,7 +117,7 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
     profile = profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits)
     tau_final = secondary["tau_selected"].copy()
 
-    slot_a, slot_b = 3 * batch.h_a, 3 * (batch.h_b + 1)
+    slot_a, slot_b = cadence.file_slots(batch.h_a)[0], cadence.file_slots(batch.h_b + 1)[0]
     batch_slots = slots_all[(slots_all["slot"] >= slot_a) & (slots_all["slot"] < slot_b)]
     slot_final = _slot_final_rows(batch_slots, secondary["slot_stats"], meso_df)
 
@@ -151,11 +153,12 @@ def run_tertiary(cfg, args) -> dict:
     file_table = pd.read_parquet(primary_dir / "files.parquet")
     slots_all = pd.read_parquet(primary_dir / "slots.parquet")
     period_slots = period_slots_from_table(slots_all)
-    batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files)
+    batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files, Cadence.of(cfg))
     if args.test:
         batches = batches[:1]
 
-    meso_df = mesonet.mesonet_data(cfg.paths.mesonet_dir, cfg.output.timezone) if cfg.paths.mesonet_dir else None
+    meso_df = (mesonet.mesonet_data(cfg.paths.mesonet_dir, cfg.output.timezone, Cadence.of(cfg).slot_min)
+               if cfg.paths.mesonet_dir else None)
 
     started = datetime.now().astimezone().isoformat(timespec="seconds")
     status_counts = {"processed": 0, "skipped": 0}

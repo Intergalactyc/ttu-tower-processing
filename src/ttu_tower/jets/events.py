@@ -13,9 +13,7 @@ import pandas as pd
 
 from ttu_tower.constants import SOURCE_TIMEZONE
 from ttu_tower.jets.identify import NO_DATA, Params, Profiles, param
-from ttu_tower.timegrid import slot_to_time
-
-SLOT_MINUTES = 10
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 
 @dataclass(frozen=True)
@@ -64,8 +62,8 @@ def fill_gaps(is_jet: np.ndarray, bridgeable: np.ndarray, max_gap: int) -> np.nd
 
 
 def find_events(detection: pd.DataFrame, params: EventParams | None = None, profiles: Profiles | None = None,
-                tz: str = SOURCE_TIMEZONE) -> Events:
-    """Events of a detection (one row per slot, on a consecutive slot grid).
+                tz: str = SOURCE_TIMEZONE, cadence: Cadence = DEFAULT_CADENCE) -> Events:
+    """Events of a detection (one row per slot, on a consecutive slot grid of `cadence`).
     `profiles` adds the wind direction at the nose when it carries "wd".
     """
     params = EventParams() if params is None else params
@@ -83,12 +81,12 @@ def find_events(detection: pd.DataFrame, params: EventParams | None = None, prof
     keep = ends - starts >= params.min_event_slots
     starts, ends = starts[keep], ends[keep]
 
-    return assemble(detection, starts, ends, filled, np.zeros(len(slots), bool), profiles, tz)
+    return assemble(detection, starts, ends, filled, np.zeros(len(slots), bool), profiles, tz, cadence=cadence)
 
 
 def assemble(detection: pd.DataFrame, starts, ends, filled: np.ndarray, manual: np.ndarray,
              profiles: Profiles | None = None, tz: str = SOURCE_TIMEZONE, source=None, rejected=None,
-             edits=None) -> Events:
+             edits=None, cadence: Cadence = DEFAULT_CADENCE) -> Events:
     """Events from spans of the detection's slot grid ([start, end) positions,
     in time order, not overlapping): `filled` marks slots bridged by the rule,
     `manual` slots added by hand; `source` ("auto", "edited", "manual"),
@@ -110,9 +108,9 @@ def assemble(detection: pd.DataFrame, starts, ends, filled: np.ndarray, manual: 
         "n_slots": ends - starts,
         "n_filled": np.array([filled[a:b].sum() for a, b in zip(starts, ends)], dtype=np.int64),
         "n_manual": np.array([manual[a:b].sum() for a, b in zip(starts, ends)], dtype=np.int64),
-        "duration_min": SLOT_MINUTES * (ends - starts),
-        "start_time": slot_to_time(start_slot).tz_convert(tz),
-        "end_time": slot_to_time(end_slot + 1).tz_convert(tz),
+        "duration_min": cadence.slot_min * (ends - starts),
+        "start_time": cadence.slot_to_time(start_slot).tz_convert(tz),
+        "end_time": cadence.slot_to_time(end_slot + 1).tz_convert(tz),
         "truncated": (starts == 0) | (ends == len(slots)),
         "source": pd.Categorical(["auto"] * n if source is None else list(source), categories=SOURCES),
         "rejected": np.zeros(n, bool) if rejected is None else np.asarray(rejected, bool),

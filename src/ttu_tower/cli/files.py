@@ -6,6 +6,7 @@ from ttu_tower.config.load import load_config
 from ttu_tower.io import store
 from ttu_tower.io.rawfiles import RawFilesNotAllowed, build_file_table, check_raw_allowed, resolve_period_slots
 from ttu_tower.io.runs import register_run
+from ttu_tower.timegrid import Cadence
 
 
 def _period_half_hours(cfg, table) -> tuple[int, int] | None:
@@ -17,7 +18,8 @@ def _period_half_hours(cfg, table) -> tuple[int, int] | None:
         slot_a, slot_b = resolve_period_slots(cfg, table)
     except ValueError:
         return None  # no accepted files to default an empty period from
-    return slot_a // 3, -(-slot_b // 3)
+    m = Cadence.of(cfg).slots_per_file
+    return slot_a // m, -(-slot_b // m)
 
 
 def parse_args(argv=None):

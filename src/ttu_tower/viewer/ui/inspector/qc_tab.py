@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget
 
 from ttu_tower.viewer import slotqc
+from ttu_tower.viewer.timeaxis import cadence
 from ttu_tower.viewer.ui import tables
 
 
@@ -82,7 +83,7 @@ class QCTab(QWidget):
         self.flag_table.clear()
         self.gates.clear()
         self.gate_note.setText("reading flags…")
-        g_lo, g_hi = slotqc.windows(bundle.slot)["detection window (80 min)"]
+        g_lo, g_hi = slotqc.windows(bundle.slot)[slotqc.detection_window_name()]
         self.runner.submit(self.index.flags_window, bundle.boom, g_lo, g_hi, key=f"qc-{id(self)}",
                            label="reading flags", on_done=lambda flags, b=bundle: self._flags_loaded(b, flags),
                            on_error=lambda exc, tb: shiboken6.isValid(self) and self.gate_note.setText(
@@ -173,7 +174,8 @@ class QCTab(QWidget):
         text = (f"{n_fail} (variant, group) value set{'s' if n_fail != 1 else ''} filtered; "
                 f"limits: coverage ≥ {cfg.tertiary.min_coverage:g}; bounds ≤ "
                 f"{_per_variable(cfg.tertiary.max_bounds_fraction)}; spike ≤ "
-                f"{_per_variable(cfg.tertiary.max_spike_fraction)} of the slot (±5 min where τ = 1200 s)")
+                f"{_per_variable(cfg.tertiary.max_spike_fraction)} of the slot (±{cadence().slot_min / 2:g} min where "
+                f"τ = {cadence().top_rung_s:g} s)")
         if "filter_log" in b.tables and recomputed != stored:
             text += " · <span style='color:#b00'>differs from the stored filter_log: " \
                     f"only recomputed {sorted(recomputed - stored, key=str)}, only stored {sorted(stored - recomputed, key=str)}</span>"

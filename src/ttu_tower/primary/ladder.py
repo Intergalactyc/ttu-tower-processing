@@ -5,11 +5,9 @@ import numpy as np
 
 from ttu_tower.math.polar import rotate_covariance_streamwise, streamwise_angle, yamartino_std
 from ttu_tower.primary.blocks import FamilySums
-from ttu_tower.timegrid import BlockGrid
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
-RUNG_SECONDS = tuple(9.375 * 2.0**j for j in range(8))
-_SLOT_SUPPORT_SAMPLES = 30_000
-_WINDOW_SUPPORT_SAMPLES = 60_000
+RUNG_SECONDS = DEFAULT_CADENCE.rung_seconds  # the default cadence's; pipeline code uses Cadence.rung_seconds
 
 
 def _grouped(fam: FamilySums, lo: int, hi: int, group_size: int) -> FamilySums:
@@ -105,23 +103,26 @@ def _ts_rows(ts: FamilySums, block_len: float, c: float):
     return rows, int(valid.sum())
 
 
-def rung_statistics(finest: dict[str, FamilySums], c: float):
-    """Second-moment statistics at every rung (9.375 s .. 20 min), from finest
-    sums over the 128 finest blocks [64k-32, 64k+96) centered on a slot.
+def rung_statistics(finest: dict[str, FamilySums], c: float, cadence: Cadence = DEFAULT_CADENCE):
+    """Second-moment statistics at every rung of `cadence` (default 9.375 s ..
+    20 min), from finest sums over the 2F finest blocks [Fk - F/2, Fk + 3F/2)
+    centered on a slot (F = finest blocks per slot; 64 at the default).
     Returns (values, coverage): values rows (rung_s, variable, stat, value);
     coverage rows (rung_s, family, blocks_used, blocks_total, coverage).
     """
-    finest_len = BlockGrid.FINEST.length_samples
+    finest_len = cadence.finest.length_samples
+    per_slot = cadence.finest_per_slot
+    n_rungs = cadence.n_rungs
     values, coverage = [], []
 
-    for j in range(8):
-        rung_s = RUNG_SECONDS[j]
-        if j < 7:
-            lo, hi, group = 32, 96, 2**j
-            support = _SLOT_SUPPORT_SAMPLES
+    for j in range(n_rungs):
+        rung_s = cadence.rung_seconds[j]
+        if j < n_rungs - 1:
+            lo, hi, group = per_slot // 2, 3 * per_slot // 2, 2**j
+            support = cadence.samples_per_slot
         else:
-            lo, hi, group = 0, 128, 128
-            support = _WINDOW_SUPPORT_SAMPLES
+            lo, hi, group = 0, 2 * per_slot, 2 * per_slot
+            support = cadence.ladder_window_samples
         n_total_blocks = (hi - lo) // group
         block_len = finest_len * group
 

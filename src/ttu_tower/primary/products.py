@@ -7,19 +7,17 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower import schema
-from ttu_tower.constants import DETECTION_WINDOW_MIN, SAMPLE_HZ
+from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.primary.blocks import FamilySums
 from ttu_tower.primary.ladder import rung_statistics
 from ttu_tower.primary.mrd import detection_outputs, mode_scales_s
 from ttu_tower.primary.rawrung import rung_its_te
 from ttu_tower.primary.stage_b import StageBOut
-from ttu_tower.timegrid import BlockGrid, SAMPLES_PER_HALF_HOUR, SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, SAMPLES_PER_HALF_HOUR, BlockGrid, Cadence
 
-_DETECTION_WINDOW_SAMPLES = DETECTION_WINDOW_MIN * 60 * SAMPLE_HZ  # 240,000; independent of floor_level
-_DETECTION_MARGIN_SAMPLES = 35 * 60 * SAMPLE_HZ
-_LADDER_WINDOW_SAMPLES = 20 * 60 * SAMPLE_HZ  # 60,000
-_LADDER_MARGIN_SAMPLES = 5 * 60 * SAMPLE_HZ
-_N_FINEST_WINDOW = 128
+# Window lengths and margins come from the run's Cadence: at the default,
+# the 80-min detection window ([slot - 35 min, slot end + 35 min)) and the
+# 20-min ladder window ([slot - 5 min, slot end + 5 min)), with 128 finest blocks.
 _FLOOR_FAMILIES = ("momentum", "heat", "ts")
 _FINEST_FAMILIES = ("momentum", "heat", "ts", "direction")
 _SERIES_VARS = ("ue", "vn", "w", "vpts")
@@ -29,18 +27,14 @@ def half_hours_overlapping(g0: int, n: int) -> list[int]:
     return list(range(g0 // SAMPLES_PER_HALF_HOUR, (g0 + n - 1) // SAMPLES_PER_HALF_HOUR + 1))
 
 
-def detection_window(k: int) -> tuple[int, int]:
-    """(g0, n) of slot k's 80-min MRD detection window."""
-    return SAMPLES_PER_SLOT * k - _DETECTION_MARGIN_SAMPLES, _DETECTION_WINDOW_SAMPLES
+def detection_window(k: int, cadence: Cadence = DEFAULT_CADENCE) -> tuple[int, int]:
+    """(g0, n) of slot k's MRD detection window (8 slots, centered on it; 80 min at the default)."""
+    return cadence.detection_window(k)
 
 
-def ladder_window(k: int) -> tuple[int, int]:
-    """(g0, n) of slot k's 20-min ladder window (the slot plus 5 min before, 5 min after)."""
-    return SAMPLES_PER_SLOT * k - _LADDER_MARGIN_SAMPLES, _LADDER_WINDOW_SAMPLES
-
-
-def _floor_blocks_per_half_hour(floor_level: int) -> int:
-    return int(round(SAMPLES_PER_HALF_HOUR / BlockGrid.floor(floor_level).length_samples))
+def ladder_window(k: int, cadence: Cadence = DEFAULT_CADENCE) -> tuple[int, int]:
+    """(g0, n) of slot k's top-rung ladder window (the slot plus half a slot either side; 20 min at the default)."""
+    return cadence.ladder_window(k)
 
 
 def _assemble_family(per_hh: dict[int, FamilySums | None], hh_block0: dict[int, int], blocks_per_hh: int,
@@ -131,11 +125,11 @@ def assemble_series_window(B: dict[int, StageBOut], variant: str, g0: int, n: in
 
 
 def _mrd_rows(k: int, boom: int, variant: str, floor: dict[str, FamilySums], floor_level: int, c: float,
-              timings: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+              timings: dict[str, float], cadence: Cadence) -> tuple[pd.DataFrame, pd.DataFrame]:
     t0 = time.perf_counter()
-    spectra, wd_deg, cov_mom, cov_heat = detection_outputs(floor, c)
+    spectra, wd_deg, cov_mom, cov_heat = detection_outputs(floor, c, cadence)
     timings["detection_outputs"] = timings.get("detection_outputs", 0.0) + (time.perf_counter() - t0)
-    scales = mode_scales_s(floor_level, SAMPLE_HZ)
+    scales = mode_scales_s(floor_level, SAMPLE_HZ, cadence)
     rows = [
         (k, boom, variant, spec, scale_s, v, s, int(n))
         for spec, (value, se, n_pairs) in spectra.items()
@@ -148,16 +142,16 @@ def _mrd_rows(k: int, boom: int, variant: str, floor: dict[str, FamilySums], flo
 
 
 def _ladder_rows(k: int, boom: int, variant: str, finest: dict[str, FamilySums], series: dict, masks: dict,
-                  cfg, c: float, timings: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+                  cfg, c: float, timings: dict[str, float], cadence: Cadence) -> tuple[pd.DataFrame, pd.DataFrame]:
     t0 = time.perf_counter()
-    values, coverage = rung_statistics(finest, c)
+    values, coverage = rung_statistics(finest, c, cadence)
     timings["ladder"] = timings.get("ladder", 0.0) + (time.perf_counter() - t0)
     ladder_rows = [(k, boom, variant, rung_s, var, stat, val) for rung_s, var, stat, val in values]
     coverage_rows = [(k, boom, variant, rung_s, fam, used, total, cov) for rung_s, fam, used, total, cov in coverage]
 
-    lad_g0 = SAMPLES_PER_SLOT * k - _LADDER_MARGIN_SAMPLES
+    lad_g0, _ = cadence.ladder_window(k)
     t0 = time.perf_counter()
-    its_values, its_coverage = rung_its_te(series, masks, g0=lad_g0, k=k, cfg_ladder=cfg.ladder, c=c)
+    its_values, its_coverage = rung_its_te(series, masks, g0=lad_g0, k=k, cfg_ladder=cfg.ladder, c=c, cadence=cadence)
     timings["rawrung"] = timings.get("rawrung", 0.0) + (time.perf_counter() - t0)
     for rung_s, var, stat, val in its_values:
         ladder_rows.append((k, boom, variant, rung_s, var, stat, val))
@@ -172,28 +166,31 @@ def _ladder_rows(k: int, boom: int, variant: str, finest: dict[str, FamilySums],
 def _compute_variant(k: int, boom: int, variant: str, B: dict[int, StageBOut], cfg, timings: dict[str, float]) -> dict[str, pd.DataFrame]:
     c = cfg.qc.min_coverage
     floor_level = cfg.mrd.floor_level
+    cadence = Cadence.of(cfg)
 
-    det_g0 = SAMPLES_PER_SLOT * k - _DETECTION_MARGIN_SAMPLES
+    det_g0, det_n = cadence.detection_window(k)
     floor_attr = "floor" if variant == "mrd" else "floor_unexcised"
     floor = _assemble_block_window(
-        B, half_hours_overlapping(det_g0, _DETECTION_WINDOW_SAMPLES), floor_attr, _FLOOR_FAMILIES,
-        _floor_blocks_per_half_hour(floor_level), BlockGrid.floor(floor_level), det_g0, 2 ** floor_level,
+        B, half_hours_overlapping(det_g0, det_n), floor_attr, _FLOOR_FAMILIES,
+        cadence.floor_blocks_per_half_hour(floor_level), cadence.floor(floor_level), det_g0, 2 ** floor_level,
     )
-    mrd_df, frame_df = _mrd_rows(k, boom, variant, floor, floor_level, c, timings)
+    mrd_df, frame_df = _mrd_rows(k, boom, variant, floor, floor_level, c, timings, cadence)
 
-    lad_g0 = SAMPLES_PER_SLOT * k - _LADDER_MARGIN_SAMPLES
-    lad_half_hours = half_hours_overlapping(lad_g0, _LADDER_WINDOW_SAMPLES)
+    lad_g0, lad_n = cadence.ladder_window(k)
+    lad_half_hours = half_hours_overlapping(lad_g0, lad_n)
     finest_attr = "finest" if variant == "mrd" else "finest_unexcised"
-    finest = _assemble_block_window(B, lad_half_hours, finest_attr, _FINEST_FAMILIES, 192, BlockGrid.FINEST, lad_g0, _N_FINEST_WINDOW)
-    series, masks = _assemble_series_window(B, lad_half_hours, variant, lad_g0, _LADDER_WINDOW_SAMPLES)
-    ladder_df, ladder_cov_df = _ladder_rows(k, boom, variant, finest, series, masks, cfg, c, timings)
+    finest = _assemble_block_window(B, lad_half_hours, finest_attr, _FINEST_FAMILIES, cadence.finest_per_half_hour,
+                                     cadence.finest, lad_g0, cadence.finest_per_window)
+    series, masks = _assemble_series_window(B, lad_half_hours, variant, lad_g0, lad_n)
+    ladder_df, ladder_cov_df = _ladder_rows(k, boom, variant, finest, series, masks, cfg, c, timings, cadence)
 
     return {"mrd": mrd_df, "mrd_frame": frame_df, "ladder": ladder_df, "ladder_coverage": ladder_cov_df}
 
 
-def _slot_slice(k: int, h: int) -> slice:
-    lo = SAMPLES_PER_SLOT * (k - 3 * h)
-    return slice(lo, lo + SAMPLES_PER_SLOT)
+def _slot_slice(k: int, h: int, cadence: Cadence) -> slice:
+    """Slot k's samples within half-hour h's core arrays."""
+    lo = cadence.samples_per_slot * k - SAMPLES_PER_HALF_HOUR * h
+    return slice(lo, lo + cadence.samples_per_slot)
 
 
 def _empty(table: str) -> pd.DataFrame:
@@ -202,14 +199,15 @@ def _empty(table: str) -> pd.DataFrame:
 
 def file_products(h: int, B: dict[int, StageBOut], boom: int, cfg, timings: dict[str, float] | None = None) -> dict[str, pd.DataFrame]:
     """Coverage/means/slot_qc pass-through, mrd/mrd_frame/ladder/ladder_coverage
-    (assembled from B's neighbouring half-hours), and slot_boom, for h's three
-    slots. `timings` (seconds), if given, accumulates "detection_outputs",
+    (assembled from B's neighbouring half-hours), and slot_boom, for h's
+    slots (three at the default cadence). `timings` (seconds), if given, accumulates "detection_outputs",
     "ladder" and "rawrung" time across every variant computed here.
     """
     if timings is None:
         timings = {}
     center = B.get(h)
-    slots = [3 * h, 3 * h + 1, 3 * h + 2]
+    cadence = Cadence.of(cfg)
+    slots = cadence.file_slots(h)
 
     if center is None or center.is_placeholder:
         slot_boom = pd.DataFrame({"slot": slots, "boom": boom, "status": "no_file", "unexcised_computed": False})
@@ -217,15 +215,16 @@ def file_products(h: int, B: dict[int, StageBOut], boom: int, cfg, timings: dict
 
     tables = {"coverage": center.coverage, "means": center.means, "slot_qc": center.slot_qc, "flags": center.flags}
 
+    # a slot's detection window reaches slots k-4..k+4 (half of each end one)
     all_mask_differs = {}
-    for hh in range(h - 2, h + 3):
+    for hh in range(cadence.slot_file(slots[0] - 4), cadence.slot_file(slots[-1] + 4) + 1):
         sb = B.get(hh)
         if sb is not None and not sb.is_placeholder:
             all_mask_differs.update(sb.mask_differs)
 
     mrd_parts, frame_parts, ladder_parts, ladder_cov_parts, slot_boom_rows = [], [], [], [], []
     for k in slots:
-        sl = _slot_slice(k, h)
+        sl = _slot_slice(k, h, cadence)
         no_data = not (center.final_masks["momentum"][sl].any() or center.final_masks["ts"][sl].any())
 
         if not no_data:

@@ -26,7 +26,7 @@ depend on (plan.md §3.8). Changing a key invalidates that stage and every later
 
 | Sections | First stage affected |
 |---|---|
-| `[paths].raw_dirs`, `[output]`, `[period]`, `[files]`, `[qc.*]`, `[mrd]`, `[ladder]`, `[primary]` (except `nproc`) | primary |
+| `[paths].raw_dirs`, `[output]`, `[period]`, `[cadence]`, `[files]`, `[qc.*]`, `[mrd]`, `[ladder]`, `[primary]` (except `nproc`) | primary |
 | `[secondary.*]` | secondary |
 | `[tertiary.*]`, `[paths].mesonet_dir` | tertiary |
 | `tag`, `[paths].results_dir`, `[primary].nproc`, `[post.*]` | none (where and how fast, not what; `[post]` is read only by reports) |
@@ -67,11 +67,25 @@ typos.
 
 | Key | Type | Default | Prov. | Notes |
 |---|---|---|---|---|
-| `start` | str | `""` | — | `"YYYY-MM-DD HH:MM"` in `[output].timezone`, inclusive, on a 10-min boundary. `""` = the start of the first accepted file. |
-| `end` | str | `""` | — | Exclusive, on a 10-min boundary. `""` = the end of the last accepted file. |
+| `start` | str | `""` | — | `"YYYY-MM-DD HH:MM"` in `[output].timezone`, inclusive, on a slot boundary (`[cadence].slot_min`). `""` = the start of the first accepted file. |
+| `end` | str | `""` | — | Exclusive, on a slot boundary. `""` = the end of the last accepted file. |
 
 The period selects which slots are emitted. Files just outside it are still used as context, so
 a slot's results don't depend on the period's limits.
+
+## `[cadence]`
+
+The output slot length and the τ ladder. Every window and block derives from these two
+(`timegrid.Cadence`): with slot S, the detection window is 8 S centered on the slot, the ladder is
+2 S / 2^j (j = 0 … `n_rungs` − 1), every rung up to S tiles the slot, and the top rung (2 S) is one
+window centered on it. The defaults are the original fixed design (design-reference.md §D).
+`[cadence]` enters the primary hash only when it differs from the default, so runs made before
+it existed keep their hashes.
+
+| Key | Type | Default | Prov. | Notes |
+|---|---|---|---|---|
+| `slot_min` | int | `10` | DES | Output slot length, minutes: 10 or 15 (it must divide the 30-min file; others are untested). At 15: 2 slots per file, a 120-min detection window, `naive` at the 900-s rung. |
+| `n_rungs` | int | `8` | DES | Rungs on the ladder, 3–12. At the defaults, 9.375 s … 1200 s. At 15 min, 8 rungs start at 14.06 s and 9 at 7.03 s (… 1800 s); one more rung halves the smallest. Needs `[mrd].floor_level` ≥ `n_rungs` + 1. |
 
 ## `[files]`
 
@@ -147,14 +161,14 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 
 | Key | Type | Default | Prov. | Notes |
 |---|---|---|---|---|
-| `floor_level` | int | `15` | DES, **provisional** | K: the 80-min detection window is 2^K floor blocks (0.146 s at 15), and there are K modes. The floor must sit below the cospectral peak (validation.md §3.5). |
+| `floor_level` | int | `15` | DES, **provisional** | K: the detection window (80 min at the default cadence) is 2^K floor blocks (0.146 s at 15; 0.22 s for 15-min slots), and there are K modes. The floor must sit below the cospectral peak (validation.md §3.5). At least `[cadence].n_rungs` + 1, so floor blocks divide the finest block. |
 
 ## `[ladder]`
 
 | Key | Type | Default | Prov. | Notes |
 |---|---|---|---|---|
 | `its_max_lag_fraction` | float | `0.25` | PROD | Maximum ACF lag for the integral timescales, as a fraction of the τ-block length. |
-| `gust_periods_s` | list[int] | `[1, 2, 3, 5, 10, 30, 60]` | PROD | Block lengths for gust statistics; each must divide 600. Old: `sample_periods`. |
+| `gust_periods_s` | list[int] | `[1, 2, 3, 5, 10, 30, 60]` | PROD | Block lengths for gust statistics; each must divide the slot (600 s by default). Old: `sample_periods`. |
 
 ## `[primary]`
 
@@ -177,8 +191,8 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 |---|---|---|---|---|
 | `peak_significance_se` | float | `2.0` | DES, **provisional** | The turbulence peak must be at least this many standard errors from zero; with no significant peak the status is `weak`. Also gates a reversal candidate, but only where accepting it would floor τ to `min_tau_s` (recalibrated after the first run - see design-reference.md §H). |
 | `min_scale_s` | float | `0.5` | LIT (VM06) | Modes with a smaller scale are ignored (with K = 15, only mode 1, 0.29 s). |
-| `min_tau_s` | float | `9.375` | DES | Smallest τ; shorter gap scales are clipped to it. A ladder rung. |
-| `max_tau_s` | float | `1200.0` | DES | Largest τ (`capped`). A ladder rung. |
+| `min_tau_s` | float | the smallest rung (`9.375`) | DES | Smallest τ; shorter gap scales are clipped to it. A ladder rung of `[cadence]`. |
+| `max_tau_s` | float | the top rung (`1200.0`) | DES | Largest τ (`capped`). A ladder rung, at most the top one. |
 
 ### `[secondary.selection]`
 
@@ -186,7 +200,7 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 |---|---|---|---|---|
 | `rule` | str | `"priority"` | DES | `"priority"` or `"longest_significant"` (plan.md Phase 7). |
 | `priority` | list[str] | `["heat", "momentum"]` | DES | The order in which the two cospectra are consulted. |
-| `fallback_tau_s` | float | `600.0` | DES | τ when neither cospectrum gives one, and the floor applied to an unresolved lower bound. |
+| `fallback_tau_s` | float | the slot rung (`600.0`) | DES | τ when neither cospectrum gives one, and the floor applied to an unresolved lower bound. A ladder rung. |
 
 ## `[tertiary]`
 

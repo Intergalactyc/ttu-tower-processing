@@ -23,6 +23,12 @@ class PeriodConfig:
 
 
 @dataclass(frozen=True)
+class CadenceConfig:
+    slot_min: int  # output slot length, minutes (timegrid.SLOT_MINUTE_CHOICES)
+    n_rungs: int  # tau ladder rungs: 2 * slot / 2^j, j = 0..n_rungs-1
+
+
+@dataclass(frozen=True)
 class FilesConfig:
     bad_records: tuple[tuple[int, int], ...]
     max_name_offset_min: int
@@ -178,6 +184,7 @@ class Config:
     secondary: SecondaryConfig
     tertiary: TertiaryConfig
     post: PostConfig
+    cadence: CadenceConfig = CadenceConfig(slot_min=10, n_rungs=8)  # last, so it can default
 
 
 def to_jsonable(obj):

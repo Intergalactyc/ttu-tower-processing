@@ -37,9 +37,10 @@ from ttu_tower.secondary.derived import derived, selected_stats
 from ttu_tower.secondary.detect import SMOOTHING
 from ttu_tower.tertiary import filtering, gradients, profiles
 from ttu_tower.viewer import stability as criteria
+from ttu_tower.timegrid import Cadence
 from ttu_tower.viewer import taustats, whatif
+from ttu_tower.viewer.timeaxis import cadence
 
-RUNGS = taustats.RUNGS
 STORED = ("mrd", "naive", "mrd_unexcised")
 FIXED_PREFIX, SCHEME_PREFIX = "fixed_", "scheme:"
 SECONDARY_TABLES = ("boom_stats", "boom_labels", "tau_selected")
@@ -59,8 +60,25 @@ def fixed_key(rung: float) -> str:
     return f"{FIXED_PREFIX}{rung:g}"
 
 
-ALL_FIXED = tuple(fixed_key(r) for r in RUNGS)
-FIXED = tuple(k for k in ALL_FIXED if k != fixed_key(600.0))  # in menus: 600 s is the run's own naive
+def all_fixed() -> tuple[str, ...]:
+    """A fixed-tau variant per rung of the current cadence."""
+    return tuple(fixed_key(r) for r in taustats.rungs())
+
+
+def fixed() -> tuple[str, ...]:
+    """all_fixed() less the slot rung: in menus, that one is the run's own naive."""
+    return tuple(k for k in all_fixed() if k != fixed_key(cadence().slot_rung_s))
+
+
+def __getattr__(name):
+    # the old constants, now the current cadence's
+    if name == "RUNGS":
+        return taustats.rungs()
+    if name == "ALL_FIXED":
+        return all_fixed()
+    if name == "FIXED":
+        return fixed()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def scheme_key(name: str) -> str:
@@ -98,7 +116,7 @@ def tip(variant: str) -> str:
 
 def menu_variants(scheme_names) -> list[str]:
     """The viewer's variants, in menu order: the fixed rungs, then the schemes."""
-    return list(FIXED) + [scheme_key(n) for n in sorted(scheme_names, key=str.lower)]
+    return list(fixed()) + [scheme_key(n) for n in sorted(scheme_names, key=str.lower)]
 
 
 _BASES: dict[str, str] = {}  # scheme key -> its data ("mrd" or "mrd_unexcised"), as last defined
@@ -133,7 +151,7 @@ def choice_label(choice: str) -> str:
 
 
 def choices() -> list[str]:
-    return ["base", "run"] + [f"{r:g}" for r in RUNGS]
+    return ["base", "run"] + [f"{r:g}" for r in taustats.rungs()]
 
 
 # --- schemes ---------------------------------------------------------------------------------------
@@ -343,7 +361,7 @@ class VariantStore:
         return None
 
     def known(self) -> list[str]:
-        return list(ALL_FIXED) + [scheme_key(n) for n in self.schemes]
+        return list(all_fixed()) + [scheme_key(n) for n in self.schemes]
 
     def set_schemes(self, schemes: dict[str, TauScheme]) -> list[str]:
         """The schemes now defined; returns the keys whose definition changed (their data goes stale)."""
@@ -690,7 +708,8 @@ def boom_part(job: dict) -> dict:
     no_coverage = pd.DataFrame({"slot": pd.Series(dtype=np.int64), "boom": pd.Series(dtype=np.int64),
                                 "variable": pd.Series(dtype=object), "layer": pd.Series(dtype=object),
                                 "fraction": pd.Series(dtype=float)})
-    fail_keys, filter_log = filtering.evaluate(boom_stats, no_coverage, sel, {boom: FlagStore(flags)}, cfg.tertiary)
+    fail_keys, filter_log = filtering.evaluate(boom_stats, no_coverage, sel, {boom: FlagStore(flags)}, cfg.tertiary,
+                                               Cadence.of(cfg))
     boom_final = filtering.apply(boom_stats, fail_keys)
     labels_final = filtering.apply_to_labels(labels, fail_keys)
 

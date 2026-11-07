@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from ttu_tower.flags import BOOM_LEVEL_VARIABLES, TESTS
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.viewer.timeaxis import cadence
 from ttu_tower.viewer import flagcounts
 from ttu_tower.viewer.slotqc import COVERAGE_VARIABLES, FLAG_VARIABLES, LAYERS
 from ttu_tower.viewer.timeline import SLOT_STATUSES
@@ -121,7 +121,7 @@ def flag_table(slots, image, booms, counts: dict, variable: str, slot_range) -> 
     rows = {}
     for i, b in enumerate(booms):
         have = sel & np.isin(image[i], FILE_PRESENT)
-        denominator = np.count_nonzero(have) * SAMPLES_PER_SLOT
+        denominator = np.count_nonzero(have) * cadence().samples_per_slot
         row = {}
         for test in applies:
             flagged = 0

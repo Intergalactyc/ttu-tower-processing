@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 
 from ttu_tower import schema
 from ttu_tower.constants import ROWS_PER_FILE, SOURCE_TIMEZONE
-from ttu_tower.timegrid import time_to_half_hour, time_to_slot
+from ttu_tower.timegrid import Cadence, time_to_half_hour
 
 _NAME_RE = re.compile(r"^FT2_E07_C03_R(\d+)_D(\d{8})_T(\d{4})\.(parquet|csv|csv\.gz|zip)$")
 _RAW_EXTENSIONS = (".parquet", ".csv", ".csv.gz", ".zip")
@@ -117,21 +117,22 @@ def resolve_period_slots(cfg, file_table: pd.DataFrame) -> tuple[int, int]:
     value is read in `[output].timezone`. `ttu-files` and `ttu-primary` both
     call this, so they agree on what an empty period means.
     """
+    cadence = Cadence.of(cfg)
     if cfg.period.start:
-        slot_a = int(time_to_slot(pd.Timestamp(cfg.period.start, tz=cfg.output.timezone)))
+        slot_a = int(cadence.time_to_slot(pd.Timestamp(cfg.period.start, tz=cfg.output.timezone)))
     else:
         accepted_hh = file_table.loc[file_table["status"] == "accepted", "half_hour"]
         if accepted_hh.empty:
             raise ValueError("period.start is empty and there are no accepted files to default from")
-        slot_a = 3 * int(accepted_hh.min())
+        slot_a = cadence.file_slots(int(accepted_hh.min()))[0]
 
     if cfg.period.end:
-        slot_b = int(time_to_slot(pd.Timestamp(cfg.period.end, tz=cfg.output.timezone)))
+        slot_b = int(cadence.time_to_slot(pd.Timestamp(cfg.period.end, tz=cfg.output.timezone)))
     else:
         accepted_hh = file_table.loc[file_table["status"] == "accepted", "half_hour"]
         if accepted_hh.empty:
             raise ValueError("period.end is empty and there are no accepted files to default from")
-        slot_b = 3 * (int(accepted_hh.max()) + 1)
+        slot_b = cadence.file_slots(int(accepted_hh.max()) + 1)[0]
 
     return slot_a, slot_b
 

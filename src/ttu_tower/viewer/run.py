@@ -14,6 +14,7 @@ from ttu_tower.config import hashing
 from ttu_tower.io.rawfiles import accepted_half_hours, period_slots_from_table
 from ttu_tower.io.runs import link_dir_for, link_path, locate_home
 from ttu_tower.io.stage import git_commit, git_dirty, read_run_meta
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 from ttu_tower.viewer.cache import LRUCache
 
 STAGES = ("primary", "secondary", "tertiary")
@@ -183,6 +184,11 @@ class RunHandle:
     @cached_property
     def accepted(self) -> dict[int, Path]:
         return accepted_half_hours(self.files)
+
+    @property
+    def cadence(self) -> Cadence:
+        """The run's slot length and tau ladder (the default if its config is unavailable)."""
+        return Cadence.of(self.cfg) if self.cfg is not None else DEFAULT_CADENCE
 
     @property
     def booms(self) -> list[int]:

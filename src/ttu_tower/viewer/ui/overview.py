@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from ttu_tower.viewer.anisotropy import CASE_COLORS, CASES
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, slot_to_unix, unix_to_slot
+from ttu_tower.viewer.timeaxis import slot_seconds, display_offset_s, slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui import style, variant_combo
 from ttu_tower.viewer.ui.curves import FixedXViewBox
 
@@ -78,7 +78,7 @@ class StabilityBand(QWidget):
         colors.update({i: style.stability_color(name, i).getRgb() for i, name in enumerate(names)})
         rgba = _color_rows(_on_grid(slots, curve)[None, :], colors)
         self.image.setImage(rgba)
-        self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * SLOT_SECONDS, 1)
+        self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * slot_seconds(), 1)
         self.legend.setText(f"stability{f' by {criterion}' if criterion else ''}: " + "  ".join(
             f"<span style='color:{style.stability_color(name, i).name()}'>■</span> {name}"
             for i, name in enumerate(names)))
@@ -173,7 +173,7 @@ class AnisotropyBand(QWidget):
         colors = {-1: (255, 255, 255, 0)}
         colors.update({i: pg.mkColor(CASE_COLORS[c]).getRgb() for i, c in enumerate(CASES)})
         self.image.setImage(_color_rows(codes.astype(np.int64), colors))
-        self.image.setRect(slot_to_unix(self.slots[0]), 0, self.slots.size * SLOT_SECONDS, len(self.rows))
+        self.image.setRect(slot_to_unix(self.slots[0]), 0, self.slots.size * slot_seconds(), len(self.rows))
         self.plot.getPlotItem().getAxis("left").setTicks([[(i + 0.5, f"b{b}") for i, b in enumerate(self.rows)]])
         self.plot.setYRange(0, len(self.rows), padding=0)
 
@@ -260,7 +260,7 @@ class JetsBand(QWidget):
             if event_id in marked:
                 rgba[3, inside] = self._MARK
         self.image.setImage(rgba, levels=(0, 255))
-        self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * SLOT_SECONDS, 1)
+        self.image.setRect(slot_to_unix(slots[0]), 0, slots.size * slot_seconds(), 1)
 
     def show_event(self, event_id: int | None) -> None:
         inside = np.flatnonzero(self.event_of == event_id) if event_id is not None else np.empty(0, int)
@@ -331,10 +331,10 @@ class OverviewStrip(pg.PlotWidget):
         self._slots, self._booms = slots, list(booms)
         self.image.setImage(rgba)
         x0 = slot_to_unix(slots[0]) if slots.size else 0.0
-        self.image.setRect(x0, 0, slots.size * SLOT_SECONDS, rgba.shape[0])
+        self.image.setRect(x0, 0, slots.size * slot_seconds(), rgba.shape[0])
         self.getPlotItem().getAxis("left").setTicks([[(i + 0.5, f"b{b}") for i, b in enumerate(booms)]])
-        self._period = (x0, x0 + max(slots.size, 1) * SLOT_SECONDS)
-        self.getViewBox().setLimits(xMin=self._period[0], xMax=self._period[1], minXRange=6 * SLOT_SECONDS,
+        self._period = (x0, x0 + max(slots.size, 1) * slot_seconds())
+        self.getViewBox().setLimits(xMin=self._period[0], xMax=self._period[1], minXRange=6 * slot_seconds(),
                                     yMin=0, yMax=rgba.shape[0] + 1)  # +1: the selection row
         self.setYRange(0, rgba.shape[0], padding=0)
         self.show_whole_period()
@@ -353,7 +353,7 @@ class OverviewStrip(pg.PlotWidget):
             rgba = np.zeros((1, slots.size, 4), dtype=np.uint8)
             rgba[0, on] = pg.mkColor(style.SELECTED_COLOR).getRgb()
             self.selection_image.setImage(rgba)
-            self.selection_image.setRect(slot_to_unix(slots[0]), rows, slots.size * SLOT_SECONDS, 1)
+            self.selection_image.setRect(slot_to_unix(slots[0]), rows, slots.size * slot_seconds(), 1)
             self.setYRange(0, rows + 1, padding=0)
             ticks.append((rows + 0.5, "sel"))
         self.getPlotItem().getAxis("left").setTicks([ticks])

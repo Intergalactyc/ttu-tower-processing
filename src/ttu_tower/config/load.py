@@ -9,8 +9,10 @@ from pathlib import Path
 
 from ttu_tower.constants import BOOMS as ALL_BOOMS
 from ttu_tower.flags import TESTS as _TEST_REGISTRY
+from ttu_tower.timegrid import SLOT_MINUTE_CHOICES, Cadence
 from ttu_tower.config.model import (
     BoundsConfig,
+    CadenceConfig,
     Config,
     DespikeConfig,
     DetectionConfig,
@@ -43,7 +45,6 @@ class ConfigError(Exception):
 _TAG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _QUALITY_TESTS = frozenset(name for name, spec in _TEST_REGISTRY.items() if spec.kind == "quality")
-_LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
 
 _MIN_MAD_DEFAULT = {"ue": 0.001, "vn": 0.001, "w": 0.001, "ts": 0.01, "t": 0.002, "rh": 0.00002, "p": 0.0004}
 _Z_THRESHOLD_DEFAULT = {"ue": 5.0, "vn": 5.0, "w": 5.0, "ts": 5.0, "t": 5.0, "rh": 5.0, "p": 5.0}
@@ -352,18 +353,28 @@ def _parse_qc(d: dict, path: str) -> QCConfig:
                      slow=slow, second_layer=second_layer)
 
 
+def _parse_cadence(d: dict, path: str) -> CadenceConfig:
+    slot_min = _pop_number(d, "slot_min", 10, path, kind=int)
+    if slot_min not in SLOT_MINUTE_CHOICES:
+        _err(f"{path}.slot_min", f"must be one of {SLOT_MINUTE_CHOICES}")
+    n_rungs = _pop_number(d, "n_rungs", 8, path, kind=int, min_=3, max_=12)
+    _check_unknown(d, path)
+    return CadenceConfig(slot_min=slot_min, n_rungs=n_rungs)
+
+
 def _parse_mrd(d: dict, path: str) -> MRDConfig:
     floor_level = _pop_number(d, "floor_level", 15, path, kind=int)
     _check_unknown(d, path)
     return MRDConfig(floor_level=floor_level)
 
 
-def _parse_ladder(d: dict, path: str) -> LadderConfig:
+def _parse_ladder(d: dict, path: str, cadence: Cadence) -> LadderConfig:
     its_max_lag_fraction = _pop_number(d, "its_max_lag_fraction", 0.25, path, min_=0, min_incl=False, max_=1)
     gust_periods_s = _pop_int_list(d, "gust_periods_s", _GUST_PERIODS_DEFAULT, path)
+    slot_s = int(cadence.slot_s)
     for p in gust_periods_s:
-        if p <= 0 or 600 % p != 0:
-            _err(f"{path}.gust_periods_s", f"{p} must divide 600")
+        if p <= 0 or slot_s % p != 0:
+            _err(f"{path}.gust_periods_s", f"{p} must divide the {slot_s} s slot")
     _check_unknown(d, path)
     return LadderConfig(its_max_lag_fraction=its_max_lag_fraction, gust_periods_s=gust_periods_s)
 
@@ -378,31 +389,31 @@ def _parse_primary(d: dict, path: str) -> PrimaryConfig:
                           batch_max_files=batch_max_files, nproc=nproc)
 
 
-def _parse_detection(d: dict, path: str) -> DetectionConfig:
+def _parse_detection(d: dict, path: str, cadence: Cadence) -> DetectionConfig:
     peak_significance_se = _pop_number(d, "peak_significance_se", 2.0, path)
     min_scale_s = _pop_number(d, "min_scale_s", 0.5, path)
-    min_tau_s = _pop_number(d, "min_tau_s", 9.375, path)
-    max_tau_s = _pop_number(d, "max_tau_s", 1200.0, path)
+    min_tau_s = _pop_number(d, "min_tau_s", cadence.min_rung_s, path)
+    max_tau_s = _pop_number(d, "max_tau_s", cadence.top_rung_s, path)
     _check_unknown(d, path)
     return DetectionConfig(peak_significance_se=peak_significance_se, min_scale_s=min_scale_s,
                             min_tau_s=min_tau_s, max_tau_s=max_tau_s)
 
 
-def _parse_selection(d: dict, path: str) -> SelectionConfig:
+def _parse_selection(d: dict, path: str, cadence: Cadence) -> SelectionConfig:
     rule = _pop_str(d, "rule", "priority", path, choices={"priority", "longest_significant"})
     priority = _pop_str_list(d, "priority", ["heat", "momentum"], path)
     for p in priority:
         if p not in ("heat", "momentum"):
             _err(f"{path}.priority", f"'{p}' must be 'heat' or 'momentum'")
-    fallback_tau_s = _pop_number(d, "fallback_tau_s", 600.0, path)
+    fallback_tau_s = _pop_number(d, "fallback_tau_s", cadence.slot_rung_s, path)
     _check_unknown(d, path)
     return SelectionConfig(rule=rule, priority=priority, fallback_tau_s=fallback_tau_s)
 
 
-def _parse_secondary(d: dict, path: str) -> SecondaryConfig:
+def _parse_secondary(d: dict, path: str, cadence: Cadence) -> SecondaryConfig:
     min_tau_its_ratio = _pop_number(d, "min_tau_its_ratio", 10.0, path)
-    detection = _parse_detection(_section(d, "detection", path), f"{path}.detection")
-    selection = _parse_selection(_section(d, "selection", path), f"{path}.selection")
+    detection = _parse_detection(_section(d, "detection", path), f"{path}.detection", cadence)
+    selection = _parse_selection(_section(d, "selection", path), f"{path}.selection", cadence)
     _check_unknown(d, path)
     return SecondaryConfig(min_tau_its_ratio=min_tau_its_ratio, detection=detection, selection=selection)
 
@@ -462,8 +473,10 @@ def _parse_post(d: dict, path: str) -> PostConfig:
 
 
 def _validate_cross_key(cfg: Config):
-    if cfg.mrd.floor_level < 9:
-        _err("mrd.floor_level", "must be >= 9, so floor blocks divide the finest (9.375 s) block")
+    cadence = Cadence.of(cfg)
+    if cfg.mrd.floor_level < cadence.n_rungs + 1:
+        _err("mrd.floor_level", f"must be >= cadence.n_rungs + 1 = {cadence.n_rungs + 1}, so floor blocks divide "
+                                f"the finest ({cadence.min_rung_s:g} s) block")
 
     despike = cfg.qc.despike
     ratio = despike.window_s / despike.stride_s
@@ -485,15 +498,16 @@ def _validate_cross_key(cfg: Config):
             _err(key, f"reach {value}s exceeds the 600 s Stage B margin")
 
     det, sel = cfg.secondary.detection, cfg.secondary.selection
-    if not (det.min_tau_s <= sel.fallback_tau_s <= det.max_tau_s <= 1200):
-        _err("secondary.detection/selection", "must have min_tau_s <= fallback_tau_s <= max_tau_s <= 1200")
+    top = cadence.top_rung_s
+    if not (det.min_tau_s <= sel.fallback_tau_s <= det.max_tau_s <= top):
+        _err("secondary.detection/selection", f"must have min_tau_s <= fallback_tau_s <= max_tau_s <= {top:g}")
     for key, value in (
         ("secondary.detection.min_tau_s", det.min_tau_s),
         ("secondary.detection.max_tau_s", det.max_tau_s),
         ("secondary.selection.fallback_tau_s", sel.fallback_tau_s),
     ):
-        if not any(abs(value - rung) < 1e-9 for rung in _LADDER_RUNGS):
-            _err(key, f"must be a ladder rung {_LADDER_RUNGS}")
+        if not any(abs(value - rung) < 1e-9 for rung in cadence.rung_seconds):
+            _err(key, f"must be a ladder rung {cadence.rung_seconds}")
     if not det.min_scale_s < det.min_tau_s:
         _err("secondary.detection.min_scale_s", "must be < min_tau_s")
 
@@ -523,18 +537,20 @@ def config_from_dict(raw: dict, *, default_tag: str = "") -> Config:
     paths = _parse_paths(_section(raw, "paths", ""), "paths")
     output = _parse_output(_section(raw, "output", ""), "output")
     period = _parse_period(_section(raw, "period", ""), "period")
+    cadence = _parse_cadence(_section(raw, "cadence", ""), "cadence")
+    cadence_obj = Cadence(slot_min=cadence.slot_min, n_rungs=cadence.n_rungs)
     files = _parse_files(_section(raw, "files", ""), "files")
     qc = _parse_qc(_section(raw, "qc", ""), "qc")
     mrd = _parse_mrd(_section(raw, "mrd", ""), "mrd")
-    ladder = _parse_ladder(_section(raw, "ladder", ""), "ladder")
+    ladder = _parse_ladder(_section(raw, "ladder", ""), "ladder", cadence_obj)
     primary = _parse_primary(_section(raw, "primary", ""), "primary")
-    secondary = _parse_secondary(_section(raw, "secondary", ""), "secondary")
+    secondary = _parse_secondary(_section(raw, "secondary", ""), "secondary", cadence_obj)
     tertiary = _parse_tertiary(_section(raw, "tertiary", ""), "tertiary")
     post = _parse_post(_section(raw, "post", ""), "post")
     _check_unknown(raw, "")
 
     cfg = Config(tag=tag, paths=paths, output=output, period=period, files=files, qc=qc, mrd=mrd,
-                 ladder=ladder, primary=primary, secondary=secondary, tertiary=tertiary, post=post)
+                 ladder=ladder, primary=primary, secondary=secondary, tertiary=tertiary, post=post, cadence=cadence)
     _validate_cross_key(cfg)
     return cfg
 

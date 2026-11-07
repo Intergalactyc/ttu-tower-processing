@@ -10,10 +10,11 @@ from ttu_tower.physics import most, turbulence
 from ttu_tower.physics.earth import local_gravity
 from ttu_tower.secondary.detect import SMOOTHING, detect
 from ttu_tower.secondary.select import select
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 _COSPECTRA = {"heat": "wvpts", "momentum": "uw"}
-_NAIVE_RUNG_S = 600.0
-# "naive" borrows the mrd variant's own ladder rows at the 600-s rung; the
+_NAIVE_RUNG_S = DEFAULT_CADENCE.slot_rung_s  # the default cadence's; the run's is Cadence.slot_rung_s
+# "naive" borrows the mrd variant's own ladder rows at the slot rung; the
 # copy from mrd to mrd_unexcised where it wasn't separately computed happens
 # at the table level (materialize_missing_unexcised), not here.
 _LADDER_SOURCE_VARIANT = {"mrd": "mrd", "naive": "mrd", "mrd_unexcised": "mrd_unexcised"}
@@ -33,7 +34,7 @@ def _mode_arrays(spectrum_rows: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, n
 
 
 def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary,
-               kernel: tuple[float, ...] = SMOOTHING) -> tuple[pd.DataFrame, pd.DataFrame]:
+               kernel: tuple[float, ...] = SMOOTHING, cadence: Cadence = DEFAULT_CADENCE) -> tuple[pd.DataFrame, pd.DataFrame]:
     """`tau` and `tau_selected` rows for every (slot, boom, variant) present in
     `mrd` (variant in {mrd, mrd_unexcised}, whichever primary computed).
     `kernel`: detection's smoothing (the viewer's what-if varies it).
@@ -51,7 +52,7 @@ def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary,
         for family, spectrum in _COSPECTRA.items():
             D, SE, N = _mode_arrays(group[group["spectrum"] == spectrum])
             has_data = family_has_data.get((slot, boom, variant, family), False)
-            det = detect(D, SE, N, has_data, cfg_secondary.detection, kernel=kernel)
+            det = detect(D, SE, N, has_data, cfg_secondary.detection, kernel=kernel, cadence=cadence)
             detections[family] = det
             tau_rows.append((slot, boom, variant, family, det.status, det.tau_s, det.tau_lb_s,
                               det.sign, det.peak_scale_s, det.reversal_scale_s, det.reversal_type))
@@ -64,11 +65,13 @@ def tau_tables(mrd: pd.DataFrame, coverage: pd.DataFrame, cfg_secondary,
     return tau_df, tau_selected_df
 
 
-def naive_tau_selected(tau_selected_mrd: pd.DataFrame) -> pd.DataFrame:
-    """(600 s, fixed, fixed) wherever an `mrd` tau_selected row exists."""
+def naive_tau_selected(tau_selected_mrd: pd.DataFrame, naive_rung_s: float = _NAIVE_RUNG_S) -> pd.DataFrame:
+    """(the slot rung, fixed, fixed) wherever an `mrd` tau_selected row
+    exists; `naive_rung_s` is the run's `Cadence.slot_rung_s` (600 s by default).
+    """
     out = tau_selected_mrd[["slot", "boom"]].copy()
     out["variant"] = "naive"
-    out["tau_s"] = _NAIVE_RUNG_S
+    out["tau_s"] = naive_rung_s
     out["source"] = "fixed"
     out["source_status"] = "fixed"
     return out[_TAU_SELECTED_COLUMNS]
@@ -80,7 +83,7 @@ def selected_stats(ladder: pd.DataFrame, ladder_coverage: pd.DataFrame, tau_sele
     every `ladder` row at that rung (heat rows converted by the slot's
     `p_factor`, indexed by (slot, boom)), plus the support-coverage rows
     (<family> x coverage/blocks_used/blocks_total). A `naive`-variant row
-    reads the `mrd` variant's ladder at the 600-s rung.
+    reads the `mrd` variant's ladder at the slot rung (its own `tau_s`).
     """
     if tau_selected.empty:
         return pd.DataFrame(columns=_STATS_TABLE_COLUMNS)

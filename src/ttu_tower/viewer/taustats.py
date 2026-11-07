@@ -22,8 +22,20 @@ import pyarrow.dataset as pa_dataset
 
 from ttu_tower.secondary.detect import SMOOTHING, STATUSES, Detection, detect
 from ttu_tower.secondary.select import select
+from ttu_tower.viewer.timeaxis import cadence
 
-RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
+
+def rungs() -> tuple[float, ...]:
+    """The current cadence's ladder (9.375 s .. 1200 s at the default)."""
+    return cadence().rung_seconds
+
+
+def __getattr__(name):
+    if name == "RUNGS":  # the old constant, now the current cadence's
+        return rungs()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 VARIANTS = ("mrd", "mrd_unexcised")
 SOURCES = ("heat", "momentum", "fallback", "none")
 WHICH = {"heat": "heat τ", "momentum": "momentum τ", "selected": "selected τ"}
@@ -35,8 +47,8 @@ SPECTRA = {"heat": "wvpts", "momentum": "uw"}  # the cospectrum each family's ta
 
 
 def labels(which: str) -> list[str]:
-    rungs = [f"{r:g}" for r in RUNGS]
-    return rungs + list(SELECTED_EXTRA if which == "selected" else FAMILY_EXTRA)
+    names = [f"{r:g}" for r in rungs()]
+    return names + list(SELECTED_EXTRA if which == "selected" else FAMILY_EXTRA)
 
 
 @dataclass
@@ -94,18 +106,18 @@ def frame_data(tau: pd.DataFrame, sel: pd.DataFrame) -> TauData:
 
 
 def _rung_index(tau: np.ndarray) -> np.ndarray:
-    """Index into RUNGS of each tau; -1 where it isn't a rung (or NaN)."""
-    rungs = np.asarray(RUNGS)
-    i = np.clip(np.searchsorted(rungs, tau), 0, rungs.size - 1)
+    """Index into rungs() of each tau; -1 where it isn't a rung (or NaN)."""
+    ladder = np.asarray(rungs())
+    i = np.clip(np.searchsorted(ladder, tau), 0, ladder.size - 1)
     with np.errstate(invalid="ignore"):
-        return np.where(np.isfinite(tau) & np.isclose(rungs[i], tau), i, -1)
+        return np.where(np.isfinite(tau) & np.isclose(ladder[i], tau), i, -1)
 
 
 def categories(data: TauData, which: str, sel_tau=None, sel_source=None) -> np.ndarray:
-    """Each row's category: the rung of its tau (0-7), else the status past them
-    (see `labels`). `sel_tau`/`sel_source` stand in for the stored selection.
+    """Each row's category: the rung of its tau (0..n_rungs-1), else the status
+    past them (see `labels`). `sel_tau`/`sel_source` stand in for the stored selection.
     """
-    n = len(RUNGS)
+    n = len(rungs())
     if which == "selected":
         tau = data.sel_tau if sel_tau is None else sel_tau
         source = data.sel_source if sel_source is None else sel_source
@@ -122,8 +134,9 @@ def categories(data: TauData, which: str, sel_tau=None, sel_source=None) -> np.n
 def tau_values(cats: np.ndarray) -> np.ndarray:
     """The tau of each rung category; NaN for the others."""
     out = np.full(cats.size, np.nan)
-    rung = cats < len(RUNGS)
-    out[rung] = np.asarray(RUNGS)[cats[rung]]
+    ladder = rungs()
+    rung = cats < len(ladder)
+    out[rung] = np.asarray(ladder)[cats[rung]]
     return out
 
 
@@ -163,7 +176,7 @@ def agreement(heat: np.ndarray, momentum: np.ndarray) -> dict:
     """Where both detections have a tau: how often they agree, which is longer,
     and the median log2(heat tau / momentum tau) (in rungs).
     """
-    both = (heat < len(RUNGS)) & (momentum < len(RUNGS))
+    both = (heat < len(rungs())) & (momentum < len(rungs()))
     h, m = heat[both].astype(int), momentum[both].astype(int)
     n = int(both.sum())
     if n == 0:
@@ -207,7 +220,7 @@ def redetect(index, data: TauData, boom: int, cfg_det, kernel=SMOOTHING) -> dict
             own[i] = True
             if status[i] == no_data:
                 continue
-            det = detect(value[s:e], se[s:e], n[s:e], True, cfg_det, kernel=kernel)
+            det = detect(value[s:e], se[s:e], n[s:e], True, cfg_det, kernel=kernel, cadence=cadence())
             status[i], tau[i], lb[i] = STATUSES.index(det.status), det.tau_s, det.tau_lb_s
         # an mrd_unexcised row without spectra is secondary's copy of the mrd row: so is its redetection
         unexcised = VARIANTS.index("mrd_unexcised")

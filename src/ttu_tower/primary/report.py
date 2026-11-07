@@ -3,7 +3,7 @@ import logging
 
 import pandas as pd
 
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import SAMPLES_PER_SLOT, Cadence
 
 _logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def slots_report(slot_boom_df: pd.DataFrame, slots_df: pd.DataFrame) -> pd.DataF
     return pd.concat([overall, by_month], ignore_index=True)[["boom", "month", "status", "count"]]
 
 
-def flagged_present(slot_qc_df: pd.DataFrame) -> pd.DataFrame:
+def flagged_present(slot_qc_df: pd.DataFrame, slot_samples: int = SAMPLES_PER_SLOT) -> pd.DataFrame:
     """The `slot_qc` `flagged_<test>` rows as (slot, boom, variable, test,
     samples): per slot, the present samples inside one of the test's
     intervals.
@@ -51,7 +51,7 @@ def flagged_present(slot_qc_df: pd.DataFrame) -> pd.DataFrame:
     rows = slot_qc_df[stat.str.startswith(FLAGGED_PREFIX)]
     return pd.DataFrame({
         "slot": rows["slot"], "boom": rows["boom"], "variable": rows["variable"].astype(str),
-        "test": stat[rows.index].str.removeprefix(FLAGGED_PREFIX), "samples": rows["value"] * SAMPLES_PER_SLOT,
+        "test": stat[rows.index].str.removeprefix(FLAGGED_PREFIX), "samples": rows["value"] * slot_samples,
     })
 
 
@@ -63,16 +63,17 @@ def predates_flagged_counts(slot_qc_df: pd.DataFrame, flags_df: pd.DataFrame) ->
     return not flags_df.empty and not slot_qc_df["stat"].astype(str).str.startswith(FLAGGED_PREFIX).any()
 
 
-def flags_report(slot_qc_df: pd.DataFrame, coverage_df: pd.DataFrame, slots_df: pd.DataFrame) -> pd.DataFrame:
+def flags_report(slot_qc_df: pd.DataFrame, coverage_df: pd.DataFrame, slots_df: pd.DataFrame,
+                 slot_samples: int = SAMPLES_PER_SLOT) -> pd.DataFrame:
     """Per boom x variable x test: the fraction of present samples the test
     flagged, overall and by month of `slot_start`. Numerator and denominator
     both count present samples only (`flagged_<test>` rows and the `present`
     layer), so a flag over missing data counts for nothing.
     """
     present = coverage_df[coverage_df["layer"] == "present"].merge(slots_df[["slot", "slot_start"]], on="slot", how="left")
-    present = present.assign(samples=present["fraction"] * SAMPLES_PER_SLOT, month=_month(present["slot_start"]))
+    present = present.assign(samples=present["fraction"] * slot_samples, month=_month(present["slot_start"]))
 
-    flagged = flagged_present(slot_qc_df).merge(slots_df[["slot", "slot_start"]], on="slot", how="left")
+    flagged = flagged_present(slot_qc_df, slot_samples).merge(slots_df[["slot", "slot_start"]], on="slot", how="left")
     flagged["month"] = _month(flagged["slot_start"])
 
     rows = []
@@ -105,7 +106,8 @@ def coverage_report(coverage_df: pd.DataFrame, c: float) -> pd.DataFrame:
     return coverage_df.groupby(["boom", "variable", "layer"], observed=True).apply(agg, include_groups=False).reset_index()
 
 
-def second_layer_report(flags_df: pd.DataFrame, slots_df: pd.DataFrame, booms) -> pd.DataFrame:
+def second_layer_report(flags_df: pd.DataFrame, slots_df: pd.DataFrame, booms,
+                        slot_samples: int = SAMPLES_PER_SLOT) -> pd.DataFrame:
     """`direction` and `bounce` slot fractions per boom, over every slot of the
     period. Adjacent flagged slots share one merged flag row, so slots are
     counted by length.
@@ -115,7 +117,7 @@ def second_layer_report(flags_df: pd.DataFrame, slots_df: pd.DataFrame, booms) -
     for boom in booms:
         for test in ("direction", "bounce"):
             sel = flags_df[(flags_df["test"] == test) & (flags_df["boom"] == boom)]
-            n_flagged = int((sel["end"] - sel["start"]).sum()) // SAMPLES_PER_SLOT
+            n_flagged = int((sel["end"] - sel["start"]).sum()) // slot_samples
             rows.append((boom, test, n_flagged / total_slots if total_slots else float("nan")))
     return pd.DataFrame(rows, columns=["boom", "test", "fraction"])
 
@@ -129,6 +131,7 @@ def write_primary_reports(stage_dir, reports_dir, cfg) -> None:
     coverage_df = read_table(stage_dir / "data" / "coverage")
     slot_qc_df = read_table(stage_dir / "data" / "slot_qc")
     flags_df = read_table(stage_dir / "data" / "flags")
+    slot_samples = Cadence.of(cfg).samples_per_slot
 
     reports_dir.mkdir(parents=True, exist_ok=True)
     files_report(files_df).to_csv(reports_dir / "primary_files.csv", index=False)
@@ -136,6 +139,6 @@ def write_primary_reports(stage_dir, reports_dir, cfg) -> None:
     if predates_flagged_counts(slot_qc_df, flags_df):
         _logger.warning("primary_flags.csv skipped: this run predates the per-slot flagged_<test> counts; rerun primary")
     else:
-        flags_report(slot_qc_df, coverage_df, slots_df).to_csv(reports_dir / "primary_flags.csv", index=False)
+        flags_report(slot_qc_df, coverage_df, slots_df, slot_samples).to_csv(reports_dir / "primary_flags.csv", index=False)
     coverage_report(coverage_df, cfg.qc.min_coverage).to_csv(reports_dir / "primary_coverage.csv", index=False)
-    second_layer_report(flags_df, slots_df, cfg.files.booms).to_csv(reports_dir / "primary_second_layer.csv", index=False)
+    second_layer_report(flags_df, slots_df, cfg.files.booms, slot_samples).to_csv(reports_dir / "primary_second_layer.csv", index=False)

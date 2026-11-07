@@ -14,6 +14,7 @@ from ttu_tower.secondary.detect import SMOOTHING, Detection, detect
 from ttu_tower.secondary.select import select
 from ttu_tower.viewer import tauvariants
 from ttu_tower.viewer.fragments import FragmentIndex
+from ttu_tower.viewer.timeaxis import cadence
 
 COSPECTRA = ("wvpts", "uw", "vw", "uv")
 VARIANCES = ("uu", "vv", "ww", "tsts")
@@ -55,7 +56,8 @@ def load_slot(index: FragmentIndex, k: int, boom: int, booms=range(1, 11)) -> Sl
     """
     f = pa_dataset.field
     bundle = SlotBundle(slot=k, boom=boom)
-    h = k // 3
+    c = cadence()
+    h = c.slot_file(k)
     for name in _SLOT_TABLES:
         if not _stage_present(index, name):
             continue
@@ -68,13 +70,13 @@ def load_slot(index: FragmentIndex, k: int, boom: int, booms=range(1, 11)) -> Sl
 
     if _stage_present(index, "mrd"):
         this_slot = index.read("mrd", booms=list(booms), half_hours=[h], filter=f("slot") == k)
-        around = index.read("mrd", booms=[boom], half_hours=range((k - NEIGHBOURS) // 3, (k + NEIGHBOURS) // 3 + 1),
+        around = index.read("mrd", booms=[boom], half_hours=range(c.slot_file(k - NEIGHBOURS), c.slot_file(k + NEIGHBOURS) + 1),
                             filter=(f("slot") >= k - NEIGHBOURS) & (f("slot") <= k + NEIGHBOURS) & (f("slot") != k))
         bundle.mrd = pd.concat([this_slot, around], ignore_index=True)
         for col in ("variant", "spectrum"):
             bundle.mrd[col] = bundle.mrd[col].astype(str)
     if _stage_present(index, "ladder"):
-        te = index.read("ladder", booms=list(booms), half_hours=range((k - NEIGHBOURS) // 3, (k + NEIGHBOURS) // 3 + 1),
+        te = index.read("ladder", booms=list(booms), half_hours=range(c.slot_file(k - NEIGHBOURS), c.slot_file(k + NEIGHBOURS) + 1),
                         columns=["slot", "boom", "variant", "rung_s", "variable", "value"],
                         filter=(f("stat") == "te") & (f("slot") >= k - NEIGHBOURS) & (f("slot") <= k + NEIGHBOURS))
         te = te[(te["slot"] == k) | (te["boom"] == boom)].reset_index(drop=True)
@@ -158,7 +160,7 @@ def load_across(index: FragmentIndex, k: int, booms) -> SlotAcross:
     f = pa_dataset.field
     booms = tuple(booms)
     across = SlotAcross(slot=k, booms=booms)
-    h = k // 3
+    h = cadence().slot_file(k)
     for name in _ACROSS_TABLES:
         if not _stage_present(index, name):
             continue
@@ -282,10 +284,10 @@ def rerun_detection(bundle: SlotBundle, variant: str, cfg_secondary,
         trace: dict = {}
         if spec is None:
             det = detect(np.zeros(0), np.zeros(0), np.zeros(0), False, cfg_secondary.detection, trace=trace,
-                         kernel=kernel)
+                         kernel=kernel, cadence=cadence())
         else:
             det = detect(spec.value, spec.se, spec.n_pairs, family_has_data(bundle, mrd_variant, family),
-                         cfg_secondary.detection, trace=trace, kernel=kernel)
+                         cfg_secondary.detection, trace=trace, kernel=kernel, cadence=cadence())
         stored = tau[(tau["variant"] == mrd_variant) & (tau["cospectrum"] == family)]
         views[family] = DetectionView(family, name, det, trace, stored.iloc[0].to_dict() if not stored.empty else None)
     selection = select(views["heat"].detection, views["momentum"].detection, cfg_secondary.selection)

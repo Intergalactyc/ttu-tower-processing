@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from ttu_tower.constants import SAMPLE_HZ
-from ttu_tower.primary.rawrung import RUNG_SECONDS
+from ttu_tower.viewer.timeaxis import cadence
 from ttu_tower.viewer.slotdata import rung_scales, stored_selection
 from ttu_tower.viewer.ui import tables
 from ttu_tower.viewer.ui.axes import Log10Axis
@@ -43,7 +43,7 @@ class ScalesTab(QWidget):
             plot.addLegend(offset=(5, 5))
 
         self.rung = QComboBox()
-        for r in RUNG_SECONDS:
+        for r in cadence().rung_seconds:
             self.rung.addItem(f"{r:g} s", r)
         self.rung.currentIndexChanged.connect(lambda *_: self._draw_acf())
         self.acf_button = QPushButton("Show ACFs (reprocess)")

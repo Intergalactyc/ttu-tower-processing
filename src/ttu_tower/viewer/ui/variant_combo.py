@@ -5,14 +5,14 @@ from PySide6.QtCore import Qt
 
 from ttu_tower.viewer import tauvariants
 
-LABELS = {"none": "slot (no τ)", "mrd": "mrd (selected τ)", "naive": "naive (10 min)",
+LABELS = {"none": "slot (no τ)", "mrd": "mrd (selected τ)", "naive": "naive (slot τ)",
           "mrd_unexcised": "mrd unexcised"}
 TIPS = {
-    "none": "Over the whole 10-min slot on the final usable mask (means, slow sensors and what's "
+    "none": "Over the whole slot on the final usable mask (means, slow sensors and what's "
             "built from them); doesn't depend on τ.",
-    "mrd": "Mean over the valid τ-blocks tiling the slot, at the selected τ (τ = 20 min: the "
-           "window from 5 min before the slot to 15 min after).",
-    "naive": "The 600-s rung of mrd: the slot as a single block.",
+    "mrd": "Mean over the valid τ-blocks tiling the slot, at the selected τ (τ = the top rung, twice the slot: "
+           "the window from half a slot before the slot to half a slot after it).",
+    "naive": "The slot rung of mrd (600 s for 10-min slots): the slot as a single block.",
     "mrd_unexcised": "As mrd, on the series with nothing removed (gaps ≤ 10 min interpolated).",
 }
 

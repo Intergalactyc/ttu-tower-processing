@@ -16,7 +16,7 @@ from ttu_tower.jets.analysis import JetResult
 from ttu_tower.jets.events import EventParams
 from ttu_tower.jets.identify import ALGORITHMS, Profiles, describe
 from ttu_tower.viewer import diurnal, hodograph, windrose
-from ttu_tower.timegrid import slot_to_time
+from ttu_tower.viewer.timeaxis import slot_to_time
 from ttu_tower.viewer.timeline import Curve
 from ttu_tower.viewer.ui import tables
 from ttu_tower.viewer.ui.hodograph_view import draw_hodograph, draw_origin, prepare_plot

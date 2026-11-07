@@ -2,17 +2,18 @@
 import numpy as np
 
 from ttu_tower.math.polar import vector_to_bearing
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 
 def slot_means(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], slow: dict[str, tuple[np.ndarray, np.ndarray]],
-               g0: int, k: int, cfg, c: float):
+               g0: int, k: int, cfg, c: float, cadence: Cadence = DEFAULT_CADENCE):
     """The `means` rows for slot k: momentum-family wind statistics, gusts,
     ts/vpts means (ts family), and t/rh/p means (each on its own smoothed
     usability). `slow` maps "t"/"rh"/"p" -> (smoothed_values, usable).
     """
-    start = SAMPLES_PER_SLOT * k - g0
-    sl = slice(start, start + SAMPLES_PER_SLOT)
+    slot_samples = cadence.samples_per_slot
+    start = slot_samples * k - g0
+    sl = slice(start, start + slot_samples)
     rows = []
 
     ue, vn, w = series["ue"][sl], series["vn"][sl], series["w"][sl]
@@ -51,7 +52,7 @@ def slot_means(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], slow
             rows.append((var, stat, np.nan))
 
     for p in cfg.gust_periods_s:
-        rows += _gust_rows(ue, vn, w, mom_mask, p, c)
+        rows += _gust_rows(ue, vn, w, mom_mask, p, c, slot_samples)
 
     ts, vpts = series["ts"][sl], series["vpts"][sl]
     ts_mask = masks["ts"][sl]
@@ -70,9 +71,9 @@ def slot_means(series: dict[str, np.ndarray], masks: dict[str, np.ndarray], slow
     return rows
 
 
-def _gust_rows(ue, vn, w, mom_mask, p: int, c: float):
+def _gust_rows(ue, vn, w, mom_mask, p: int, c: float, slot_samples: int):
     block_samples = 50 * p
-    n_blocks = SAMPLES_PER_SLOT // block_samples
+    n_blocks = slot_samples // block_samples
     speeds, ws_means = [], []
     for gi in range(n_blocks):
         gsl = slice(gi * block_samples, (gi + 1) * block_samples)

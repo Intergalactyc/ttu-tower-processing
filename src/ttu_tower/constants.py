@@ -17,7 +17,6 @@ SOURCE_TIMEZONE = "Etc/GMT+6"  # local standard time, no DST; the raw file names
 
 SAMPLE_HZ = 50
 ROWS_PER_FILE = 90_000
-DETECTION_WINDOW_MIN = 80
 STAGE_B_MARGIN_S = 600
 
 # Kelly & Ennis (Sandia report on this tower): residual tilt relative to the

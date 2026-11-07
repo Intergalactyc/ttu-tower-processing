@@ -11,10 +11,9 @@ from ttu_tower import schema
 from ttu_tower.flags import BOOM_LEVEL_VARIABLES
 from ttu_tower.post.classify import stability_classes
 from ttu_tower.tertiary.filtering import QUANTITY_GROUPS
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer.catalog import Quantity
 from ttu_tower.viewer.fragments import FragmentIndex
-from ttu_tower.viewer.timeaxis import slot_to_unix
+from ttu_tower.viewer.timeaxis import cadence, slot_to_unix
 
 SLOT_STATUSES = ("no_file", "no_data", "computed")
 
@@ -160,7 +159,7 @@ def _load_flag_fractions(run, index: FragmentIndex, q: Quantity, members: tuple)
         for var in (q.variable, None) if q.variable in BOOM_LEVEL_VARIABLES else (q.variable,):
             if (test, var) in counts:
                 flagged += counts[(test, var)]
-        curves[b] = Curve(slots=slots, y=flagged / SAMPLES_PER_SLOT)
+        curves[b] = Curve(slots=slots, y=flagged / cadence().samples_per_slot)
     return TimelineData(quantity=q, variant="none", curves=curves)
 
 
@@ -207,7 +206,7 @@ def _filtered(run, index: FragmentIndex, q: Quantity, variant: str, members: tup
         flt = flt & (f("variant") == variant)
     # only batches holding a slot tertiary NaN'd can hold a filtered value
     gone = [c.slots[np.isnan(c.y)] for c in final.curves.values()]
-    half_hours = np.unique(np.concatenate(gone) // 3) if gone else np.empty(0, dtype=np.int64)
+    half_hours = np.unique(cadence().slot_file(np.concatenate(gone))) if gone else np.empty(0, dtype=np.int64)
     pre = index.read(table, booms=list(members) if _is_per_boom_fragments(table) else None,
                      half_hours=half_hours.tolist(), columns=["slot", "boom", "value"], filter=flt)
     curves = {}

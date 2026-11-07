@@ -14,6 +14,7 @@ import pyarrow.dataset as pa_dataset
 from ttu_tower import schema
 from ttu_tower.io.store import read_paths
 from ttu_tower.timegrid import SAMPLES_PER_HALF_HOUR
+from ttu_tower.viewer.timeaxis import cadence
 
 _NAME_RE = re.compile(r"^bat(\d{7})-(\d{7})(?:_b(\d{2}))?$")
 _EARTH_NAMES = {"u": "ue", "v": "vn"}
@@ -113,7 +114,8 @@ class FragmentIndex:
             return []
         if half_hours is not None:
             batches = {b for b in (self.table(name).batch_for_half_hour(int(h)) for h in half_hours) if b}
-            slots = [s for h_a, h_b in batches for s in range(3 * h_a, 3 * (h_b + 1))]
+            c = cadence()
+            slots = [s for h_a, h_b in batches for s in range(c.file_slots(h_a)[0], c.file_slots(h_b + 1)[0])]
             in_batches = pa_dataset.field("slot").isin(slots)
             filter = in_batches if filter is None else filter & in_batches
         rows = read_paths(paths, columns=columns, filter=filter)

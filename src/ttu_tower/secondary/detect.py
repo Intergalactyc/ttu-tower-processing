@@ -8,6 +8,7 @@ import numpy as np
 
 from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.primary.mrd import mode_scales_s
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 STATUSES = ("no_data", "weak", "found", "capped", "unresolved")
 SMOOTHING = (1.0, 2.0, 1.0)  # Vickers & Mahrt's 1-2-1 weights, centred on each mode
@@ -31,11 +32,13 @@ def _result(status: str, *, tau_s=np.nan, tau_lb_s=np.nan, sign: int = 0, peak_s
 
 
 def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, cfg_det,
-           trace: dict | None = None, kernel: tuple[float, ...] = SMOOTHING) -> Detection:
+           trace: dict | None = None, kernel: tuple[float, ...] = SMOOTHING,
+           cadence: Cadence = DEFAULT_CADENCE) -> Detection:
     """One cospectrum's status, tau (or its lower bound), sign and peak/reversal
     scales. `D`, `SE`, `N` are the mode 1..K rows of the `mrd` table for this
     (slot, boom, variant, spectrum), ordered by ascending scale. Mode scales
-    are rederived from K = len(D), so the caller need not pass them.
+    are rederived from K = len(D) and the run's `cadence` (whose detection
+    window the modes split), so the caller need not pass them.
 
     `trace`, if given, is filled as detection proceeds (so an early return
     leaves later keys absent): "scales", "i_lo", "i_top", "u", "lo", "hi"
@@ -53,7 +56,7 @@ def detect(D: np.ndarray, SE: np.ndarray, N: np.ndarray, family_has_data: bool, 
     D = np.asarray(D, dtype=np.float64)
     SE = np.asarray(SE, dtype=np.float64)
     N = np.asarray(N)
-    scales = mode_scales_s(D.size, SAMPLE_HZ)  # P_i, i = 1..K, 0-indexed here
+    scales = mode_scales_s(D.size, SAMPLE_HZ, cadence)  # P_i, i = 1..K, 0-indexed here
 
     def scale(i: int) -> float:  # 1-indexed mode -> P_i
         return float(scales[i - 1])

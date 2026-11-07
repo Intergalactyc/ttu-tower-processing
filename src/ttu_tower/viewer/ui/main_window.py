@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ttu_tower.constants import HEIGHTS
-from ttu_tower.timegrid import time_to_slot
+from ttu_tower.viewer.timeaxis import time_to_slot
 from ttu_tower.viewer import anisotropy, brush, compare, figures, timeline
 from ttu_tower.viewer import stability as criteria
 from ttu_tower.viewer.bookmarks import Bookmark, BookmarkStore
@@ -32,7 +32,7 @@ from ttu_tower.viewer.fragments import FragmentIndex
 from ttu_tower.viewer.provenance import drill_target, ordered_variables, scale_variables
 from ttu_tower.viewer.reprocess import Reprocessor
 from ttu_tower.viewer.run import RunHandle, list_registered
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, format_slot, parse_time, slot_to_unix, unix_to_slot
+from ttu_tower.viewer.timeaxis import format_slot, parse_time, set_cadence, slot_seconds, slot_to_unix, unix_to_slot
 from ttu_tower.viewer.ui.anisotropy_view import AnisotropyMapView
 from ttu_tower.viewer.ui.bookmarks_panel import BookmarkDialog, BookmarksPanel
 from ttu_tower.viewer.ui.compare_view import CompareView
@@ -477,6 +477,7 @@ class MainWindow(QMainWindow):
         if self.reprocessor is not None:
             self.reprocessor.close()
         self.run = run
+        set_cadence(run.cadence)
         self.index = FragmentIndex(run.run_dir)
         self.variants = tauvariants.VariantStore(run, self.index)
         self.variants.set_schemes(self.tau_schemes.items)
@@ -1002,7 +1003,7 @@ class MainWindow(QMainWindow):
         k = self._goto_slot()
         if k is None:
             return
-        x = slot_to_unix(k) + SLOT_SECONDS / 2
+        x = slot_to_unix(k) + slot_seconds() / 2
         self.set_x_range(x - _DAY / 2, x + _DAY / 2)
         for p in self.plots:
             marker = pg.InfiniteLine(slot_to_unix(k), pen=pg.mkPen("#d62728", width=1, style=Qt.PenStyle.DashLine))
@@ -1193,7 +1194,13 @@ class MainWindow(QMainWindow):
             self._set_other_run(None)
             return
         try:
-            self._set_other_run(RunHandle.open(tag))
+            other = RunHandle.open(tag)
+            if self.run is not None and other.cadence != self.run.cadence:
+                QMessageBox.warning(self, "ttu-view", f"can't compare with {tag}: its slots are {other.cadence.slot_min} "
+                                                      f"min, this run's are {self.run.cadence.slot_min} min")
+                self.compare_box.setCurrentIndex(0)
+                return
+            self._set_other_run(other)
         except Exception as exc:
             QMessageBox.warning(self, "ttu-view", f"can't open {tag}: {exc}")
             self.compare_box.setCurrentIndex(0)
@@ -1357,8 +1364,8 @@ class MainWindow(QMainWindow):
 
         def broken(x, y):
             """Local times and values with a NaN wherever slots are missing, so no line bridges a gap."""
-            gaps = np.flatnonzero(np.diff(x) > SLOT_SECONDS * 1.5)
-            x, y = np.insert(x, gaps + 1, x[gaps] + SLOT_SECONDS), np.insert(y.astype(float), gaps + 1, np.nan)
+            gaps = np.flatnonzero(np.diff(x) > slot_seconds() * 1.5)
+            x, y = np.insert(x, gaps + 1, x[gaps] + slot_seconds()), np.insert(y.astype(float), gaps + 1, np.nan)
             return local(x), y
 
         panels = []

@@ -5,16 +5,17 @@ built from them.
 import numpy as np
 
 from ttu_tower.math.polar import rotate_streamwise, streamwise_angle, vector_to_bearing
-from ttu_tower.timegrid import BlockGrid
+from ttu_tower.constants import SAMPLE_HZ
+from ttu_tower.timegrid import DEFAULT_CADENCE, Cadence
 
 SPECTRA = ("uw", "vw", "uv", "uu", "vv", "ww", "wvpts", "tsts")
 
 
-def mode_scales_s(floor_level: int, sample_hz: float) -> np.ndarray:
+def mode_scales_s(floor_level: int, sample_hz: float = SAMPLE_HZ, cadence: Cadence = DEFAULT_CADENCE) -> np.ndarray:
     """P_i (seconds) for mode i = 1..K: the width of the blocks mode i is
-    computed in, in units of 2^i floor blocks.
+    computed in, in units of 2^i floor blocks of `cadence`'s detection window.
     """
-    floor_block_s = BlockGrid.floor(floor_level).length_samples / sample_hz
+    floor_block_s = cadence.floor(floor_level).length_samples / sample_hz
     return floor_block_s * 2.0 ** np.arange(1, floor_level + 1)
 
 
@@ -65,7 +66,7 @@ def _nan_spectrum(k: int):
     return np.full(k, np.nan), np.full(k, np.nan), np.zeros(k, dtype=np.int32)
 
 
-def detection_outputs(floor: dict, c: float):
+def detection_outputs(floor: dict, c: float, cadence: Cadence = DEFAULT_CADENCE):
     """Detection outputs for one slot's window: the 8 spectra (value, se,
     n_pairs each), the momentum-family wind direction, and the momentum/heat
     coverage of the whole window. Momentum (or heat/ts) spectra and wd_deg
@@ -74,7 +75,7 @@ def detection_outputs(floor: dict, c: float):
     momentum, heat, ts = floor["momentum"], floor["heat"], floor["ts"]
     nb = momentum.n.size
     k = int(round(np.log2(nb)))
-    block_len = BlockGrid.floor(k).length_samples
+    block_len = cadence.floor(k).length_samples
 
     window_nominal = nb * block_len
     coverage_momentum = momentum.n.sum() / window_nominal

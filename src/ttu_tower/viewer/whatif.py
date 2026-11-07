@@ -10,8 +10,18 @@ import pandas as pd
 from ttu_tower.physics.most import friction_velocity
 from ttu_tower.secondary.detect import SMOOTHING
 from ttu_tower.secondary.derived import materialize_missing_unexcised, tau_tables
+from ttu_tower.viewer.timeaxis import cadence
 
-LADDER_RUNGS = (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0, 1200.0)
+
+def ladder_rungs() -> tuple[float, ...]:
+    return cadence().rung_seconds
+
+
+def __getattr__(name):
+    if name == "LADDER_RUNGS":  # the old constant, now the current cadence's
+        return ladder_rungs()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 KERNELS = (("1-2-1 (the run's)", SMOOTHING), ("none", (1.0,)), ("1-1-1", (1.0, 1.0, 1.0)),
            ("1-2-3-2-1", (1.0, 2.0, 3.0, 2.0, 1.0)), ("1-4-6-4-1", (1.0, 4.0, 6.0, 4.0, 1.0)))
 
@@ -50,8 +60,9 @@ def problems(cfg_secondary) -> list[str]:
     """The config loader's cross-key rules for these fields, as messages."""
     det, sel = cfg_secondary.detection, cfg_secondary.selection
     out = []
-    if not det.min_tau_s <= sel.fallback_tau_s <= det.max_tau_s <= 1200:
-        out.append("needs min τ ≤ fallback τ ≤ max τ ≤ 1200 s")
+    top = cadence().top_rung_s
+    if not det.min_tau_s <= sel.fallback_tau_s <= det.max_tau_s <= top:
+        out.append(f"needs min τ ≤ fallback τ ≤ max τ ≤ {top:g} s")
     if not det.min_scale_s < det.min_tau_s:
         out.append("needs min scale < min τ")
     if det.peak_significance_se < 0:
@@ -68,7 +79,7 @@ def rerun(across, cfg_secondary, kernel: tuple[float, ...] = SMOOTHING) -> tuple
     mrd = across.mrd
     if mrd is None or mrd.empty:
         return pd.DataFrame(), pd.DataFrame()
-    tau, sel = tau_tables(mrd, across.table("coverage"), cfg_secondary, kernel=kernel)
+    tau, sel = tau_tables(mrd, across.table("coverage"), cfg_secondary, kernel=kernel, cadence=cadence())
     tables = materialize_missing_unexcised({"tau": tau, "tau_selected": sel}, across.table("slot_boom"))
     return tables["tau"], tables["tau_selected"]
 

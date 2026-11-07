@@ -14,11 +14,10 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushBu
 
 from ttu_tower.constants import SAMPLE_HZ
 from ttu_tower.flags import TESTS
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
 from ttu_tower.viewer import qcwhatif
 from ttu_tower.viewer.catalog import variable_label
 from ttu_tower.viewer.reprocess import HFWindow, removed_by_test, tau_block_ids, to_streamwise
-from ttu_tower.viewer.timeaxis import SLOT_SECONDS, display_offset_s, format_slot, sample_to_unix, slot_to_unix
+from ttu_tower.viewer.timeaxis import cadence, display_offset_s, format_slot, sample_to_unix, slot_seconds, slot_to_unix
 from ttu_tower.viewer.ui import style
 from ttu_tower.viewer.ui.curves import FixedXViewBox, PlotDecimator
 from ttu_tower.viewer.ui.qc_whatif_panel import QCWhatIfPanel
@@ -105,8 +104,9 @@ class SeriesPanel(QWidget):
         for label, key in FRAMES:
             self.frame.addItem(label, key)
         self.frame.currentIndexChanged.connect(lambda *_: self.reload())
-        self.wide = QCheckBox("±35-min context")
-        self.wide.setToolTip("show 35 min either side of the loaded slots (as far as an MRD detection window reaches)")
+        self.wide = QCheckBox("detection-window context")
+        self.wide.setToolTip("show 3.5 slots either side of the loaded slots (as far as an MRD detection window "
+                             "reaches: 35 min for 10-min slots)")
         self.wide.toggled.connect(lambda *_: self.reload())
         self.band = QCheckBox("despike band")
         self.band.setChecked(True)
@@ -216,9 +216,10 @@ class SeriesPanel(QWidget):
         self.blocks.blockSignals(True)
         self.blocks.clear()
         self.blocks.addItem("none", None)
-        if self.selected_tau is not None and self.selected_tau <= 600:
+        c = cadence()
+        if self.selected_tau is not None and self.selected_tau <= c.slot_rung_s:
             self.blocks.addItem(f"selected τ ({self.selected_tau:g} s)", "selected")
-        for r in (9.375, 18.75, 37.5, 75.0, 150.0, 300.0, 600.0):
+        for r in c.rung_seconds[:-1]:  # the rungs that tile the slot
             self.blocks.addItem(f"{r:g} s", r)
         i = self.blocks.findData(current)
         self.blocks.setCurrentIndex(i if i >= 0 else 0)
@@ -249,9 +250,10 @@ class SeriesPanel(QWidget):
         return self.mode.currentData()
 
     def window_samples(self) -> tuple[int, int]:
-        margin = round((35.0 if self.wide.isChecked() else 10.0) * 60 * SAMPLE_HZ)
-        g0 = self.lo * SAMPLES_PER_SLOT - margin
-        return g0, (self.hi - self.lo + 1) * SAMPLES_PER_SLOT + 2 * margin
+        c = cadence()
+        margin = c.detection_margin_samples if self.wide.isChecked() else c.samples_per_slot
+        g0 = self.lo * c.samples_per_slot - margin
+        return g0, (self.hi - self.lo + 1) * c.samples_per_slot + 2 * margin
 
     def _build_series_boxes(self) -> None:
         while self.series_boxes_row.count():
@@ -451,7 +453,7 @@ class SeriesPanel(QWidget):
 
     def _shade_slots(self, plot) -> None:
         for k in range(self.lo, self.hi + 1):
-            region = pg.LinearRegionItem((slot_to_unix(k), slot_to_unix(k) + SLOT_SECONDS), movable=False,
+            region = pg.LinearRegionItem((slot_to_unix(k), slot_to_unix(k) + slot_seconds()), movable=False,
                                          brush=pg.mkBrush(255, 220, 90, 70 if k == self.slot else 30),
                                          pen=pg.mkPen(None))
             region.setZValue(-100)
@@ -593,9 +595,10 @@ def _fluctuations(win: HFWindow | None, blocks: np.ndarray) -> HFWindow | None:
 
 def _stored_slot_means(index, boom, g0, n) -> dict:
     """k -> (ue, vn) mean of every slot the window touches, from the run's `means` table."""
-    k0, k1 = g0 // SAMPLES_PER_SLOT, (g0 + n - 1) // SAMPLES_PER_SLOT
+    c = cadence()
+    k0, k1 = g0 // c.samples_per_slot, (g0 + n - 1) // c.samples_per_slot
     f = pa_dataset.field
-    df = index.read("means", booms=[boom], half_hours=range(k0 // 3, k1 // 3 + 1),
+    df = index.read("means", booms=[boom], half_hours=range(c.slot_file(k0), c.slot_file(k1) + 1),
                     filter=(f("boom") == boom) & (f("slot") >= k0) & (f("slot") <= k1) & (f("stat") == "mean")
                     & f("variable").isin(["ue", "vn"]))
     if df.empty:

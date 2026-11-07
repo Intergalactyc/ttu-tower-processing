@@ -6,7 +6,7 @@ import numpy as np
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from ttu_tower.timegrid import SAMPLES_PER_SLOT
+from ttu_tower.viewer.timeaxis import cadence
 
 _RAW_BOUNDS_NAMES = {"u": "ue", "v": "vn"}  # older runs stored sonic bounds flags under the raw names
 
@@ -44,8 +44,9 @@ def boom_counts(run, index, boom: int, tests=None) -> dict:
         starts = table["start"].to_numpy().astype(np.int64)
         ends = table["end"].to_numpy().astype(np.int64)
         # only the slots this file covers
-        lo = max(int(starts.min()) // SAMPLES_PER_SLOT, slot_a)
-        hi = min((int(ends.max()) - 1) // SAMPLES_PER_SLOT + 1, slot_b)
+        n_slot = cadence().samples_per_slot
+        lo = max(int(starts.min()) // n_slot, slot_a)
+        hi = min((int(ends.max()) - 1) // n_slot + 1, slot_b)
         if hi <= lo:
             continue
         counts = per_slot_samples(starts, ends, rows, len(keys), lo, hi - lo)
@@ -65,7 +66,7 @@ def per_slot_samples(starts, ends, rows, n_rows: int, slot_a: int, n_slots: int)
     """(n_rows, n_slots): samples of [start, end) intervals in each slot, summed
     per row (the intervals of one row don't overlap).
     """
-    n = SAMPLES_PER_SLOT
+    n = cadence().samples_per_slot
     starts = np.maximum(starts, slot_a * n)
     ends = np.minimum(ends, (slot_a + n_slots) * n)
     keep = ends > starts

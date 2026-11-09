@@ -29,6 +29,8 @@ def test_anisotropy_isotropic_turbulence_is_3c():
     assert math.isclose(a.l2, 0.0, abs_tol=1e-12)
     assert math.isclose(a.l3, 0.0, abs_tol=1e-12)
     assert a.aniso_class == "3c"
+    assert math.isclose(a.x, 0.5, abs_tol=1e-12)
+    assert math.isclose(a.y, math.sqrt(3) / 2, abs_tol=1e-12)
 
 
 def test_anisotropy_one_component_turbulence_is_1c():
@@ -37,6 +39,8 @@ def test_anisotropy_one_component_turbulence_is_1c():
     assert math.isclose(a.l2, -1.0 / 3.0, rel_tol=1e-12)
     assert math.isclose(a.l3, -1.0 / 3.0, rel_tol=1e-12)
     assert a.aniso_class == "1c"
+    assert math.isclose(a.x, 0.0, abs_tol=1e-12)
+    assert math.isclose(a.y, 0.0, abs_tol=1e-12)
 
 
 def test_anisotropy_two_component_turbulence_is_2c():

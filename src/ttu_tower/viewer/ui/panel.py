@@ -10,9 +10,11 @@ from PySide6.QtWidgets import (
 )
 
 from ttu_tower.constants import HEIGHTS
+from ttu_tower.viewer import search
 from ttu_tower.viewer.catalog import Catalog, Quantity
 from ttu_tower.viewer.timeline import has_filtered_overlay, has_tau_overlay
 from ttu_tower.viewer.ui import variant_combo
+from ttu_tower.viewer.ui.search_combo import TERMS_ROLE
 
 _VARIANT_LABELS = variant_combo.LABELS  # the run's own; variant_combo.label covers the viewer's too
 STYLES = ("lines", "points", "lines + points")
@@ -137,6 +139,7 @@ class PanelControls(QWidget):
                 child = QTreeWidgetItem([q.title])
                 child.setData(0, Qt.ItemDataRole.UserRole, q.key)
                 child.setToolTip(0, f"{q.table}: {q.variable}" + (f" / {q.stat}" if q.stat else ""))
+                child.setData(0, TERMS_ROLE, search.quantity_terms(q))
                 parent.addChild(child)
             self.tree.addTopLevelItem(parent)
         for b, box in self.boom_boxes.items():
@@ -184,17 +187,17 @@ class PanelControls(QWidget):
         return None
 
     def _filter_tree(self, text: str) -> None:
-        text = text.lower().strip()
+        query = search.Query(text)
         for i in range(self.tree.topLevelItemCount()):
             parent = self.tree.topLevelItem(i)
             shown = 0
             for j in range(parent.childCount()):
                 child = parent.child(j)
-                match = not text or text in child.text(0).lower() or text in (child.toolTip(0) or "").lower()
+                match = not query or query.matches(child.data(0, TERMS_ROLE) or search.terms(child.text(0)))
                 child.setHidden(not match)
                 shown += match
             parent.setHidden(shown == 0)
-            parent.setExpanded(bool(text) and shown > 0)
+            parent.setExpanded(bool(query) and shown > 0)
 
     def _sync_quantity_widgets(self, q: Quantity) -> None:
         self.variant.blockSignals(True)

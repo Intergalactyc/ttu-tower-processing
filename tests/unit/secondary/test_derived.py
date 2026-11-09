@@ -155,7 +155,10 @@ def test_derived_quantities_hand_calculation():
     ]
     stats = pd.DataFrame(stats_rows, columns=["slot", "boom", "variant", "variable", "stat", "value"])
     tau_selected = pd.DataFrame([{"slot": 100, "boom": boom, "variant": "mrd", "tau_s": tau_s}])
-    slow = pd.DataFrame([{"slot": 100, "boom": boom, "variable": "vpt", "value": vpt_slow}])
+    t_slow, vt_slow = 295.0, 297.0
+    slow = pd.DataFrame([{"slot": 100, "boom": boom, "variable": "vpt", "value": vpt_slow},
+                         {"slot": 100, "boom": boom, "variable": "t", "value": t_slow},
+                         {"slot": 100, "boom": boom, "variable": "vt", "value": vt_slow}])
 
     from types import SimpleNamespace
     cfg = SimpleNamespace(secondary=_SEC_CFG)
@@ -182,6 +185,8 @@ def test_derived_quantities_hand_calculation():
     assert value("zeta") == approx(HEIGHTS[boom] / expected_l)
     zeta = HEIGHTS[boom] / expected_l
     assert value("theta_star") == approx(-wvpts_cov / expected_ustar)
+    assert value("buoyancy_flux") == approx(g / vpt_slow * wvpts_cov)
+    assert value("wpt") == approx(wvpts_cov * t_slow / vt_slow)
     assert value("phi_m_bd") == approx(most.businger_dyer_phi_m(zeta))
     assert value("psi_h_bd") == approx(most.businger_dyer_psi_h(zeta))
 
@@ -199,6 +204,8 @@ def test_derived_quantities_hand_calculation():
     a1, a2, a3 = value("aniso_l1"), value("aniso_l2"), value("aniso_l3")
     assert a1 >= a2 >= a3
     assert math.isclose(a1 + a2 + a3, 0.0, abs_tol=1e-9)
+    assert value("aniso_x") == approx(2 * (a2 - a3) + 0.5 * (3 * a3 + 1))
+    assert value("aniso_y") == approx(math.sqrt(3) / 2 * (3 * a3 + 1))
 
     label_row = label_df[(label_df["slot"] == 100) & (label_df["boom"] == boom)].iloc[0]
     assert label_row["label"] == "aniso_class"

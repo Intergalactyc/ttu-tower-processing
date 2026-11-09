@@ -97,6 +97,10 @@ min_coverage = 0.75
 max_bounds_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 max_spike_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 veer_reference_boom = 4
+sfc_boom = 3
+exempt_flux_height_booms = []
+h_bl_momt_fraction = 0.05
+h_sl_deviation = 0.10
 
 [tertiary.fits]
 exclude_tau = ["unresolved", "fallback"]

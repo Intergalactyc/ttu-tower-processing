@@ -24,6 +24,8 @@ class Anisotropy:
     l3: float
     beta: float
     phi: float
+    x: float  # barycentric-map position: 1C at (0, 0), 2C at (1, 0), 3C at (1/2, √3/2)
+    y: float
     aniso_class: str | None
 
 
@@ -35,16 +37,21 @@ def _in_triangle(x: float, y: float, triangle) -> bool:
     return (c1 <= 0 and c2 <= 0 and c3 <= 0) or (c1 >= 0 and c2 >= 0 and c3 >= 0)
 
 
+def barycentric_xy(l2: float, l3: float) -> tuple[float, float]:
+    """Barycentric-map position of an eigenvalue triple (descending), from
+    its second and third eigenvalues.
+    """
+    c2 = 2 * (l2 - l3)
+    c3 = 3 * l3 + 1
+    return float(c2 + 0.5 * c3), float((np.sqrt(3) / 2) * c3)
+
+
 def _classify_anisotropy_state(evals: np.ndarray, k: float) -> str:
     """Barycentric-map class for one eigenvalue triple (descending), edge
     width k: `1c`/`2c`/`3c` (pure), `prolate`/`oblate`/`ellipse` (transitional
     edges of width k around the pure vertices), else `mixed`.
     """
-    l2, l3 = evals[1], evals[2]
-    c2 = 2 * (l2 - l3)
-    c3 = 3 * l3 + 1
-    xb = c2 + 0.5 * c3
-    yb = (np.sqrt(3) / 2) * c3
+    xb, yb = barycentric_xy(evals[1], evals[2])
 
     v_1c, v_2c, v_3c = (0.0, 0.0), (1.0, 0.0), (0.5, np.sqrt(3) / 2)
     v_1c_2c_l, v_1c_2c_r = (0.5 * k, 0.0), (1 - 0.5 * k, 0.0)
@@ -88,13 +95,14 @@ def anisotropy(var_u: float, var_v: float, var_w: float, cov_uv: float, cov_uw: 
                cov_vw: float, tke: float, k: float = 2.0 / 3.0) -> Anisotropy:
     """Reynolds-stress anisotropy for one (slot, boom, variant): the tensor
     b_ij = R_ij/(2*tke) - delta_ij/3, its eigenvalues (descending) and
-    eigenvectors, the barycentric-map class and the inclination/orientation
-    angles. Every field is NaN (class None) if tke is 0 or any input isn't
-    finite.
+    eigenvectors, the barycentric-map position and class, and the
+    inclination/orientation angles. Every field is NaN (class None) if tke is
+    0 or any input isn't finite.
     """
     inputs = (var_u, var_v, var_w, cov_uv, cov_uw, cov_vw, tke)
     if tke == 0 or not all(np.isfinite(x) for x in inputs):
-        return Anisotropy(float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), None)
+        nan = float("nan")
+        return Anisotropy(nan, nan, nan, nan, nan, nan, nan, None)
 
     r = np.array([
         [var_u, cov_uv, cov_uw],
@@ -109,4 +117,5 @@ def anisotropy(var_u: float, var_v: float, var_w: float, cov_uv: float, cov_uw: 
 
     aniso_class = _classify_anisotropy_state(evals, k)
     beta, phi = _anisotropy_angles(evecs)
-    return Anisotropy(float(evals[0]), float(evals[1]), float(evals[2]), beta, phi, aniso_class)
+    x, y = barycentric_xy(evals[1], evals[2])
+    return Anisotropy(float(evals[0]), float(evals[1]), float(evals[2]), beta, phi, x, y, aniso_class)

@@ -210,6 +210,10 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 | `max_bounds_fraction` | table | `{ ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }` | PROD (sonic) / DES (slow) | Per input variable: maximum fraction of a support's samples with `bounds` rows. The slow sensors allow 5% (since 2026-10): their outliers are typically fast-poll electrical noise that leaves the real signal intact, and they feed slot means and thermodynamics, not flux covariances, so individual sample values matter much less than for the sonic outputs. A single number sets every variable (the form configs used before). Old: `bounds_flag`, 0.01 for all. |
 | `max_spike_fraction` | table | same as `max_bounds_fraction` | PROD (sonic) / DES (slow) | The same for `spike` rows. Old: `despiking_flag`, 0.01 for all. |
 | `veer_reference_boom` | int | `4` | OLDC | Veer is relative to this boom (10.1 m). Old: `veer10m`. |
+| `sfc_boom` | int | `3` | DES | The boom whose fluxes stand for the surface fluxes in the flux-profile heights `h_bl_momt`, `h_sl_momt`, `h_sl_buoy` (output-schema.md §5.4). A tower boom; when it isn't in `booms`, those heights are NaN. |
+| `exempt_flux_height_booms` | list[int] | `[]` | DES | Booms never searched for (or interpolated from) in those heights. Must not contain `sfc_boom`. |
+| `h_bl_momt_fraction` | float | `0.05` | DES, **provisional** | `h_bl_momt`: where u*² falls to this fraction of the surface u*². In (0, 1). |
+| `h_sl_deviation` | float | `0.10` | DES, **provisional** | `h_sl_momt`/`h_sl_buoy`: where the flux deviates from its surface value by this fraction of its magnitude. |
 
 ### `[tertiary.fits]`: every profile-fit rule
 
@@ -264,6 +268,8 @@ from `physics.earth.local_gravity`. The epoch is in `timegrid.py` (plan.md §3.1
   `min_tau_s`.
 - Every name in `unusable_tests` is a known `quality` test.
 - `veer_reference_boom` ∈ `booms`; every `tertiary.fits.*_booms` ⊆ `booms`.
+- `sfc_boom` and `exempt_flux_height_booms` are tower booms (1–10), and `sfc_boom` ∉
+  `exempt_flux_height_booms`.
 - `output.timezone` ∈ {`"Etc/GMT+6"`, `"UTC"`}; `results_dir` is `""` or absolute.
 
 ---
@@ -373,6 +379,10 @@ min_coverage = 0.75
 max_bounds_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 max_spike_fraction = { ue = 0.01, vn = 0.01, w = 0.01, ts = 0.01, t = 0.05, rh = 0.05, p = 0.05 }
 veer_reference_boom = 4
+sfc_boom = 3
+exempt_flux_height_booms = []
+h_bl_momt_fraction = 0.05
+h_sl_deviation = 0.10
 
 [tertiary.fits]
 exclude_tau = ["unresolved", "fallback"]

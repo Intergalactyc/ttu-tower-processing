@@ -754,12 +754,14 @@ def _gradients(run, index, key: str, out: Path, cfg) -> None:
 def _profile(run, index, key: str, out: Path, cfg) -> None:
     f = pa_dataset.field
     final = io_store.read_paths(paths(out, "boom_final"), columns=["slot", "boom", "variant", "variable", "stat", "value"],
-                                filter=f("variable").isin(["ti", "wd", "ustar"]))
+                                filter=f("variable").isin(["ti", "wd", "ustar", "buoyancy_flux"]))
     ws = index.read("boom_final", columns=["slot", "boom", "variant", "variable", "stat", "value"],
                     filter=(f("variant") == "none") & (f("variable") == "ws") & (f("stat") == "mean"))
     both = _obj(pd.concat([final, ws], ignore_index=True), ("variant", "variable", "stat"))
     tau = _obj(io_store.read_paths(paths(out, "tau_selected")), ("variant", "source", "source_status"))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN slots, as in tertiary's own run
-        rows = profiles.variant_profiles(both, tau, key, cfg.tertiary.fits)
+        rows = pd.concat([profiles.variant_profiles(both, tau, key, cfg.tertiary.fits),
+                          profiles.flux_heights(both, tau, cfg.files.booms, cfg.tertiary, variants=(key,))],
+                         ignore_index=True)
     _write(out, "profile", -1, rows, _slot_starts(run.run_dir))

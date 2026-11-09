@@ -114,7 +114,10 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
     boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
 
     pairs = multiboom.multiboom(boom_final, cfg.files.booms, cfg.tertiary.veer_reference_boom)
-    profile = profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits)
+    profile = pd.concat([
+        profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits),
+        profiles.flux_heights(boom_final, secondary["tau_selected"], cfg.files.booms, cfg.tertiary),
+    ], ignore_index=True)
     tau_final = secondary["tau_selected"].copy()
 
     slot_a, slot_b = cadence.file_slots(batch.h_a)[0], cadence.file_slots(batch.h_b + 1)[0]

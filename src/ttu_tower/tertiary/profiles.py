@@ -2,7 +2,8 @@
 standard deviation vs height, and the neutral log law - each fit's five
 rules (booms considered, filtering-first, the tau policy, the `min_booms`
 floor, and the fit method) live in one place here, driven by
-`[tertiary.fits]`.
+`[tertiary.fits]` - and the boundary- and surface-layer heights estimated
+from the momentum and buoyancy flux profiles.
 """
 import numpy as np
 import pandas as pd
@@ -138,6 +139,73 @@ def variant_profiles(boom_final: pd.DataFrame, tau_selected: pd.DataFrame, varia
     rows += _second_moment_power_rows(boom_final, tau_selected, variant, "wdgamma", "wd", "std",
                                       cfg_fits.wdgamma_booms, cfg_fits)
     rows += _loglaw_constrained_rows(boom_final, tau_selected, variant, cfg_fits)
+    return pd.DataFrame(rows, columns=_PROFILE_COLUMNS)
+
+
+def _first_crossing(heights: np.ndarray, flux: np.ndarray, z_sfc: float, f_sfc: float, met, target) -> float:
+    """Height where `flux` first meets `met`, scanning up from the surface
+    boom: linear in height between that boom and the valid one below it (the
+    surface boom for the first), at the value `target(flux there)`. NaN
+    booms are skipped; NaN if no boom meets it.
+    """
+    z_prev, f_prev = z_sfc, f_sfc
+    for z, f in zip(heights, flux):
+        if not np.isfinite(f):
+            continue
+        if met(f):
+            return float(z_prev + (target(f) - f_prev) / (f - f_prev) * (z - z_prev))
+        z_prev, f_prev = z, f
+    return float("nan")
+
+
+def _bl_height(heights, flux, z_sfc, f_sfc, fraction) -> float:
+    if not (np.isfinite(f_sfc) and f_sfc > 0):
+        return float("nan")
+    limit = fraction * f_sfc
+    return _first_crossing(heights, flux, z_sfc, f_sfc, lambda f: f <= limit, lambda f: limit)
+
+
+def _sl_height(heights, flux, z_sfc, f_sfc, deviation) -> float:
+    if not (np.isfinite(f_sfc) and f_sfc != 0):
+        return float("nan")
+    d = deviation * abs(f_sfc)
+    return _first_crossing(heights, flux, z_sfc, f_sfc, lambda f: abs(f - f_sfc) >= d,
+                           lambda f: f_sfc + np.sign(f - f_sfc) * d)
+
+
+def flux_heights(boom_final: pd.DataFrame, tau_selected: pd.DataFrame, booms: list[int], cfg_tertiary,
+                 variants=_SECOND_MOMENT_VARIANTS) -> pd.DataFrame:
+    """Per slot and variant, heights from the flux profiles relative to the
+    `sfc_boom` fluxes, searching the booms above it (except
+    `exempt_flux_height_booms`), lowest first: `h_bl_momt` where u*² falls to
+    `h_bl_momt_fraction` of the surface value, `h_sl_momt` / `h_sl_buoy`
+    where u*² / `buoyancy_flux` first deviates from it by `h_sl_deviation` of
+    its magnitude. Booms filtered or excluded by the τ policy are skipped.
+    """
+    sfc = cfg_tertiary.sfc_boom
+    above = sorted((b for b in booms if HEIGHTS[b] > HEIGHTS[sfc] and b not in cfg_tertiary.exempt_flux_height_booms),
+                   key=HEIGHTS.get)
+    columns = [sfc] + above
+    heights = np.array([HEIGHTS[b] for b in above], dtype=float)
+    z_sfc = HEIGHTS[sfc]
+    rows = []
+    for variant in variants:
+        excluded = _excluded_booms(tau_selected, variant, cfg_tertiary.fits.exclude_tau)
+        momt = _wide(boom_final, variant, "ustar") ** 2
+        buoy = _wide(boom_final, variant, "buoyancy_flux")
+        slots = momt.index.union(buoy.index)
+        momt = _mask_excluded(momt.reindex(slots), columns, excluded)
+        buoy = _mask_excluded(buoy.reindex(slots), columns, excluded)
+        if sfc not in booms:
+            momt[:], buoy[:] = np.nan, np.nan
+        for slot in slots:
+            m, b = momt.loc[slot].to_numpy(dtype=float), buoy.loc[slot].to_numpy(dtype=float)
+            rows.append((slot, variant, "h_bl_momt", _bl_height(heights, m[1:], z_sfc, m[0],
+                                                                cfg_tertiary.h_bl_momt_fraction)))
+            rows.append((slot, variant, "h_sl_momt", _sl_height(heights, m[1:], z_sfc, m[0],
+                                                                cfg_tertiary.h_sl_deviation)))
+            rows.append((slot, variant, "h_sl_buoy", _sl_height(heights, b[1:], z_sfc, b[0],
+                                                                cfg_tertiary.h_sl_deviation)))
     return pd.DataFrame(rows, columns=_PROFILE_COLUMNS)
 
 

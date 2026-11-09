@@ -134,16 +134,18 @@ def _short_flag(its_values: list[float], tau_s: float, blocks_used: float, min_r
 
 def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame, cfg) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Every scalar derived quantity (TI, TKE, u*, L, zeta, theta*, the
-    Businger-Dyer functions, MOST N^2, ILS, corrected ITS/ILS, ITS ratios and
-    the anisotropy tensor/class) from `stats` (ladder rows at the selected
+    buoyancy and heat fluxes, the Businger-Dyer functions, ILS, corrected ITS/ILS, ITS
+    ratios and the anisotropy tensor/map position/class) from `stats` (ladder rows at the selected
     rung, pressure-converted, from `selected_stats`), the selected tau (for
     the ITS ratios) and `slow` (t/rh/p thermodynamics, for the slow-sensor vpt
-    `obukhov_length` needs).
+    `obukhov_length` and `buoyancy_flux` need, and the t/vt `wpt` needs).
     """
     if stats.empty:
         return pd.DataFrame(columns=_STATS_TABLE_COLUMNS), pd.DataFrame(columns=_BOOM_LABELS_COLUMNS)
 
     vpt_by_group = slow[slow["variable"] == "vpt"].set_index(["slot", "boom"])["value"]
+    t_by_group = slow[slow["variable"] == "t"].set_index(["slot", "boom"])["value"]
+    vt_by_group = slow[slow["variable"] == "vt"].set_index(["slot", "boom"])["value"]
     tau_by_group = tau_selected.set_index(["slot", "boom", "variant"])["tau_s"]
 
     wide = stats.copy()
@@ -178,6 +180,9 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             ustar = most.friction_velocity(cov_uw, cov_vw)
             vpt_slow = vpt_by_group.get((slot, boom), np.nan)
             obukhov_length = most.obukhov_length(ustar, vpt_slow, wvpts_cov, gravity=_GRAVITY[boom])
+            buoyancy_flux = most.buoyancy_flux(vpt_slow, wvpts_cov, gravity=_GRAVITY[boom]) if vpt_slow else np.nan
+            vt_slow = vt_by_group.get((slot, boom), np.nan)
+            wpt = wvpts_cov * t_by_group.get((slot, boom), np.nan) / vt_slow if vt_slow else np.nan
             zeta = HEIGHTS[boom] / obukhov_length if obukhov_length else np.nan
             theta_star = most.temperature_scale(ustar, wvpts_cov) if ustar else np.nan
             phi_m_bd, phi_h_bd = most.businger_dyer_phi_m(zeta), most.businger_dyer_phi_h(zeta)
@@ -208,6 +213,7 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             "ti_ratio_vu": ti_ratio_vu, "ti_ratio_wu": ti_ratio_wu,
             "tke": tke, "ctke": ctke, "ustar": ustar,
             "obukhov_length": obukhov_length, "zeta": zeta, "theta_star": theta_star,
+            "buoyancy_flux": buoyancy_flux, "wpt": wpt,
             "phi_m_bd": phi_m_bd, "phi_h_bd": phi_h_bd, "psi_m_bd": psi_m_bd, "psi_h_bd": psi_h_bd,
             "ils_u": ils_u, "ils_v": ils_v, "ils_w": ils_w, "ils_vpts": ils_vpts,
             "its_corr_u": its_corr_u, "its_corr_v": its_corr_v, "its_corr_w": its_corr_w,
@@ -219,7 +225,7 @@ def derived(stats: pd.DataFrame, tau_selected: pd.DataFrame, slow: pd.DataFrame,
             "its_ratio_w": its_ratio_w, "its_ratio_vpts": its_ratio_vpts,
             "its_short": its_short, "its_short_vpts": its_short_vpts,
             "aniso_l1": a.l1, "aniso_l2": a.l2, "aniso_l3": a.l3,
-            "aniso_beta": a.beta, "aniso_phi": a.phi,
+            "aniso_beta": a.beta, "aniso_phi": a.phi, "aniso_x": a.x, "aniso_y": a.y,
             "w_ratio": w_ratio,
         }
         for variable, value in values.items():

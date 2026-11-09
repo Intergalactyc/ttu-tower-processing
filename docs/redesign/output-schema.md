@@ -348,6 +348,8 @@ It contains:
 | `obukhov_length` | −u*³ θv / (κ g w'θv'), θv = slow-sensor VPT, g = local gravity, κ = 0.41 |
 | `zeta` | z / L |
 | `theta_star` | θ* = −w'θv'/u\* (K), positive when stable |
+| `buoyancy_flux` | Kinematic buoyancy flux w'b' = (g/θv) w'θv' (m²/s³), θv = slow-sensor VPT, g = local gravity |
+| `wpt` | Heat flux w'θ' ≈ w'θv' · T/Tv (K m/s), T and Tv the slow-sensor slot means: the virtual correction removed. Output only; nothing else uses it |
 | `phi_m_bd`, `phi_h_bd` | Businger-Dyer φm(ζ), φh(ζ) (Dyer 1974: α = 5, β = 16; φh = φm² when unstable) |
 | `psi_m_bd`, `psi_h_bd` | Their integrated forms ψm(ζ), ψh(ζ) (Paulson 1970) |
 | `ils_u`, `ils_v`, `ils_w`, `ils_vpts` | ITS × (u mean), with \|u mean\| for v, w and vpts |
@@ -359,6 +361,7 @@ It contains:
 | `its_short_vpts` | the same for vpts, kept separate so that a long temperature scale doesn't discredit the velocity scales |
 | `aniso_l1`, `aniso_l2`, `aniso_l3` | Eigenvalues of b_ij = R_ij/(2k) − δ_ij/3, in descending order |
 | `aniso_beta`, `aniso_phi` | Inclination and orientation angles (deg), after Gucci et al. (2025), ported |
+| `aniso_x`, `aniso_y` | Barycentric-map position (Banerjee et al. 2007): x = c₂ + c₃/2, y = (√3/2)c₃ with c₂ = 2(λ2 − λ3), c₃ = 3λ3 + 1; 1C at (0, 0), 2C at (1, 0), 3C at (1/2, √3/2) |
 | `w_ratio` | w mean / ws mean (tilt diagnostic) |
 
 A zero denominator gives NaN, never inf.
@@ -482,6 +485,18 @@ Columns: `slot`, `slot_start`, `variant`, `variable`, `value`.
 | `loglaw_ustar`, `loglaw_z0`, `loglaw_n` | none | Unconstrained neutral log-law fit on `loglaw_booms` ws means; `loglaw_n` is the boom count shared by both (one fit produces both values, so there's one count, not two). |
 | `loglaw_z0_constrained`, `loglaw_z0_constrained_n`, `loglaw_z0_constrained_n_capped` | mrd / naive / mrd_unexcised | z0 with u* fixed at the median of that variant's `ustar` over `loglaw_booms`; booms used; how many had a `capped` τ - same τ-policy treatment as gamma/wdgamma. |
 
+| `h_bl_momt` | mrd / naive / mrd_unexcised | Boundary-layer height (m): where u*² (= \|τ\|, the horizontal Reynolds-stress magnitude) first falls to ≤ `h_bl_momt_fraction` (5%) of the surface boom's. |
+| `h_sl_momt`, `h_sl_buoy` | mrd / naive / mrd_unexcised | Constant-flux (surface) layer height (m) from u*² / `buoyancy_flux`: where the flux first deviates from the surface boom's by ≥ `h_sl_deviation` (10%) of its magnitude. |
+
+**Flux-profile heights** (`h_*`). The surface value is `sfc_boom`'s (default 3). The booms above
+it, except `exempt_flux_height_booms`, are searched from the lowest up; the first boom meeting
+the criterion gives a height interpolated linearly in z between it and the searched boom below
+it (`sfc_boom` for the first), at the flux value that exactly meets the criterion. An exempt
+boom is never searched or interpolated from, and the same goes for a boom whose value was
+filtered or excluded by the τ policy (rule 3 below, with `exclude_tau`). NaN when no boom meets
+the criterion, when the surface value is missing (or `sfc_boom` isn't run), or when it is zero
+(non-positive for `h_bl_momt`), since a relative criterion is then undefined.
+
 **Profile-fit rules.** These are all of them. Each is configurable in `[tertiary.fits]`
 (config-reference.md):
 1. **Booms considered:** `alpha_booms`, `gamma_booms`, `wdgamma_booms`, `loglaw_booms`.
@@ -519,7 +534,7 @@ Only failures are stored. Every quantity belongs to one group, defined by its in
 | group | Input variables | Required families | Quantities |
 |---|---|---|---|
 | `momentum` | ue, vn, w | momentum | wind means, gusts, u/v/w and uv/uw/vw statistics, ws/wd statistics, the velocity ITS/ILS and their ratios, `its_short`, ustar, TI, TKE, anisotropy, `uw` te, w_ratio |
-| `heat` | ue, vn, w, ts | heat, momentum | wvpts cov/te, obukhov_length, zeta, ils_vpts (a ts quantity scaled by the mean wind) |
+| `heat` | ue, vn, w, ts | heat, momentum | wvpts cov/te, obukhov_length, zeta, buoyancy_flux, wpt, ils_vpts (a ts quantity scaled by the mean wind) |
 | `ts` | ts | ts | ts and vpts statistics and means, including the ITS of vpts, `its_ratio_vpts` and `its_short_vpts`; `p_factor`, `p_measured` (they travel with the vpts values they converted) |
 | `t`, `rh`, `p` | itself | that variable | the slow mean |
 | `vpt` | t, rh, p | t, rh, p | es, e, r, q, td, pt, vt, vpt |

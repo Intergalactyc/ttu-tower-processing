@@ -29,6 +29,11 @@ def obukhov_length(u_star, vpt, vpt_flux, gravity: float = STANDARD_GRAVITY):
     return -(u_star**3) * vpt / (KAPPA * gravity * vpt_flux)
 
 
+def buoyancy_flux(vpt, vpt_flux, gravity: float = STANDARD_GRAVITY):
+    """Kinematic buoyancy flux w'b' (m²/s³) = (g/θv) w'θv'."""
+    return gravity / vpt * vpt_flux
+
+
 def temperature_scale(u_star, vpt_flux):
     """theta* (K) = -w'theta_v'/u*, positive when stable."""
     return -vpt_flux / u_star

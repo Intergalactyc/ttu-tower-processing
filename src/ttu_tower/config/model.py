@@ -155,6 +155,10 @@ class TertiaryConfig:
     max_bounds_fraction: dict[str, float]  # per input variable (ue, vn, w, ts, t, rh, p)
     max_spike_fraction: dict[str, float]
     veer_reference_boom: int
+    sfc_boom: int  # the surface fluxes the flux-profile heights compare against
+    exempt_flux_height_booms: tuple[int, ...]  # never searched for a flux-profile height
+    h_bl_momt_fraction: float  # h_bl_momt: local u*² at most this fraction of the surface u*²
+    h_sl_deviation: float  # h_sl_*: flux deviating from the surface value by at least this fraction
     fits: FitsConfig
     gradients: GradientsConfig
 

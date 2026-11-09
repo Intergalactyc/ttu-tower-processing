@@ -82,6 +82,10 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.tertiary.max_bounds_fraction == limits
     assert cfg.tertiary.max_spike_fraction == limits
     assert cfg.tertiary.veer_reference_boom == 4
+    assert cfg.tertiary.sfc_boom == 3
+    assert cfg.tertiary.exempt_flux_height_booms == ()
+    assert cfg.tertiary.h_bl_momt_fraction == 0.05
+    assert cfg.tertiary.h_sl_deviation == 0.10
     assert cfg.tertiary.fits.exclude_tau == ("unresolved", "fallback")
     assert cfg.tertiary.fits.min_booms == 2
     assert cfg.tertiary.fits.alpha_booms == tuple(range(1, 11))
@@ -304,6 +308,20 @@ def test_cross_key_veer_reference_boom_must_be_in_booms():
     raw["files"] = {"bad_records": [[1, 2]], "booms": [1, 2, 3]}
     raw["tertiary"] = {"veer_reference_boom": 5}
     with pytest.raises(ConfigError, match="veer_reference_boom"):
+        config_from_dict(raw, default_tag="t")
+
+
+def test_exempt_flux_height_booms_must_not_contain_sfc_boom():
+    raw = _minimal_raw()
+    raw["tertiary"] = {"sfc_boom": 2, "exempt_flux_height_booms": [2, 5]}
+    with pytest.raises(ConfigError, match="exempt_flux_height_booms"):
+        config_from_dict(raw, default_tag="t")
+
+
+def test_sfc_boom_must_be_a_tower_boom():
+    raw = _minimal_raw()
+    raw["tertiary"] = {"sfc_boom": 11}
+    with pytest.raises(ConfigError, match="sfc_boom"):
         config_from_dict(raw, default_tag="t")
 
 

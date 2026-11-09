@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from ttu_tower.viewer import find
+from ttu_tower.viewer import find, search
 from ttu_tower.viewer.timeaxis import format_slot
 from ttu_tower.viewer.ui import tables, variant_combo
 
@@ -25,8 +25,11 @@ class NamesDialog(QDialog):
 
     chosen = Signal(str)
 
-    def __init__(self, known: dict, parent=None):
+    def __init__(self, known: dict, catalog=None, parent=None):
         super().__init__(parent)
+        self._terms = [search.terms(n.name, n.description)
+                       + (f"|{search.quantity_terms(catalog[n.key])}" if catalog is not None and n.key else "")
+                       for n in known.values()]
         self.setWindowTitle("Find: column names")
         self.resize(640, 600)
         self.search = QLineEdit()
@@ -44,10 +47,9 @@ class NamesDialog(QDialog):
         layout.addWidget(self.table)
 
     def _filter(self, text: str) -> None:
-        text = text.lower().strip()
+        query = search.Query(text)
         for row in range(self.table.rowCount()):
-            line = " ".join(self.table.item(row, c).text() for c in range(2)).lower()
-            self.table.setRowHidden(row, bool(text) and text not in line)
+            self.table.setRowHidden(row, bool(query) and not query.matches(self._terms[row]))
 
 
 class FindPanel(QWidget):
@@ -147,7 +149,7 @@ class FindPanel(QWidget):
         ctx = self.context()
         if ctx is None or ctx["catalog"] is None:
             return
-        dialog = NamesDialog(find.names(ctx["catalog"]), self)
+        dialog = NamesDialog(find.names(ctx["catalog"]), ctx["catalog"], self)
         dialog.chosen.connect(self.query.insert)
         dialog.show()
 

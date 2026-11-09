@@ -451,11 +451,24 @@ def _parse_tertiary(d: dict, path: str) -> TertiaryConfig:
     max_bounds_fraction = _pop_fraction_dict(d, "max_bounds_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
     max_spike_fraction = _pop_fraction_dict(d, "max_spike_fraction", _MAX_FLAG_FRACTION_DEFAULT, path)
     veer_reference_boom = _pop_number(d, "veer_reference_boom", 4, path, kind=int)
+    sfc_boom = _pop_number(d, "sfc_boom", 3, path, kind=int)
+    if sfc_boom not in ALL_BOOMS:
+        _err(f"{path}.sfc_boom", f"must be one of {ALL_BOOMS}")
+    exempt = _pop_int_list(d, "exempt_flux_height_booms", (), path)
+    if not set(exempt) <= set(ALL_BOOMS):
+        _err(f"{path}.exempt_flux_height_booms", f"must be a subset of {ALL_BOOMS}")
+    if sfc_boom in exempt:
+        _err(f"{path}.exempt_flux_height_booms", "must not contain sfc_boom")
+    h_bl_momt_fraction = _pop_number(d, "h_bl_momt_fraction", 0.05, path, min_=0, min_incl=False, max_=1,
+                                     max_incl=False)
+    h_sl_deviation = _pop_number(d, "h_sl_deviation", 0.10, path, min_=0, min_incl=False)
     fits = _parse_fits(_section(d, "fits", path), f"{path}.fits")
     gradients = _parse_gradients(_section(d, "gradients", path), f"{path}.gradients")
     _check_unknown(d, path)
     return TertiaryConfig(min_coverage=min_coverage, max_bounds_fraction=max_bounds_fraction,
                            max_spike_fraction=max_spike_fraction, veer_reference_boom=veer_reference_boom,
+                           sfc_boom=sfc_boom, exempt_flux_height_booms=exempt,
+                           h_bl_momt_fraction=h_bl_momt_fraction, h_sl_deviation=h_sl_deviation,
                            fits=fits, gradients=gradients)
 
 

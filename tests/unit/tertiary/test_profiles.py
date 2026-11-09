@@ -7,7 +7,7 @@ import pytest
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.math.fits import power_fit
 from ttu_tower.physics.most import constrained_neutral_loglaw_fit, neutral_loglaw_fit
-from ttu_tower.tertiary.profiles import profiles
+from ttu_tower.tertiary.profiles import flux_heights, profiles
 
 _SLOT = 7
 _BOOMS = [1, 2, 3, 4]
@@ -167,3 +167,68 @@ def test_loglaw_unconstrained_reports_a_single_shared_n():
     result = profiles(boom_final, tau_selected, _FitsCfg())
 
     assert _get(result, _SLOT, "none", "loglaw_n") == 3.0
+
+
+@dataclass(frozen=True)
+class _TertiaryCfg:
+    sfc_boom: int = 1
+    exempt_flux_height_booms: tuple = ()
+    h_bl_momt_fraction: float = 0.05
+    h_sl_deviation: float = 0.10
+    fits: _FitsCfg = _FitsCfg()
+
+
+_NO_TAU = pd.DataFrame(columns=["slot", "boom", "variant", "tau_s", "source", "source_status"])
+
+
+def _flux_rows(variant, ustar_sq, buoy):
+    rows = [_stat_row(_SLOT, b, variant, "ustar", np.sqrt(v)) for b, v in ustar_sq.items()]
+    rows += [_stat_row(_SLOT, b, variant, "buoyancy_flux", v) for b, v in buoy.items()]
+    return pd.DataFrame(rows)
+
+
+def test_flux_heights_skip_exempt_boom_and_interpolate_from_the_one_below():
+    ustar_sq = {1: 1.0, 2: 0.98, 3: 0.0, 4: 0.5, 5: 0.02}  # boom 3 would trigger both, but is exempt
+    buoy = {1: -0.002, 2: -0.0021, 3: 0.0, 4: -0.0019, 5: -0.0015}
+    boom_final = _flux_rows("mrd", ustar_sq, buoy)
+    cfg = _TertiaryCfg(exempt_flux_height_booms=(3,))
+
+    result = flux_heights(boom_final, _NO_TAU, [1, 2, 3, 4, 5], cfg, variants=("mrd",))
+
+    z2, z4, z5 = HEIGHTS[2], HEIGHTS[4], HEIGHTS[5]
+    assert _get(result, _SLOT, "mrd", "h_sl_momt") == pytest.approx(z2 + (0.9 - 0.98) / (0.5 - 0.98) * (z4 - z2))
+    assert _get(result, _SLOT, "mrd", "h_bl_momt") == pytest.approx(z4 + (0.05 - 0.5) / (0.02 - 0.5) * (z5 - z4))
+    assert _get(result, _SLOT, "mrd", "h_sl_buoy") == pytest.approx(z4 + 0.25 * (z5 - z4))
+
+
+def test_flux_heights_nan_when_unmet_or_no_surface_value_and_skip_filtered_booms():
+    ustar_sq = {1: 1.0, 2: np.nan, 3: 0.5, 4: 0.3}  # boom 2 filtered: interpolate 1 -> 3
+    buoy = {1: np.nan, 2: 0.01, 3: 0.02, 4: 0.03}  # no surface value
+    boom_final = _flux_rows("mrd", ustar_sq, buoy)
+
+    result = flux_heights(boom_final, _NO_TAU, _BOOMS, _TertiaryCfg(), variants=("mrd",))
+
+    z1, z3 = HEIGHTS[1], HEIGHTS[3]
+    assert _get(result, _SLOT, "mrd", "h_sl_momt") == pytest.approx(z1 + (0.9 - 1.0) / (0.5 - 1.0) * (z3 - z1))
+    assert np.isnan(_get(result, _SLOT, "mrd", "h_bl_momt"))  # never falls to 5%
+    assert np.isnan(_get(result, _SLOT, "mrd", "h_sl_buoy"))
+
+
+def test_flux_heights_apply_the_tau_policy_to_mrd_but_not_naive():
+    ustar_sq = {1: 1.0, 2: 0.5, 3: 0.4, 4: 0.3}
+    buoy = {1: 0.01, 2: 0.01, 3: 0.01, 4: 0.01}
+    boom_final = pd.concat([_flux_rows("mrd", ustar_sq, buoy), _flux_rows("naive", ustar_sq, buoy)],
+                           ignore_index=True)
+    tau_selected = pd.DataFrame([_tau_row(_SLOT, 2, "mrd", "unresolved")])
+
+    result = flux_heights(boom_final, tau_selected, _BOOMS, _TertiaryCfg(), variants=("mrd", "naive"))
+
+    z1, z2, z3 = HEIGHTS[1], HEIGHTS[2], HEIGHTS[3]
+    assert _get(result, _SLOT, "naive", "h_sl_momt") == pytest.approx(z1 + (0.9 - 1.0) / (0.5 - 1.0) * (z2 - z1))
+    assert _get(result, _SLOT, "mrd", "h_sl_momt") == pytest.approx(z1 + (0.9 - 1.0) / (0.4 - 1.0) * (z3 - z1))
+
+
+def test_flux_heights_all_nan_when_sfc_boom_not_in_run():
+    boom_final = _flux_rows("mrd", {2: 1.0, 3: 0.01}, {2: 0.01, 3: 0.03})
+    result = flux_heights(boom_final, _NO_TAU, [2, 3], _TertiaryCfg(), variants=("mrd",))
+    assert result["value"].isna().all() and len(result) == 3

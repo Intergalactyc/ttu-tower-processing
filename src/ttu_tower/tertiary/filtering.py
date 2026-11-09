@@ -33,11 +33,12 @@ QUANTITY_GROUPS: dict[str, str] = {
     "its_ratio_u": "momentum", "its_ratio_v": "momentum", "its_ratio_w": "momentum",
     "its_short": "momentum",
     "aniso_l1": "momentum", "aniso_l2": "momentum", "aniso_l3": "momentum",
-    "aniso_beta": "momentum", "aniso_phi": "momentum", "w_ratio": "momentum",
+    "aniso_beta": "momentum", "aniso_phi": "momentum", "aniso_x": "momentum", "aniso_y": "momentum",
+    "w_ratio": "momentum",
     "momentum": "momentum", "its": "momentum",
     # heat family: needs both heat and momentum (obukhov_length needs ustar).
     "wvpts": "heat", "obukhov_length": "heat", "zeta": "heat", "ils_vpts": "heat", "ils_corr_vpts": "heat",
-    "theta_star": "heat", "phi_m_bd": "heat", "phi_h_bd": "heat", "psi_m_bd": "heat", "psi_h_bd": "heat",
+    "theta_star": "heat", "buoyancy_flux": "heat", "wpt": "heat","phi_m_bd": "heat", "phi_h_bd": "heat", "psi_m_bd": "heat", "psi_h_bd": "heat",
     "heat": "heat",
     # ts family: ts/vpts statistics, their ITS/ratio, and the pressure factor
     # that travels with the vpts values it converted.

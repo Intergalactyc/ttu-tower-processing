@@ -141,7 +141,7 @@ def test_circular_summary_uses_the_vector_mean():
     assert stats["N"] == 2 and stats["NaN %"] == pytest.approx(100 / 3)
     assert min(stats["mean"], 360 - stats["mean"]) < 1e-9  # 0°, not the linear 180°
     assert 0 < stats["σ"] < 15
-    assert all(np.isnan(stats[c]) for c in ("skew", "kurt", "min", "p25", "median", "p75", "max"))
+    assert all(np.isnan(stats[c]) for c in ("MAD", "skew", "kurt", "min", "p25", "median", "p75", "max"))
 
 
 def test_summary_has_moments_and_quantiles_and_an_ecdf():
@@ -154,6 +154,8 @@ def test_summary_has_moments_and_quantiles_and_an_ecdf():
     assert stats["min"] == v.min() and stats["max"] == v.max()
     assert stats["p25"] == pytest.approx(2.0 * np.log(4 / 3), rel=0.02)  # the exponential's quartiles
     assert stats["p75"] == pytest.approx(2.0 * np.log(4), rel=0.02)
+    assert stats["MAD"] == pytest.approx(2.0 * np.arcsinh(0.5), rel=0.02)  # the exponential's: β asinh(1/2)
+    assert summary(np.array([1.0, 2.0, 3.0, 4.0, 100.0]))[_STATS.index("MAD")] == 1.0  # robust to the outlier
     assert stats["min"] < stats["p5"] < stats["p25"] < stats["median"] < stats["p75"] < stats["p95"] < stats["max"]
     assert list(ecdf(np.array([1.0, 2.0, np.nan, 3.0]), np.array([0.0, 2.0, 5.0]))) == [0.0, 2 / 3, 1.0]
 

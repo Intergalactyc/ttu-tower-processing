@@ -46,19 +46,29 @@ def _centre(values: np.ndarray, method: str, circular: bool) -> tuple[float, flo
 
 
 def profile_stats(data, members, x_range, stability, method: str = "mean", by_stability: bool = False,
-                  selection: np.ndarray | None = None, classes=None) -> pd.DataFrame:
+                  selection: np.ndarray | None = None, classes=None, only_selected: bool = False,
+                  total: bool = False, with_selection: bool = False) -> pd.DataFrame:
     """One row per (group, boom): height, centre, spread and N, where group is
     "all", each stability class (or only `classes`, which may be combined
     groups such as "all stable"), or (given brushed `selection` slots) the
-    selected slots and the rest.
+    selected slots and the rest. `only_selected`: only the selected slots, by
+    stability or not; `total`: by stability, also every class together ("all",
+    or "selected" when `only_selected`); `with_selection`: over all slots, the
+    whole selection's profile beside the others.
     """
     q = data.quantity
-    if selection is not None:
-        groups = [SELECTED, REST]
-    elif not by_stability or stability is None:
-        groups = [ALL]
+    only_selected = only_selected and selection is not None
+    with_selection = with_selection and selection is not None and not only_selected
+    pool = SELECTED if only_selected else ALL
+    if by_stability and stability is not None:
+        groups = (([pool] if total else []) + ([SELECTED] if with_selection else [])
+                  + (list(classes) if classes else list(stability[1])))
+    elif with_selection:
+        groups = [ALL, SELECTED]
+    elif selection is not None:
+        groups = [SELECTED] if only_selected else [SELECTED, REST]
     else:
-        groups = list(classes) if classes else list(stability[1])
+        groups = [ALL]
     rows = []
     for m in members:
         curve = data.curves.get(m)
@@ -67,6 +77,8 @@ def profile_stats(data, members, x_range, stability, method: str = "mean", by_st
         sl = slice(None) if x_range is None else visible_slice(curve.x, x_range[0], x_range[1], margin=0)
         y, slots = curve.y[sl], curve.slots[sl]
         chosen = np.isin(slots, selection) if selection is not None else None
+        if only_selected:
+            y, slots, chosen = y[chosen], slots[chosen], chosen[chosen]
         for g in groups:
             if g == ALL:
                 v = y

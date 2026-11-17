@@ -388,6 +388,20 @@ def test_one_events_slots_can_be_brushed_from_the_list_or_the_event_tab(window):
     assert sorted(window.selection.tolist()) == EVENT_B
 
 
+def test_select_all_brushes_every_slot_of_the_listed_events(window):
+    view = window.jets.view
+    view.events.select_event(1)
+    view.tabs.setCurrentWidget(view.single)
+    view.single.reject_button.click()  # event 1 drops out of the kept events, the list shows every event
+    view.tabs.setCurrentWidget(view.events)
+    assert not view.events.kept_only.isChecked() and view.events.select_all_button.isEnabled()
+    view.events.select_all_button.click()
+    assert sorted(window.selection.tolist()) == EVENT_A + EVENT_B
+    view.events.kept_only.setChecked(True)
+    view.events.select_all_button.click()
+    assert sorted(window.selection.tolist()) == EVENT_A  # its bridged slot too
+
+
 def test_events_are_described_by_observed_peak_and_estimated_nose(window):
     view = window.jets.view
     columns = view.events.COLUMNS
@@ -418,6 +432,19 @@ def test_zeta_is_a_profile_panel_option(window, qtbot):
     single.choices[1].setCurrentIndex(single.choices[1].findData("zeta"))
     qtbot.waitUntil(lambda: "zeta" in single.values, timeout=60_000)
     assert single.panels[1].getAxis("bottom").labelText == "ζ = z/L"
+
+
+def test_corrected_ils_are_profile_panel_options(window, qtbot):
+    view = window.jets.view
+    view.events.select_event(0)
+    view.tabs.setCurrentWidget(view.single)
+    single = view.single
+    keys = ("ils_corr_u", "ils_corr_v", "ils_corr_w", "ils_corr_vpts")
+    assert all(single.choices[1].findData(k) >= 0 for k in keys)
+    single.choices[1].setCurrentIndex(single.choices[1].findData("ils_corr_u"))
+    qtbot.waitUntil(lambda: "ils_corr_u" in single.values, timeout=60_000)
+    assert np.isfinite(single.values["ils_corr_u"].to_numpy(dtype=float)).any()
+    assert single.panels[1].getAxis("bottom").labelText == "ILS u corrected"
 
 
 def test_the_aggregate_draws_the_jet_slots_hodograph(window, qtbot):

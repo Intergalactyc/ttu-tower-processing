@@ -8,7 +8,7 @@ the screen runs off its edge) and the buttons always span the visible width.
 """
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea, QSizePolicy, QSplitter, QTabWidget, QToolButton,
     QVBoxLayout, QWidget,
@@ -182,6 +182,24 @@ class FitScroll(QScrollArea):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(widget)
         self.setWidget(holder)
+        self._inner = widget
+        holder.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.widget() and event.type() in (QEvent.Type.Resize, QEvent.Type.LayoutRequest):
+            self._floor_height()
+        return super().eventFilter(obj, event)
+
+    def _floor_height(self) -> None:
+        """Never shorter than its widget's layout needs at the width it has: a
+        word-wrapped label's minimum is one line, so wrapped onto more it would
+        push what's below it out of reach of the scroll bar.
+        """
+        holder, layout = self.widget(), self._inner.layout()
+        if layout is None or not layout.hasHeightForWidth():
+            return
+        need = layout.minimumHeightForWidth(holder.width())
+        holder.setMinimumHeight(max(need, layout.minimumSize().height()))
 
     def sizeHint(self) -> QSize:
         """At least the widget's minimum: it opens without scrolling wherever there's room."""

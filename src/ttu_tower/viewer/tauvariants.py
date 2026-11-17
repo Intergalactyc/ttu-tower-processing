@@ -22,7 +22,7 @@ import shutil
 import threading
 import time
 import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +51,8 @@ LOCAL_VARIABLES = {"zeta": "ζ, by the sign of the heat flux", "rig": "Ri_g, the
 _RETIRED_LOCAL = {"rib:layer": "rig", "rib:log": "rig"}  # saved schemes from before Ri_g
 DETECTION_FIELDS = ("peak_significance_se", "min_scale_s", "min_tau_s", "max_tau_s")
 SELECTION_FIELDS = ("rule", "priority", "fallback_tau_s")
+FAMILIES = {"both": "heat or momentum, by the selection rule", "heat": "heat only", "momentum": "momentum only"}
+_FOUND = ("found", "capped")
 _VERSION = 2  # 2: the gradient flux products (rif, phi_m, ...) in boom_final
 
 
@@ -163,6 +165,8 @@ class TauScheme:
     detection: tuple = ()  # ((field, value), ...) replacing the run's detection; () = the run's
     kernel: tuple[float, ...] = SMOOTHING
     selection: tuple = ()  # ((field, value), ...) replacing the run's selection; priority as "heat,momentum"
+    family: str = "both"  # the base selection's cospectra: "both" (the rule's pick), "heat" or "momentum" only
+    discard: bool = False  # the base selection gives no τ where its cospectrum's isn't found or capped
     classifier: str = "none"  # "none", "global" (a stability scheme) or "local" (each boom's ζ)
     stability: criteria.StabilitySpec | None = None  # global: a copy of the scheme it classifies by
     stability_source: str = ""  # what that copy was taken from
@@ -181,6 +185,8 @@ class TauScheme:
         out = []
         if self.data not in ("mrd", "mrd_unexcised"):
             out.append(f"no data {self.data!r}")
+        if self.family not in FAMILIES:
+            out.append(f"no cospectrum {self.family!r}")
         valid = set(choices())
         if any(c not in valid for c in (*self.choices, self.otherwise)):
             out.append("a class's τ isn't one of the choices")
@@ -230,11 +236,21 @@ class TauScheme:
         return self.secondary_config(cfg_secondary).detection
 
     def selection_config(self, cfg_secondary):
-        return self.secondary_config(cfg_secondary).selection
+        """The base selection's settings: the run's or the what-if's, on `family`'s cospectra only."""
+        sel = (self.secondary_config(cfg_secondary) if self.base == "whatif" else cfg_secondary).selection
+        return sel if self.family == "both" else replace(sel, priority=(self.family,))
+
+    def own_base(self) -> bool:
+        """Whether the base selection is the run's stored one exactly (no recomputation)."""
+        return self.base == "run" and self.family == "both"
 
     def describe(self) -> str:
         parts = ["unexcised" if self.data == "mrd_unexcised" else "excised"]
         parts.append("base: the run's selection" if self.base == "run" else "base: a what-if selection")
+        if self.family != "both":
+            parts.append(f"{self.family} τ only")
+        if self.discard:
+            parts.append("no τ unless found")
         if self.classifier == "none":
             if self.otherwise != "base":
                 parts.append(f"always {choice_label(self.otherwise)}")
@@ -255,6 +271,9 @@ class TauScheme:
         d["kernel"] = list(self.kernel)
         d["choices"] = list(self.choices)
         d["stability"] = self.stability.to_dict() if self.stability is not None else None
+        for k in ("family", "discard"):  # left out at their defaults: older schemes keep their digest
+            if d[k] == TauScheme.__dataclass_fields__[k].default:
+                del d[k]
         return d
 
     @classmethod
@@ -265,6 +284,7 @@ class TauScheme:
                                       for k, v in (d.get("selection") or {}).items()))
         d["kernel"] = tuple(float(w) for w in d.get("kernel", SMOOTHING))
         d["choices"] = tuple(str(c) for c in d.get("choices", ()))
+        d["discard"] = bool(d.get("discard", False))
         d["stability"] = criteria.StabilitySpec.from_dict(d["stability"]) if d.get("stability") else None
         d["local_variable"] = _RETIRED_LOCAL.get(d.get("local_variable"), d.get("local_variable", "zeta"))
         known = {f for f in cls.__dataclass_fields__}
@@ -592,6 +612,17 @@ def _whatif_rows(index, boom: int, scheme: TauScheme, cfg) -> pd.DataFrame:
                          "source_status": st[keep]}).reset_index(drop=True)
 
 
+def _discarded(base: pd.DataFrame) -> pd.DataFrame:
+    """`base` with no τ where its cospectrum's wasn't found or capped (an unresolved lower bound,
+    a fallback, or weak/no data), as secondary leaves a row with no τ.
+    """
+    out = base.copy()
+    drop = ~out["source_status"].astype(object).isin(_FOUND).to_numpy()
+    out.loc[drop, "tau_s"] = np.nan
+    out.loc[drop, ["source", "source_status"]] = "none"
+    return out
+
+
 def _local_classes(index, boom: int, scheme: TauScheme, slots: np.ndarray) -> tuple[np.ndarray, float]:
     """(class code per slot: 0 unstable, 1 neutral, 2 stable, -1 none; the |x| threshold). ζ splits the
     rest by the heat flux's sign (w'θv' > 0 unstable), Ri_g by its own (< 0 unstable).
@@ -651,8 +682,10 @@ def boom_part(job: dict) -> dict:
     if stored.empty:
         return {"rows": 0}
     slots = stored["slot"].to_numpy(np.int64)
-    base = stored if scheme.base == "run" else _whatif_rows(index, boom, scheme, cfg).set_index("slot") \
+    base = stored if scheme.own_base() else _whatif_rows(index, boom, scheme, cfg).set_index("slot") \
         .reindex(slots).reset_index()
+    if scheme.discard:
+        base = _discarded(base)
 
     threshold = None
     if scheme.classifier == "global":

@@ -22,11 +22,12 @@ from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
 from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
-_STATS = ("N", "NaN %", "mean", "σ", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
+_STATS = ("N", "NaN %", "mean", "σ", "MAD", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
 _QUANTILES = (0, 5, 25, 50, 75, 95, 100)  # min to max, as percentiles
 # column -> its label's tooltip (for a direction, _ABOUT_CIRCULAR's where it differs)
 _ABOUT = {"N": "number of values", "NaN %": "share of values missing", "mean": "mean",
-          "σ": "standard deviation", "skew": "skewness", "kurt": "kurtosis (3 for a normal)",
+          "σ": "standard deviation",
+          "MAD": "median absolute deviation, median |x − median| (unscaled: ×1.4826 ≈ σ for a normal)", "skew": "skewness", "kurt": "kurtosis (3 for a normal)",
           "min": "smallest value", "p5": "5th percentile", "p25": "25th percentile (lower quartile)",
           "median": "median", "p75": "75th percentile (upper quartile)", "p95": "95th percentile",
           "max": "largest value", "KS": "Kolmogorov–Smirnov statistic: lower fits better",
@@ -40,7 +41,7 @@ SHOW = (("both", "selection and the rest"), ("selected", "selection only"), ("al
 
 
 def summary(values: np.ndarray, circular: bool = False) -> list[float]:
-    """The _STATS columns: N, NaN %, mean, σ, skewness, kurtosis, then min, p5,
+    """The _STATS columns: N, NaN %, mean, σ, MAD, skewness, kurtosis, then min, p5,
     p25, median, p75, p95, max. For a direction: the vector mean of unit vectors
     and the Yamartino σ; the rest aren't defined.
     """
@@ -53,7 +54,9 @@ def summary(values: np.ndarray, circular: bool = False) -> list[float]:
         mean = np.degrees(np.arctan2(s, c)) % 360.0
         return [finite.size, nan_pct, mean, float(yamartino_std(s, c))] + [np.nan] * (len(_STATS) - 4)
     skew, kurt = moments(finite)
-    return [finite.size, nan_pct, finite.mean(), finite.std(), skew, kurt] + list(np.percentile(finite, _QUANTILES))
+    quantiles = np.percentile(finite, _QUANTILES)
+    mad = float(np.median(np.abs(finite - quantiles[_QUANTILES.index(50)])))
+    return [finite.size, nan_pct, finite.mean(), finite.std(), mad, skew, kurt] + list(quantiles)
 
 
 def ecdf(values: np.ndarray, x: np.ndarray) -> np.ndarray:

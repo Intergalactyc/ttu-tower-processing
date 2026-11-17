@@ -117,6 +117,7 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
     profile = pd.concat([
         profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits),
         profiles.flux_heights(boom_final, secondary["tau_selected"], cfg.files.booms, cfg.tertiary),
+        profiles.rig_heights(boom_final, cfg.files.booms, cfg.tertiary),
     ], ignore_index=True)
     tau_final = secondary["tau_selected"].copy()
 

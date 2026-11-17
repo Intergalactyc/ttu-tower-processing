@@ -8,7 +8,7 @@ computed for a run the first time it's shown, and kept.
 import pandas as pd
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
     QMessageBox, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
@@ -64,6 +64,15 @@ class TauPanel(QWidget):
         self.base.addItem("the run's selection", "run")
         self.base.addItem("a what-if of the settings below", "whatif")
         self.base.setToolTip("the τ every slot gets unless a stability class overrides it")
+        self.family = QComboBox()
+        for key, text in tv.FAMILIES.items():
+            self.family.addItem(text, key)
+        self.family.setToolTip("whose τ the base selection takes: the selection rule's pick of the heat and momentum "
+                               "cospectra, or one cospectrum's alone (where it isn't found, the rule's unresolved "
+                               "lower bound or fallback τ, unless discarded below)")
+        self.discard = QCheckBox("no τ where it isn't found")
+        self.discard.setToolTip("rows of the base selection whose cospectrum's τ isn't found or capped (unresolved, "
+                                "weak, no data, or a fallback) get no τ, and so no statistics")
         f = self.fields = {"peak_significance_se": QDoubleSpinBox(), "min_scale_s": QDoubleSpinBox(),
                            "min_tau_s": _rung_box(), "max_tau_s": _rung_box()}
         f["peak_significance_se"].setRange(0.0, 50.0)
@@ -202,6 +211,8 @@ class TauPanel(QWidget):
         basics = QFormLayout()
         basics.addRow("data", self.data)
         basics.addRow("base selection", self.base)
+        basics.addRow("τ from", self.family)
+        basics.addRow("", self.discard)
         actions = QHBoxLayout()
         actions.addWidget(self.compute_button)
         actions.addWidget(self.use_button)
@@ -224,7 +235,7 @@ class TauPanel(QWidget):
         layout.addLayout(cache)
         layout.addStretch(1)
 
-        widgets = [self.data, self.base, *f.values(), self.smoothing, self.rule, self.priority, self.fallback,
+        widgets = [self.data, self.base, self.family, *f.values(), self.smoothing, self.rule, self.priority, self.fallback,
                    self.classifier, self.local_variable, self.zeta_variant, *self.class_choices, self.otherwise]
         for w in widgets:
             signal = w.valueChanged if isinstance(w, QDoubleSpinBox) else w.currentIndexChanged
@@ -233,6 +244,7 @@ class TauPanel(QWidget):
         for w in (self.zeta0, self.percent):
             w.valueChanged.connect(lambda *_: self._edited())
         self.local_mode.buttonToggled.connect(lambda *_: self._edited())
+        self.discard.toggled.connect(lambda *_: self._edited())
         self.copy_global.clicked.connect(lambda *_: self.copy_stability())
         for box in self.findChildren(QComboBox):  # narrow docks: menus shrink rather than widen the panel
             box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -320,6 +332,7 @@ class TauPanel(QWidget):
         local = classifier == "local"
         scheme = tv.TauScheme(
             data=self.data.currentData(), base=base, detection=detection, kernel=tuple(kernel), selection=selection,
+            family=self.family.currentData(), discard=self.discard.isChecked(),
             classifier=classifier, stability=spec, stability_source=source,
             local_mode=("percent" if self.local_percent.isChecked() else "zeta0") if local else "percent",
             zeta0=self.zeta0.value() if local else 0.05, percent=self.percent.value() if local else 20.0,
@@ -336,6 +349,8 @@ class TauPanel(QWidget):
         self._quiet = True
         self.data.setCurrentIndex(max(self.data.findData(scheme.data), 0))
         self.base.setCurrentIndex(max(self.base.findData(scheme.base), 0))
+        self.family.setCurrentIndex(max(self.family.findData(scheme.family), 0))
+        self.discard.setChecked(scheme.discard)
         if scheme.base == "whatif":
             self._put_whatif(dict(scheme.detection), scheme.kernel, dict(scheme.selection))
             self._quiet = True
@@ -364,6 +379,9 @@ class TauPanel(QWidget):
             return
         classifier = self.classifier.currentData()
         self.whatif_box.setVisible(self.base.currentData() == "whatif")
+        both = self.family.currentData() == "both"
+        self.rule.setEnabled(both)  # one cospectrum: nothing to choose between
+        self.priority.setEnabled(both)
         self.global_row.setVisible(classifier == "global")
         self.global_note.setVisible(classifier == "global")
         self.local_rows.setVisible(classifier == "local")

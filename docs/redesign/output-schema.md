@@ -487,6 +487,7 @@ Columns: `slot`, `slot_start`, `variant`, `variable`, `value`.
 
 | `h_bl_momt` | mrd / naive / mrd_unexcised | Boundary-layer height (m): where u*² (= \|τ\|, the horizontal Reynolds-stress magnitude) first falls to ≤ `h_bl_momt_fraction` (5%) of the surface boom's. |
 | `h_sl_momt`, `h_sl_buoy` | mrd / naive / mrd_unexcised | Constant-flux (surface) layer height (m) from u*² / `buoyancy_flux`: where the flux first deviates from the surface boom's by ≥ `h_sl_deviation` (10%) of its magnitude. |
+| `h_bl_rig` (+ `_<stencil>`) | none | Boundary-layer height (m): where `rig` (§5.1) first reaches ≥ `h_bl_rig_critical` (0.25). One per gradient stencil, named as the `rig` it reads (`h_bl_rig`, `h_bl_rig_log`). |
 
 **Flux-profile heights** (`h_*`). The surface value is `sfc_boom`'s (default 3). The booms above
 it, except `exempt_flux_height_booms`, are searched from the lowest up; the first boom meeting
@@ -496,6 +497,15 @@ boom is never searched or interpolated from, and the same goes for a boom whose 
 filtered or excluded by the τ policy (rule 3 below, with `exclude_tau`). NaN when no boom meets
 the criterion, when the surface value is missing (or `sfc_boom` isn't run), or when it is zero
 (non-positive for `h_bl_momt`), since a relative criterion is then undefined.
+
+**Ri_g heights** (`h_bl_rig*`). Only for a stable surface layer: `rig` > 0 at every
+`h_bl_rig_stable_booms` boom (default 1–4; a NaN one fails), and the highest of them still below
+`h_bl_rig_critical`. The run's booms above them are searched from the lowest up (no `sfc_boom`
+or `exempt_flux_height_booms`), skipping booms whose `rig` is NaN; the first with `rig` ≥
+`h_bl_rig_critical` gives a height interpolated linearly in z between it and the valid boom
+below it (the highest stable boom for the first), at `rig` = `h_bl_rig_critical`. NaN when the
+stable-layer condition fails, when the highest stable boom already reaches the critical value,
+or when no searched boom does (the height is above the tower).
 
 **Profile-fit rules.** These are all of them. Each is configurable in `[tertiary.fits]`
 (config-reference.md):

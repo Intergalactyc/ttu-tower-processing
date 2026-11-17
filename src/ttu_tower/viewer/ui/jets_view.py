@@ -44,6 +44,7 @@ class EventsTable(QWidget):
     addRequested = Signal()  # an event from the brushed selection
     editsRequested = Signal()  # the list of manual edits
     selectRequested = Signal(int)  # brush this event's slots
+    selectAllRequested = Signal(list)  # brush every slot of these events
 
     COLUMNS = ("#", "source", "start", "length", "obs. peak (m)", "est. nose (m)", "obs. peak speed (m/s)",
                "est. nose speed (m/s)", "max falloff (m/s)", "dir. at peak (°)", "ΔVPT (K)", "Ri_b", "bridged",
@@ -76,12 +77,18 @@ class EventsTable(QWidget):
                                       "timelines and Summary tabs show it")
         self.select_button.setEnabled(False)
         self.select_button.clicked.connect(lambda: self._emit_selected(self.selectRequested))
+        self.select_all_button = QPushButton("Select all")
+        self.select_all_button.setToolTip("brush every slot of every event listed (the filters' kept events, or all "
+                                          "of them with the box unticked)")
+        self.select_all_button.setEnabled(False)
+        self.select_all_button.clicked.connect(lambda: self.selectAllRequested.emit(self.visible_events()))
         head = QHBoxLayout()
         head.addWidget(self.kept_only)
         head.addStretch(1)
         head.addWidget(self.count)
         buttons = QHBoxLayout()
         buttons.addWidget(self.select_button)
+        buttons.addWidget(self.select_all_button)
         buttons.addWidget(self.add_button)
         buttons.addWidget(self.edits_button)
         buttons.addStretch(1)
@@ -105,6 +112,7 @@ class EventsTable(QWidget):
         selected = self.selected_event()
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
+        self.select_all_button.setEnabled(False)
         r = self.result
         if r is None:
             self.count.setText(self.message)
@@ -175,6 +183,7 @@ class EventsTable(QWidget):
                     item.setFont(font)
                 self.table.setItem(i, j, item)
         self.table.setSortingEnabled(True)
+        self.select_all_button.setEnabled(len(table) > 0)
         if selected is not None:
             self.select_event(selected, emit=False)
 
@@ -237,6 +246,7 @@ class JetsView(QWidget):
     addRequested = Signal()
     editsRequested = Signal()
     selectRequested = Signal(int)
+    selectAllRequested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -256,6 +266,7 @@ class JetsView(QWidget):
         self.events.addRequested.connect(self.addRequested)
         self.events.editsRequested.connect(self.editsRequested)
         self.events.selectRequested.connect(self.selectRequested)
+        self.events.selectAllRequested.connect(self.selectAllRequested)
         self.single.selectRequested.connect(self.selectRequested)
         self.every_slot = QCheckBox("every slot of an event is a jet slot")
         self.every_slot.setToolTip(

@@ -8,7 +8,9 @@ typed by hand (piecewise), drawn but not fitted. A lasso
 
 A third quantity z (a panel's, any of the run's, or the boom height, which
 stacks every boom both panels have) can color the points, and is the third
-axis of the 3D view.
+axis of the 3D view. By boom height, x or y can instead stay fixed at one boom,
+paired by slot with each boom of the other, and a fit can be fitted to each
+boom's points separately (a curve per boom, the results in a table).
 """
 import html
 import itertools
@@ -19,17 +21,17 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 import shiboken6
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.viewer import brush, curvefits, expression
 from ttu_tower.viewer.timeaxis import slot_to_unix
 from ttu_tower.viewer.timeline import class_choices, in_class, joined
-from ttu_tower.viewer.ui import style
+from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
 from ttu_tower.viewer.ui.function_overlay import FunctionOverlay
 from ttu_tower.viewer.ui import variant_combo
@@ -111,6 +113,23 @@ class FitSpec:
     subset: str = "all"  # "all" the points shown, only the "selected", or all but them ("unselected")
     shown_bins: bool = True  # the bins of the plot's binned line (none while it's off), not its own
     errors: str = "y"  # least squares in "y" or "ln y" (relative), unless the curve has its own
+    per_boom: bool = False  # by boom height: fitted to each boom's points separately
+    boom_curves: bool = True  # draw every boom's curve (else only the booms picked in the table)
+
+
+@dataclass
+class PerBoomFit:
+    """A fit at each boom: its FitResult, or why it failed there."""
+    fits: dict
+
+    @property
+    def fitted(self) -> dict:
+        return {b: r for b, r in sorted(self.fits.items(), key=lambda kv: HEIGHTS[kv[0]]) if not isinstance(r, str)}
+
+    @property
+    def label(self) -> str:
+        return "\n".join(f"{style.member_label(b)}: {r if isinstance(r, str) else r.label}"
+                         for b, r in sorted(self.fits.items(), key=lambda kv: HEIGHTS[kv[0]]))
 
 
 class FitEntry:
@@ -121,6 +140,7 @@ class FitEntry:
         self.failed = None  # inputs it failed on: not retried by "auto"
         self.error = ""
         self.scores = None  # RMSE over the points shown and over the displayed bins (see `_scores`)
+        self.boom_scores = {}  # per boom: RMSE, NRMSE_IQR, r, ρ (x vs y) and N over its points shown
         self.id = next(_fit_ids)
 
 
@@ -169,12 +189,25 @@ def _fit_job(name, x, y, opts, settings=()):
         return curvefits.fit(name, x, y, opts, **dict(settings))
 
 
+def _fit_per_boom_job(name, x, y, members, opts, settings=()):
+    """Runs on a worker thread: {boom: FitResult, or the error's text}."""
+    out = {}
+    for b in np.unique(members).tolist():
+        mine = members == b
+        try:
+            out[b] = _fit_job(name, x[mine], y[mine], opts, settings)
+        except (ValueError, RuntimeError, TypeError) as exc:
+            out[b] = str(exc)
+    return out
+
+
 class ScatterView(QWidget):
     STATE_FIELDS = ("source.0", "member.0", "source.1", "member.1", "source.2", "z_quantity", "z_variant", "member.2",
+                    "boom_mode.0", "boom_mode.1",
                     "display", "color_by", "log_x", "sides.x", "log_y", "sides.y", "log_z", "sides.z", "z_map",
                     "points_shown", "ring", "only_class", "trend", "mid", "mid_method", "mid_bins", "unit", "pct.0", "pct.1",
                     "pct_show", "fit_bins", "fit_bin_method", "fit_bin_log", "fit_min_count", "fit_shown_bins",
-                    "fit_errors",
+                    "fit_errors", "fit_per_boom", "fit_boom_curves",
                     "fit_name", "fit_auto",
                     "fit_settings", "fit_subset", "fits_state", "overlay", "overlay_on",
                     "fold", "split")  # saved in a view, restored in this order
@@ -218,6 +251,13 @@ class ScatterView(QWidget):
             src.setCurrentIndex(axis)
             src.currentIndexChanged.connect(lambda *_, a=axis: self._sync_members(a))
             self.member[axis].currentIndexChanged.connect(lambda *_: self.recompute())
+        self.boom_mode = [QComboBox(), QComboBox()]  # by boom height: x's and y's boom each, or fixed
+        for axis, box in enumerate(self.boom_mode):
+            box.addItem("each boom", "each")
+            box.addItem("fixed at", "fixed")
+            box.setToolTip(f"by boom height: {'xy'[axis]} at each boom (the points' boom, z its height), or fixed "
+                           f"at the boom chosen beside it, paired by slot with each boom of the other axis")
+            box.currentIndexChanged.connect(lambda *_: self.recompute())
         swap = QPushButton("⇄")
         swap.setToolTip("swap x and y")
         swap.setMaximumWidth(30)
@@ -323,6 +363,27 @@ class ScatterView(QWidget):
         self.fit_errors.addItem("in y", "y")
         self.fit_errors.addItem("relative (in ln y)", "ln y")
         self.fit_errors.currentIndexChanged.connect(lambda *_: self._show_stats())
+        self.fit_per_boom = QCheckBox("fit each boom separately")
+        self.fit_per_boom.setToolTip("by boom height: a fit to each boom's points of its own (the same curve and "
+                                     "options), its results in the table below")
+        self.fit_per_boom.toggled.connect(lambda *_: (self._show_stats(), self._enable_controls()))
+        self.fit_boom_curves = QCheckBox("draw every boom's curve")
+        self.fit_boom_curves.setChecked(True)
+        self.fit_boom_curves.setToolTip("every boom's fitted curve, in its boom's color; untick to draw only the "
+                                        "booms picked in the table")
+        self.fit_boom_curves.toggled.connect(lambda *_: self._on_boom_curves())
+        self.copy_booms = QPushButton("copy table")
+        self.copy_booms.setToolTip("the per-boom results, tab-separated, for a spreadsheet")
+        self.copy_booms.clicked.connect(lambda *_: self.copy_boom_table())
+        self.boom_table = tables.new_table()
+        self.boom_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.boom_table.setToolTip("the fit at each boom; pick rows to draw only those booms' curves (with "
+                                   "\"draw every boom's curve\" off)")
+        self.boom_table.itemSelectionChanged.connect(self._on_boom_pick)
+        self.boom_table.hide()
+        self._boom_frame = None  # the table's contents, for copying
+        self._boom_rows: list = []  # the boom in each row
+        self.boom_pick: set = set()  # the booms picked in the table
         for w in (self.fit_name, self.fit_bin_method):
             w.currentIndexChanged.connect(lambda *_: (self._show_stats(), self._enable_controls()))
         for w in (*self.pct, self.fit_bins, self.fit_min_count):
@@ -393,10 +454,14 @@ class ScatterView(QWidget):
         for row, label in enumerate(("x", "y", "z")):
             axes.addWidget(QLabel(label), row, 0)
             axes.addWidget(self.source[row], row, 1)
-            axes.addWidget(self.member[row], row, 2)
-        axes.addWidget(self.z_pick, 3, 1, 1, 2)
-        axes.addWidget(swap, 0, 3, 2, 1)
-        axes.setColumnStretch(2, 1)
+            if row < 2:
+                axes.addWidget(self.boom_mode[row], row, 2)
+                axes.addWidget(self.member[row], row, 3)
+            else:
+                axes.addWidget(self.member[row], row, 2, 1, 2)
+        axes.addWidget(self.z_pick, 3, 1, 1, 3)
+        axes.addWidget(swap, 0, 4, 2, 1)
+        axes.setColumnStretch(3, 1)
         look = QHBoxLayout()
         for w in (self.display, self.color_by, self.log_x, self.sides["x"], self.log_y, self.sides["y"]):
             look.addWidget(w)
@@ -450,8 +515,15 @@ class ScatterView(QWidget):
         bin_row.addWidget(QLabel("min per bin"))
         bin_row.addWidget(self.fit_min_count)
         form.addRow("bins", bin_row)
+        boom_row = QHBoxLayout()
+        boom_row.addWidget(self.fit_per_boom)
+        boom_row.addWidget(self.fit_boom_curves)
+        boom_row.addStretch(1)
+        boom_row.addWidget(self.copy_booms)
+        form.addRow("per boom", boom_row)
         form.addRow(self.fit_settings_row)
         form.addRow(self.fit_status)
+        form.addRow(self.boom_table)
         self.overlay_on = QCheckBox("overlay a function (drawn, not fitted)")
         self.overlay_on.setToolTip("draw y(x) typed by hand, in pieces over x ranges if need be; in the values "
                                    "plotted (−x where a log axis shows the negative side)")
@@ -528,6 +600,10 @@ class ScatterView(QWidget):
     def by_height(self) -> bool:
         return self.source[2].currentData() == HEIGHT
 
+    def boom_fixed(self, axis: int) -> bool:
+        """By boom height, x's (0) or y's (1) boom fixed at its member rather than each boom."""
+        return axis < 2 and self.by_height() and self.boom_mode[axis].currentData() == "fixed"
+
     def _sync_members(self, axis: int, recompute: bool = True) -> None:
         box, data = self.member[axis], self._data(axis)
         current = box.currentData()
@@ -600,15 +676,22 @@ class ScatterView(QWidget):
 
     def _stacked(self, dx, dy):
         """(slots, x, y, booms): every boom both panels have, one after another;
-        a slot quantity's value is at every boom. None where neither is per boom.
+        a slot quantity's value is at every boom. A fixed axis (`boom_fixed`) is its one
+        member at every boom of the other, paired by slot. None where none that varies is per boom.
         """
-        kinds = (dx.quantity.kind, dy.quantity.kind)
+        datas, fixed = (dx, dy), [self.boom_fixed(a) for a in (0, 1)]
+        kinds = [d.quantity.kind for d, f in zip(datas, fixed) if not f]
         if "pair" in kinds or "boom" not in kinds:
             return None
-        sets = [set(d.curves) for d in (dx, dy) if d.quantity.kind == "boom"]
+        sets = [set(d.curves) for d, f in zip(datas, fixed) if not f and d.quantity.kind == "boom"]
+        held = [datas[a].curves.get(self.member[a].currentData()) if fixed[a] else None for a in (0, 1)]
+        booms = sorted(set.intersection(*sets))
+        if any(f and h is None for f, h in zip(fixed, held)):
+            booms = []
         parts = []
-        for b in sorted(set.intersection(*sets)):
-            cx, cy = (d.curves[b] if d.quantity.kind == "boom" else next(iter(d.curves.values())) for d in (dx, dy))
+        for b in booms:
+            cx, cy = (held[a] if fixed[a] else d.curves[b] if d.quantity.kind == "boom"
+                      else next(iter(d.curves.values())) for a, d in enumerate(datas))
             slots, x, y = joined(cx, cy)
             parts.append((slots, x, y, np.full(slots.size, b)))
         if not parts:
@@ -618,7 +701,8 @@ class ScatterView(QWidget):
     def _swap(self) -> None:
         a, b = self.source[0].currentIndex(), self.source[1].currentIndex()
         ma, mb = self.member[0].currentData(), self.member[1].currentData()
-        for w in self.source + self.member:
+        fa, fb = self.boom_mode[0].currentIndex(), self.boom_mode[1].currentIndex()
+        for w in self.source + self.member + self.boom_mode:
             w.blockSignals(True)
         self.source[0].setCurrentIndex(b)
         self.source[1].setCurrentIndex(a)
@@ -626,7 +710,9 @@ class ScatterView(QWidget):
         self._sync_members(1, recompute=False)
         self.member[0].setCurrentIndex(max(self.member[0].findData(mb), 0))
         self.member[1].setCurrentIndex(max(self.member[1].findData(ma), 0))
-        for w in self.source + self.member:
+        self.boom_mode[0].setCurrentIndex(fb)
+        self.boom_mode[1].setCurrentIndex(fa)
+        for w in self.source + self.member + self.boom_mode:
             w.blockSignals(False)
         self.recompute()
 
@@ -645,8 +731,13 @@ class ScatterView(QWidget):
         members = None
         if self.by_height():
             stacked = self._stacked(dx, dy)
-            if stacked is None:
+            if self.boom_fixed(0) and self.boom_fixed(1):
+                self.empty_reason = "by boom height, x's or y's boom must vary (both are fixed)"
+            elif stacked is None and (self.boom_fixed(0) or self.boom_fixed(1)):
+                self.empty_reason = "by boom height, the axis whose boom varies needs a quantity per boom"
+            elif stacked is None:
                 self.empty_reason = "z = boom height needs x or y per boom (and neither per boom pair)"
+            if stacked is None:
                 self.redraw()
                 return
             slots, x, y, members = stacked
@@ -764,13 +855,14 @@ class ScatterView(QWidget):
     def axis_title(self, axis: int) -> str:
         """x, y or z as plotted (−q on a log axis's negative side)."""
         if axis == 2 and self.by_height():
-            return "height [m]"
+            fixed = [a for a in (0, 1) if self.boom_fixed(a)]
+            return f"height of {'yx'[fixed[0]]}'s boom [m]" if len(fixed) == 1 else "height [m]"
         data = self._data(axis)
         if data is None:
             return ""
         name = "xyz"[axis]
         minus = "−" if self.sign(name) < 0 else ""
-        member = "each boom" if self.by_height() else self.member[axis].currentText()
+        member = "each boom" if self.by_height() and not self.boom_fixed(axis) else self.member[axis].currentText()
         side = self.side(name)
         only = f" ({'>' if side > 0 else '<'} 0 only)" if side and not self._log_box(name).isChecked() else ""
         return f"{minus}{data.quantity.title} · {member}{only}"
@@ -791,9 +883,14 @@ class ScatterView(QWidget):
         self.color_by.model().item(2).setEnabled(self.has_z())
         z_source = self.source[2].currentData()
         self.z_pick.setVisible(z_source == 2)
-        for box in self.member:
-            box.setEnabled(not self.by_height())
-            box.setToolTip("by boom height: every boom both panels have" if self.by_height() else "")
+        one_fixed = self.boom_fixed(0) or self.boom_fixed(1)
+        for axis, box in enumerate(self.member):
+            each = self.by_height() and not self.boom_fixed(axis)
+            box.setEnabled(not each)
+            box.setToolTip(("by boom height: every boom this panel has" if one_fixed else
+                            "by boom height: every boom both panels have") if each else "")
+        for box in self.boom_mode:
+            box.setVisible(self.by_height())
         self.z_map.setEnabled(self.colors_by_z())
         self.z_map.model().item(1).setEnabled(not self.log_z.isChecked())
         self.view3d_button.setEnabled(self.has_z() or self.shows_3d())
@@ -820,9 +917,13 @@ class ScatterView(QWidget):
             f"{name} is always fitted in {curvefits.errors_in(name)}" if own else
             "least squares in y, or in ln y: relative errors, so each decade of y weighs alike (in y the "
             "largest y, often at the largest x, decide the fit); only positive y")
+        per_boom = self.fit_per_boom.isChecked()
+        self.fit_per_boom.setEnabled(self.by_height() or per_boom)
+        self.fit_boom_curves.setEnabled(per_boom)
+        self.copy_booms.setEnabled(self._boom_frame is not None)
         curves = self.fit_name.currentData() is not None or any(e.spec.name for e in self.fits)
         self.fit_button.setEnabled(curves and self.x.size > 1 and not self._fitting)
-        self.overlay.from_fit.setEnabled(self.fit_result is not None)
+        self.overlay.from_fit.setEnabled(self.fit_result is not None and not isinstance(self.fit_result, PerBoomFit))
         chosen = self.selection.size > 0
         for i in (1, 2):
             self.fit_subset.model().item(i).setEnabled(chosen or self.fit_subset.currentIndex() == i)
@@ -894,6 +995,9 @@ class ScatterView(QWidget):
             entry.scores = None
             if entry.result is None:
                 continue
+            if isinstance(entry.result, PerBoomFit):
+                self._draw_per_boom(i, entry, x, y, several)
+                continue
             with warnings.catch_warnings(), np.errstate(all="ignore"):
                 warnings.simplefilter("ignore")
                 entry.scores = self._scores(entry.result.func(x), y, bins,
@@ -920,6 +1024,41 @@ class ScatterView(QWidget):
         (x0, x1), (y0, y1) = (np.percentile(v, [1, 99]) for v in (vx, vy))
         pad_x, pad_y = 0.05 * (x1 - x0 or 1.0), 0.05 * (y1 - y0 or 1.0)
         self.plot.setRange(xRange=(x0 - pad_x, x1 + pad_x), yRange=(y0 - pad_y, y1 + pad_y), padding=0)
+
+    def _grid(self, lo: float, hi: float, n: int = 200) -> np.ndarray:
+        return np.geomspace(max(lo, 1e-12), hi, n) if self.log_x.isChecked() else np.linspace(lo, hi, n)
+
+    def _draw_per_boom(self, i: int, entry: "FitEntry", x, y, several: bool) -> None:
+        """A per-boom fit: each boom's curve over its own points' x span, in its boom's color
+        (every boom, or the booms picked in the table), and its scores at each point's own boom.
+        """
+        members = self._drawn_members
+        at = np.full(x.size, np.nan)
+        entry.boom_scores = {}
+        stale = entry.inputs != self._inputs_for(entry.spec)
+        picked = None if entry.spec.boom_curves else (self.boom_pick if entry is self.current_entry else set())
+        label = (f"{i + 1}. {self._describe(entry)}" if several else f"{entry.inputs[0]}, per boom") + \
+            (" (earlier)" if stale else "")
+        width = 2.8 if several and i == self.current else 2.2
+        for b, res in entry.result.fitted.items():
+            mine = members == b if members is not None else np.zeros(x.size, dtype=bool)
+            if not mine.any():
+                continue
+            with warnings.catch_warnings(), np.errstate(all="ignore"):
+                warnings.simplefilter("ignore")
+                at[mine] = res.func(x[mine])
+                rmse, n = curvefits.rmse(at[mine], y[mine])
+                corr = curvefits.correlation(x[mine], y[mine])
+                entry.boom_scores[b] = {"RMSE": rmse, "NRMSE_IQR": curvefits.nrmse_iqr(at[mine], y[mine]),
+                                        "r": corr["r"], "ρ": corr["ρ"], "N shown": n}
+                if not entry.shown or (picked is not None and b not in picked):
+                    continue
+                lo, hi = np.percentile(x[mine], [0.5, 99.5]) if mine.sum() > 1 else (x[mine].min(), x[mine].max())
+                grid = self._grid(float(lo), float(hi))
+                fy = res.func(grid)
+            self._line(grid, fy, style.boom_color(b), label, width=width, dash=stale)
+            label = None  # one legend entry for every boom's curve
+        entry.scores = self._scores(at, y, None, None)
 
     def class_groups(self, slots) -> list:
         """[(class name, mask, color)] for these slots' stability classes; one group without them."""
@@ -1020,6 +1159,20 @@ class ScatterView(QWidget):
                 out["zA" if source == 0 else "zB"] = HEIGHTS[int(member)]
         return out
 
+    def _height_values(self, heights) -> dict:
+        """zA, zB by boom height: the points' boom's `heights`, but a fixed axis's own boom's
+        for its panel (x's where both axes use one panel; NaN where it's no single boom).
+        """
+        out = dict.fromkeys(HEIGHT_VARIABLES, heights)
+        for axis in (1, 0):
+            name = "zA" if self.source[axis].currentData() == 0 else "zB"
+            member = self.member[axis].currentData()
+            if not self.boom_fixed(axis):
+                out[name] = heights
+            else:
+                out[name] = HEIGHTS[int(member)] if isinstance(member, (int, np.integer)) else np.nan
+        return out
+
     def _overlay_curve(self, func, ranges, lo: float, hi: float, values: dict):
         """The function over [lo, hi], a NaN between pieces so they aren't joined."""
         grid = np.geomspace(max(lo, 1e-12), hi, 600) if self.log_x.isChecked() else np.linspace(lo, hi, 600)
@@ -1040,11 +1193,11 @@ class ScatterView(QWidget):
         unread = bool(self.overlay.status.text())  # pieces that couldn't be read: drawn without them
         if self.by_height() and self._drawn_members is not None:
             heights = np.array([HEIGHTS[int(b)] for b in self._drawn_members], dtype=float)
-            at = func(x, zA=heights, zB=heights)  # each point at its own boom's height
+            at = func(x, **self._height_values(heights))  # each point at its own boom's height
             for i, b in enumerate(sorted(set(int(b) for b in self._drawn_members), key=HEIGHTS.get)):
                 mine = self._drawn_members == b
                 gx, gy = self._overlay_curve(func, ranges, float(x[mine].min()), float(x[mine].max()),
-                                             {"zA": HEIGHTS[b], "zB": HEIGHTS[b]})
+                                             self._height_values(HEIGHTS[b]))
                 self._line(gx, gy, style.boom_color(b), "overlay, each boom" if i == 0 else None, width=2.0,
                            gaps=True)
         else:
@@ -1078,7 +1231,7 @@ class ScatterView(QWidget):
                                     else "not defined at any point shown")
 
     def _overlay_from_fit(self) -> None:
-        if self.fit_result is None:
+        if self.fit_result is None or isinstance(self.fit_result, PerBoomFit):
             return
         name, settings = self.fit_inputs[0], dict(self.fit_inputs[-1] or ())
         self.overlay.set_pieces(curvefits.fit_formula(name, self.fit_result.params, settings))
@@ -1109,15 +1262,18 @@ class ScatterView(QWidget):
                        self.fit_bin_method.currentText(), self.fit_bin_log.isChecked(), self.fit_min_count.value(),
                        {arg: edit.text() for arg, edit in self.fit_settings.items()},
                        self.fit_subset.currentData() or "all", self.fit_shown_bins.isChecked(),
-                       self.fit_errors.currentData() or "y")
+                       self.fit_errors.currentData() or "y", self.fit_per_boom.isChecked(),
+                       self.fit_boom_curves.isChecked())
 
     def _form_from_spec(self, spec: "FitSpec") -> None:
         """Show a fit's options in the form (which then edits that fit)."""
         self._loading_form = True
         widgets = (self.fit_name, *self.pct, self.fit_bins, self.fit_bin_method, self.fit_bin_log, self.fit_min_count,
-                   self.fit_subset, self.fit_shown_bins, self.fit_errors)
+                   self.fit_subset, self.fit_shown_bins, self.fit_errors, self.fit_per_boom, self.fit_boom_curves)
         for w in widgets:
             w.blockSignals(True)
+        self.fit_per_boom.setChecked(spec.per_boom)
+        self.fit_boom_curves.setChecked(spec.boom_curves)
         self.fit_name.setCurrentIndex(max(self.fit_name.findData(spec.name), 0))
         self.pct[0].setValue(spec.pct[0])
         self.pct[1].setValue(spec.pct[1])
@@ -1148,20 +1304,27 @@ class ScatterView(QWidget):
     def _scores(at, y, bins, at_bins) -> dict:
         """RMSE and N over the points shown, and over the displayed bins (None while there are none),
         where the curve is defined: alike for every fit and the overlay. Also in ln y ("ln points",
-        "ln bins"), where every y scored is positive.
+        "ln bins"), where every y scored is positive. "nrmse <key>": that RMSE over the IQR of the
+        same y (of ln y for the ln keys), or NaN.
         """
-        def ln_rmse(f, v):
+        def ln_of(f, v):
             f, v = np.asarray(f, dtype=float), np.asarray(v, dtype=float)
             ok = np.isfinite(f) & np.isfinite(v)
             if not ok.any() or (v[ok] <= 0).any():
                 return None
             with np.errstate(all="ignore"):
-                return curvefits.rmse(np.log(f[ok]), np.log(v[ok]))
+                return np.log(f[ok]), np.log(v[ok])
 
-        out = {"points": curvefits.rmse(at, y), "bins": None, "ln points": ln_rmse(at, y), "ln bins": None}
+        def score(key, f, v):
+            out[key], out[f"nrmse {key}"] = curvefits.rmse(f, v), curvefits.nrmse_iqr(f, v)
+            logs = ln_of(f, v)
+            out[f"ln {key}"] = curvefits.rmse(*logs) if logs else None
+            out[f"nrmse ln {key}"] = curvefits.nrmse_iqr(*logs) if logs else np.nan
+
+        out = {"bins": None, "ln bins": None, "nrmse bins": np.nan, "nrmse ln bins": np.nan}
+        score("points", at, y)
         if bins is not None and at_bins is not None:
-            out["bins"] = curvefits.rmse(at_bins, bins[1])
-            out["ln bins"] = ln_rmse(at_bins, bins[1])
+            score("bins", at_bins, bins[1])
         return out
 
     @staticmethod
@@ -1170,18 +1333,28 @@ class ScatterView(QWidget):
             return "RMSE —"
         (r, n), b = scores["points"], scores["bins"]
         lp, lb = scores.get("ln points"), scores.get("ln bins")
+
+        def nrmse(prefix, with_bins):
+            keys = [f"nrmse {prefix}points"] + ([f"nrmse {prefix}bins"] if with_bins else [])
+            values = [scores.get(k, np.nan) for k in keys]
+            return "NRMSE_IQR " + ", ".join(f"{v:.3g}" if np.isfinite(v) else "—" for v in values)
+
         if short:
             text = f"RMSE {r:.3g} points" + (f", {b[0]:.3g} bins" if b is not None else "")
+            text += f"; {nrmse('', b is not None)}"
             if lp is not None:
                 text += f"; ln y {lp[0]:.3g}" + (f", {lb[0]:.3g}" if lb is not None else "")
+                text += f"; {nrmse('ln ', lb is not None)}"
             return text
         text = f"RMSE {r:.3g} over the {n} points shown where it's defined"
         if b is not None:
             text += f"; {b[0]:.3g} over the {b[1]} displayed bins" if b[1] else "; not defined in any displayed bin"
+        text += f"; {nrmse('', b is not None)}"
         if lp is not None:
             text += f". In ln y: {lp[0]:.3g} over {lp[1]} points"
             if lb is not None:
                 text += f", {lb[0]:.3g} over {lb[1]} bins"
+            text += f"; {nrmse('ln ', lb is not None)}"
         return text
 
     def _options(self) -> curvefits.FitOptions:
@@ -1238,8 +1411,9 @@ class ScatterView(QWidget):
         chosen = (int(self.selection.size), hash(self.selection.tobytes())) if spec.subset != "all" else None
         return (spec.name or "", self._options_for(spec), quantities, self.source[0].currentData(),
                 self.member[0].currentData(), self.source[1].currentData(), self.member[1].currentData(),
-                self.by_height(), self.class_shown(), int(self.slots.size), span, self.log_x.isChecked(),
-                self.log_y.isChecked(), spec.subset, chosen, self.side("x"), self.side("y"),
+                self.by_height(), self.boom_fixed(0), self.boom_fixed(1), self.class_shown(), int(self.slots.size),
+                span, self.log_x.isChecked(), self.log_y.isChecked(), spec.subset, spec.per_boom, chosen,
+                self.side("x"), self.side("y"),
                 # settings last: a fit reads them as inputs[-1]
                 int(self._shown()[0].size) if self.selected_only() else None, settings)
 
@@ -1247,13 +1421,16 @@ class ScatterView(QWidget):
         return self._inputs_for(self._spec_from_form())
 
     def _fit_points(self, spec: "FitSpec"):
-        """The points shown, or only (or all but) the selected ones."""
+        """(x, y, booms) of the points shown, or only (or all but) the selected ones; booms
+        None unless by boom height.
+        """
         slots, x, y = self._shown()
+        members = self.point_member[self._keep()] if self.point_member is not None else None
         if spec.subset == "all":
-            return x, y
+            return x, y, members
         chosen = np.isin(slots, self.selection)
         keep = chosen if spec.subset == "selected" else ~chosen
-        return x[keep], y[keep]
+        return x[keep], y[keep], members[keep] if members is not None else None
 
     def _on_fit_choice(self, *_) -> None:
         entry = self.current_entry
@@ -1291,15 +1468,19 @@ class ScatterView(QWidget):
         if entry.spec.subset != "all" and self.selection.size == 0:
             self._fit_failed(entry, inputs, ValueError("nothing is selected (lasso some points first)"))
             return
-        x, y = self._fit_points(entry.spec)
+        x, y, members = self._fit_points(entry.spec)
+        if entry.spec.per_boom and members is None:
+            self._fit_failed(entry, inputs, ValueError("fitting each boom needs z = boom height"))
+            return
+        job, args = (_fit_per_boom_job, (name, x, y, members)) if entry.spec.per_boom else (_fit_job, (name, x, y))
         self._pending.add(entry.id)
         if self.runner is None:
             try:
-                self._fitted(entry, inputs, _fit_job(name, x, y, inputs[1], inputs[-1]))
+                self._fitted(entry, inputs, job(*args, inputs[1], inputs[-1]))
             except (ValueError, RuntimeError, TypeError) as exc:
                 self._fit_failed(entry, inputs, exc)
             return
-        self.runner.submit(_fit_job, name, x, y, inputs[1], inputs[-1], key=f"scatterfit-{id(self)}-{entry.id}",
+        self.runner.submit(job, *args, inputs[1], inputs[-1], key=f"scatterfit-{id(self)}-{entry.id}",
                            label=f"fitting {name}",
                            on_done=lambda res, e=entry, i=inputs: self._fitted(e, i, res),
                            on_error=lambda exc, tb, e=entry, i=inputs: self._fit_failed(e, i, exc))
@@ -1307,6 +1488,12 @@ class ScatterView(QWidget):
     def _fitted(self, entry: "FitEntry", inputs, result) -> None:
         if not shiboken6.isValid(self):
             return
+        if isinstance(result, dict):
+            result = PerBoomFit(result)
+            if not result.fitted:
+                first = next(iter(result.fits.values()), "no booms to fit")
+                self._fit_failed(entry, inputs, ValueError(f"failed at every boom ({first})"))
+                return
         self._pending.discard(entry.id)
         entry.result, entry.inputs, entry.failed, entry.error = result, inputs, None, ""
         if entry in self.fits:
@@ -1347,6 +1534,8 @@ class ScatterView(QWidget):
                          f"{' as displayed' if spec.shown_bins else ''}")
         if spec.subset != "all":
             parts.append("selected only" if spec.subset == "selected" else "without the selection")
+        if spec.per_boom:
+            parts.append("per boom")
         if spec.errors == "ln y" and spec.name not in curvefits.IN_LN_Y | curvefits.IN_Y:
             parts.append("errors in ln y")
         labels = {k: label for k, (label, _) in curvefits.FIT_SETTINGS.get(spec.name, {}).items()}
@@ -1432,6 +1621,7 @@ class ScatterView(QWidget):
         self._fill_fit_list()
         entry = self.current_entry
         res = entry.result
+        self._fill_boom_table(entry)
         now = self._inputs_for(entry.spec)
         if entry.id in self._pending:
             self.fit_status.setText(f"fitting {entry.spec.name}…")
@@ -1443,15 +1633,26 @@ class ScatterView(QWidget):
             else:
                 self.fit_status.setText("choose a curve and press Fit" if entry.spec.name else "")
             return
-        params = ", ".join(f"{k} {v:.4g}" for k, v in res.params.items())
         opts = entry.inputs[1]
-        text = f"<b>{res.label}</b> ({params}; fitted to {res.n} {'bins' if opts.bin_count else 'points'})"
-        if entry.scores is not None:
-            text += f" — {self._rmse_text(entry.scores)}"
-            if opts.bin_count and not entry.spec.shown_bins:
-                text += f"; {res.rmse:.3g} over its own {res.n} bins"
-        if res.notes:
-            text += " — " + "; ".join(res.notes)
+        fitted_to = "bins" if opts.bin_count else "points"
+        if isinstance(res, PerBoomFit):
+            text = (f"<b>{entry.inputs[0]}, per boom</b>: fitted at {len(res.fitted)} of {len(res.fits)} booms "
+                    f"(to each one's {fitted_to}; the table below)")
+            failed = [f"{style.member_label(b)}: {r}" for b, r in res.fits.items() if isinstance(r, str)]
+            if failed:
+                text += f" — <span style='color:#b00'>failed at {html.escape('; '.join(failed), quote=False)}</span>"
+            if entry.scores is not None:
+                text += f" — {self._rmse_text(entry.scores)}, each at its own boom's curve"
+        else:
+            params = ", ".join(f"{k} {v:.4g}" for k, v in res.params.items())
+            text = f"<b>{res.label}</b> ({params}; fitted to {res.n} {fitted_to})"
+            if entry.scores is not None:
+                text += f" — {self._rmse_text(entry.scores)}"
+                if opts.bin_count and not entry.spec.shown_bins:
+                    own = f"{res.nrmse_iqr:.3g}" if np.isfinite(res.nrmse_iqr) else "—"
+                    text += f"; {res.rmse:.3g} over its own {res.n} bins (NRMSE_IQR {own})"
+            if res.notes:
+                text += " — " + "; ".join(res.notes)
         if entry.inputs != now:
             if failed_now:
                 text += (f" — <span style='color:#b00'>{entry.error}; the curve is the earlier one</span>"
@@ -1463,6 +1664,59 @@ class ScatterView(QWidget):
             else:
                 text += " — <span style='color:#a60'>refitting…</span>"
         self.fit_status.setText(text)
+
+    # --- per-boom fits' table ----------------------------------------------------------------------
+
+    def boom_frame(self, entry: "FitEntry") -> pd.DataFrame | None:
+        """A per-boom fit's results, a row per boom (by height); None for any other fit."""
+        if not isinstance(entry.result, PerBoomFit):
+            return None
+        rows = []
+        for b, r in sorted(entry.result.fits.items(), key=lambda kv: HEIGHTS[kv[0]]):
+            row = {"boom": style.member_label(b), "height [m]": HEIGHTS[b]}
+            if isinstance(r, str):
+                row["note"] = r
+            else:
+                scores = entry.boom_scores.get(b) or {"N shown": 0}
+                row |= dict(r.params) | {"N fitted": r.n} | scores | {"note": "; ".join(r.notes)}
+            rows.append(row)
+        frame = pd.DataFrame(rows)
+        tail = ["N fitted", "RMSE", "NRMSE_IQR", "r", "ρ", "N shown", "note"]
+        order = ["boom", "height [m]"] + [c for c in frame.columns if c not in ("boom", "height [m]", *tail)]
+        return frame.reindex(columns=order + tail)
+
+    def _fill_boom_table(self, entry: "FitEntry") -> None:
+        frame = self.boom_frame(entry)
+        self._boom_frame = frame
+        self.boom_table.setVisible(frame is not None)
+        self.copy_booms.setEnabled(frame is not None)
+        if frame is None:
+            self._boom_rows = []
+            return
+        self._boom_rows = sorted(entry.result.fits, key=HEIGHTS.get)
+        self.boom_table.blockSignals(True)
+        tables.fill(self.boom_table, frame, fmt=lambda col, v: "" if col == "note" and v != v else None)
+        chosen = self.boom_table.selectionModel()
+        flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        for row, b in enumerate(self._boom_rows):
+            if b in self.boom_pick:  # picks survive a refill
+                chosen.select(self.boom_table.model().index(row, 0), flags)
+        self.boom_table.blockSignals(False)
+        tables.fit_rows(self.boom_table, max_rows=10)
+
+    def _on_boom_pick(self) -> None:
+        rows = {i.row() for i in self.boom_table.selectionModel().selectedRows()}
+        self.boom_pick = {b for row, b in enumerate(self._boom_rows) if row in rows}
+        if not self.current_entry.spec.boom_curves:
+            self.redraw()
+
+    def _on_boom_curves(self) -> None:
+        self.current_entry.spec = self._spec_from_form()
+        self.redraw()
+
+    def copy_boom_table(self) -> None:
+        if self._boom_frame is not None:
+            QApplication.clipboard().setText(self._boom_frame.to_csv(sep="\t", index=False))
 
     def figure_spec(self) -> tuple[str, dict] | None:
         """What's drawn, for a matplotlib figure (in data units; log axes stay log)."""

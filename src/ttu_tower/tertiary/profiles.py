@@ -3,7 +3,7 @@ standard deviation vs height, and the neutral log law - each fit's five
 rules (booms considered, filtering-first, the tau policy, the `min_booms`
 floor, and the fit method) live in one place here, driven by
 `[tertiary.fits]` - and the boundary- and surface-layer heights estimated
-from the momentum and buoyancy flux profiles.
+from the momentum and buoyancy flux profiles and the Ri_g profile.
 """
 import numpy as np
 import pandas as pd
@@ -11,6 +11,7 @@ import pandas as pd
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.math.fits import power_fit
 from ttu_tower.physics.most import constrained_neutral_loglaw_fit, neutral_loglaw_fit
+from ttu_tower.tertiary import gradients
 
 _PROFILE_COLUMNS = ["slot", "variant", "variable", "value"]
 _SECOND_MOMENT_VARIANTS = ("mrd", "naive", "mrd_unexcised")
@@ -206,6 +207,42 @@ def flux_heights(boom_final: pd.DataFrame, tau_selected: pd.DataFrame, booms: li
                                                                 cfg_tertiary.h_sl_deviation)))
             rows.append((slot, variant, "h_sl_buoy", _sl_height(heights, b[1:], z_sfc, b[0],
                                                                 cfg_tertiary.h_sl_deviation)))
+    return pd.DataFrame(rows, columns=_PROFILE_COLUMNS)
+
+
+def _rig_height(stable: np.ndarray, heights: np.ndarray, rig: np.ndarray, z_top: float, critical: float) -> float:
+    """Where Ri_g first reaches `critical` among the search booms (`heights`,
+    `rig`), interpolated from the valid boom below (the top stable boom, at
+    `z_top`, for the first). NaN unless every stable boom has Ri_g > 0 and the
+    top one is still below `critical`, or if no search boom reaches it.
+    """
+    if not (np.all(stable > 0) and stable[-1] < critical):  # NaN fails both
+        return float("nan")
+    return _first_crossing(heights, rig, z_top, stable[-1], lambda f: f >= critical, lambda f: critical)
+
+
+def rig_heights(boom_final: pd.DataFrame, booms: list[int], cfg_tertiary) -> pd.DataFrame:
+    """Per slot (variant `none`), one `h_bl_rig` per gradient stencil, named as
+    the `rig` it reads (`h_bl_rig`, `h_bl_rig_log`, ...): in a slot with Ri_g > 0
+    at every `h_bl_rig_stable_booms` boom, the height where Ri_g first reaches
+    `h_bl_rig_critical` among the run's booms above them, lowest first.
+    Filtered search booms are skipped; a filtered stable boom gives NaN.
+    """
+    stable = sorted(cfg_tertiary.h_bl_rig_stable_booms, key=HEIGHTS.get)
+    z_top = HEIGHTS[stable[-1]]
+    above = sorted((b for b in booms if HEIGHTS[b] > z_top), key=HEIGHTS.get)
+    heights = np.array([HEIGHTS[b] for b in above], dtype=float)
+    stencils = cfg_tertiary.gradients.stencils
+    rows = []
+    for form in stencils:
+        rig = _wide(boom_final, "none", gradients.name("rig", form, stencils))
+        if not set(stable) <= set(booms):
+            rig[:] = np.nan
+        low, high = rig.reindex(columns=stable).to_numpy(float), rig.reindex(columns=above).to_numpy(float)
+        variable = gradients.name("h_bl_rig", form, stencils)
+        for i, slot in enumerate(rig.index):
+            rows.append((slot, "none", variable,
+                         _rig_height(low[i], heights, high[i], z_top, cfg_tertiary.h_bl_rig_critical)))
     return pd.DataFrame(rows, columns=_PROFILE_COLUMNS)
 
 

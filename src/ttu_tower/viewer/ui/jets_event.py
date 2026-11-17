@@ -38,6 +38,10 @@ PROFILE_OPTIONS = {
     "vw": ("w'v'", "m²/s²", ("vw", "cov", "mrd")),
     "wvpts": ("w'θv'", "K m/s", ("wvpts", "cov", "mrd")),
     "zeta": ("ζ = z/L", "", ("zeta", None, "mrd")),
+    "ils_corr_u": ("ILS u corrected", "m", ("ils_corr_u", None, "mrd")),
+    "ils_corr_v": ("ILS v corrected", "m", ("ils_corr_v", None, "mrd")),
+    "ils_corr_w": ("ILS w corrected", "m", ("ils_corr_w", None, "mrd")),
+    "ils_corr_vpts": ("ILS θv corrected", "m", ("ils_corr_vpts", None, "mrd")),
 }
 PANEL_DEFAULTS = ("ws", "vpt")
 _ESTIMATE = "#d62728"  # the estimated nose

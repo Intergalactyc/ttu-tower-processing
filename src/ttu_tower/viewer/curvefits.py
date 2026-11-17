@@ -21,6 +21,7 @@ class FitResult:
     label: str
     n: int = 0  # points (or bins) fitted
     rmse: float = np.nan
+    nrmse_iqr: float = np.nan  # rmse over the IQR of the y fitted
     notes: list = field(default_factory=list)
 
 
@@ -84,6 +85,22 @@ def rmse(f, y) -> tuple[float, int]:
     f, y = np.asarray(f, dtype=float), np.asarray(y, dtype=float)
     ok = np.isfinite(f) & np.isfinite(y)
     return (float(np.sqrt(np.mean((y[ok] - f[ok]) ** 2))) if ok.any() else np.nan), int(ok.sum())
+
+
+NRMSE_MIN_N = 4  # fewer points can't give quartiles worth the name
+
+
+def nrmse_iqr(f, y) -> float:
+    """RMSE of y about f over the IQR (Q3 − Q1) of those same y, where both are finite;
+    NaN with fewer than NRMSE_MIN_N points or a zero IQR.
+    """
+    f, y = np.asarray(f, dtype=float), np.asarray(y, dtype=float)
+    ok = np.isfinite(f) & np.isfinite(y)
+    if ok.sum() < NRMSE_MIN_N:
+        return np.nan
+    q1, q3 = np.percentile(y[ok], [25, 75])
+    iqr = q3 - q1
+    return float(np.sqrt(np.mean((y[ok] - f[ok]) ** 2)) / iqr) if iqr > 0 else np.nan
 
 
 # --- the fits (each core takes the prepared x, y; `relative`: least squares in ln y) ---------
@@ -394,11 +411,13 @@ def fit(name: str, x, y, opts: FitOptions = FitOptions(), **settings) -> FitResu
     with np.errstate(all="ignore"):
         resid = yf - func(xf)
     rmse = float(np.sqrt(np.nanmean(resid ** 2))) if resid.size else np.nan
+    with np.errstate(all="ignore"):
+        nrmse = nrmse_iqr(func(xf), yf)
     notes = []
     if in_ln_y and (yf <= 0).any():
         notes.append(f"{int((yf <= 0).sum())} {'bins' if opts.bin_count else 'points'} with y ≤ 0 left out (ln y)")
     return FitResult(func=func, params={k: float(v) for k, v in params.items()}, label=label, n=int(xf.size), rmse=rmse,
-                     notes=notes)
+                     nrmse_iqr=nrmse, notes=notes)
 
 
 # --- statistics --------------------------------------------------------------------------------

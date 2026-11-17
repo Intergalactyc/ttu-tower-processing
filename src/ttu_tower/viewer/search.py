@@ -52,6 +52,8 @@ _NAMES = {
     "alpha": "wind shear exponent power law", "gamma": "turbulence intensity exponent power law",
     "loglaw_ustar": "friction velocity", "loglaw_z0": "roughness length",
     "loglaw_z0_constrained": "roughness length", "h_bl_momt": "boundary layer height",
+    "h_bl_rig": "boundary layer height gradient richardson number",
+    "h_bl_rig_log": "boundary layer height gradient richardson number log stencil",
     "sun_elevation": "solar elevation angle", "tau": "averaging timescale time scale",
 }
 _STAT_NAMES = {"std": "standard deviation", "var": "variance", "cov": "covariance", "its": "integral time scale",

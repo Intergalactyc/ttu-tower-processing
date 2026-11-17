@@ -378,7 +378,8 @@ def test_summary_table_labels_explain_themselves_and_cumulative_reuses_the_fit(w
     tips = {table.horizontalHeaderItem(j).text(): table.horizontalHeaderItem(j).toolTip()
             for j in range(table.columnCount())}
     assert {"skew", "kurt"} <= set(tips) and tips["kurt"] == "kurtosis (3 for a normal)"
-    assert list(tips)[6:13] == ["min", "p5", "p25", "median", "p75", "p95", "max"]
+    assert list(tips)[3:5] == ["σ", "MAD"] and tips["MAD"].startswith("median absolute deviation")
+    assert list(tips)[7:14] == ["min", "p5", "p25", "median", "p75", "p95", "max"]
     assert tips["p25"] == "25th percentile (lower quartile)" and tips["max"] == "largest value"
     assert tips["AIC"].startswith("Akaike information criterion") and tips["k"] == "gamma fit: shape"
     assert tips["θ"] == "gamma fit: scale"
@@ -583,7 +584,7 @@ def test_profile_classes_sit_a_few_pixels_apart_with_capped_bars(window, qtbot):
     slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
     stability = (Curve(slots=slots, y=(slots % 2).astype(float)), ["unstable", "stable"])
     view.set_sources([(data, list(data.curves)), None], None, stability)
-    view.grouping.setCurrentIndex(view.grouping.findData("stability"))
+    view.by_stability.setChecked(True)
     view.error_bars.setChecked(True)
     plot = view.plots[0]
     (first, bars, _, z, _, _, _, _), (second, _, _, _, _, _, _, _) = plot._marks
@@ -606,7 +607,7 @@ def test_profiles_show_one_class_and_write_their_values(window, qtbot):
     stability = (Curve(slots=slots, y=(slots % 5).astype(float)), names)
     view.set_sources([(data, list(data.curves)), None], None, stability)
     assert not view.only_class.isEnabled()  # only by stability
-    view.grouping.setCurrentIndex(view.grouping.findData("stability"))
+    view.by_stability.setChecked(True)
     assert view.only_class.isEnabled() and view.only_class.findData("all unstable") > 0
     plot = view.plots[0]
     assert len(plot._marks) == 5
@@ -631,6 +632,60 @@ def test_profiles_show_one_class_and_write_their_values(window, qtbot):
     view.only_class.setCurrentIndex(0)
     view_state.restore(view, state, view.STATE_FIELDS)
     assert view.only_class.currentData() == "all unstable" and view.values.isChecked()
+
+
+def test_profiles_split_the_selection_by_stability_beside_its_total(window, qtbot):
+    from ttu_tower.viewer import profiles
+    from ttu_tower.viewer.timeline import Curve
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.profiles)
+    view = window.profiles
+    data = window.datas[0]
+    slots = np.unique(np.concatenate([c.slots for c in data.curves.values()]))
+    names = ["strongly unstable", "unstable", "neutral", "stable", "strongly stable"]
+    stability = (Curve(slots=slots, y=(slots % 5).astype(float)), names)
+    view.set_sources([(data, list(data.curves)), None], None, stability)
+    assert not view.total.isEnabled()
+    view.by_stability.setChecked(True)
+    assert view.total.isEnabled()
+    chosen = slots[: slots.size // 2]
+    plot = view.plots[0]
+    curve = data.curves[FULL_BOOMS[0]]
+    n_selected = np.isfinite(curve.y[np.isin(curve.slots, chosen)]).sum()
+
+    # brushing by stability: the whole selection beside every slot's classes
+    view.set_selection(chosen)
+    assert view.pool.currentData() == "all" and view.plus_selection.isChecked()
+    view.only_class.setCurrentIndex(view.only_class.findData("neutral"))
+    assert list(dict.fromkeys(plot.stats["group"])) == [profiles.SELECTED, "neutral"]
+    row = plot.stats[plot.stats["boom"] == FULL_BOOMS[0]].set_index("group")["n"]
+    assert row[profiles.SELECTED] == n_selected
+    assert row["neutral"] == np.isfinite(curve.y[curve.slots % 5 == 2]).sum()  # every slot's, not the selection's
+    assert "selection (" in view.key.text() and "neutral" in view.key.text()
+    view.by_stability.setChecked(False)
+    assert list(dict.fromkeys(plot.stats["group"])) == [profiles.ALL, profiles.SELECTED]
+    view.by_stability.setChecked(True)
+
+    # the selection alone, split by stability, beside its total
+    view.only_class.setCurrentIndex(0)
+    view.pool.setCurrentIndex(view.pool.findData("selected"))
+    assert not view.plus_selection.isEnabled()
+    assert not view.pool.model().item(view.pool.findData("selection")).isEnabled()
+    view.total.setChecked(True)
+    assert list(dict.fromkeys(plot.stats["group"])) == [profiles.SELECTED, *names]
+    row = plot.stats[plot.stats["boom"] == FULL_BOOMS[0]].set_index("group")["n"]
+    assert row[profiles.SELECTED] == n_selected and row[names].sum() == n_selected
+    assert "all classes" in view.key.text() and "selected slots" in plot.title.text()
+
+    state = view_state.save(view, view.STATE_FIELDS)
+    view.by_stability.setChecked(False)
+    assert view.pool.model().item(view.pool.findData("selection")).isEnabled()
+    view_state.restore(view, state, view.STATE_FIELDS)
+    assert view.by_stability.isChecked() and view.total.isChecked() and view.pool.currentData() == "selected"
+    view.set_selection(np.empty(0, dtype=np.int64))
+    assert view.pool.currentData() == "all" and not view.plus_selection.isEnabled()
+    assert profiles.ALL in set(plot.stats["group"]) and profiles.SELECTED not in set(plot.stats["group"])
 
 
 def _drag(qtbot, widget, points, modifiers):
@@ -1553,6 +1608,8 @@ def test_fits_take_the_displayed_bins_and_score_alike_with_the_overlay(window, q
     scores = scatter.current_entry.scores
     assert scores["points"][1] == scatter._shown()[0].size and scores["bins"][1] == scatter.fit_result.n <= 6
     assert scores["bins"][0] == pytest.approx(scatter.fit_result.rmse)  # fitted to those very bins
+    assert scores["nrmse bins"] == pytest.approx(scatter.fit_result.nrmse_iqr, nan_ok=True)
+    assert "NRMSE_IQR" in scatter.fit_status.text()
     assert "displayed bins" in scatter.fit_status.text() and "points" in scatter.fit_list.item(0).text()
 
     scatter.overlay.from_fit.click()  # the same curve as an overlay scores the same

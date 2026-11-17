@@ -7,7 +7,7 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
-from ttu_tower.constants import BOOMS as ALL_BOOMS
+from ttu_tower.constants import BOOMS as ALL_BOOMS, HEIGHTS
 from ttu_tower.flags import TESTS as _TEST_REGISTRY
 from ttu_tower.timegrid import SLOT_MINUTE_CHOICES, Cadence
 from ttu_tower.config.model import (
@@ -462,13 +462,20 @@ def _parse_tertiary(d: dict, path: str) -> TertiaryConfig:
     h_bl_momt_fraction = _pop_number(d, "h_bl_momt_fraction", 0.05, path, min_=0, min_incl=False, max_=1,
                                      max_incl=False)
     h_sl_deviation = _pop_number(d, "h_sl_deviation", 0.10, path, min_=0, min_incl=False)
-    fits = _parse_fits(_section(d, "fits", path), f"{path}.fits")
+    h_bl_rig_critical = _pop_number(d, "h_bl_rig_critical", 0.25, path, min_=0, min_incl=False)
+    h_bl_rig_stable_booms = _pop_int_list(d, "h_bl_rig_stable_booms", (1, 2, 3, 4), path)
+    if not h_bl_rig_stable_booms or not set(h_bl_rig_stable_booms) <= set(ALL_BOOMS):
+        _err(f"{path}.h_bl_rig_stable_booms", f"must be a non-empty subset of {ALL_BOOMS}")
+    if max(HEIGHTS[b] for b in h_bl_rig_stable_booms) == max(HEIGHTS.values()):
+        _err(f"{path}.h_bl_rig_stable_booms", "must leave a boom above it to search")
+    fits =_parse_fits(_section(d, "fits", path), f"{path}.fits")
     gradients = _parse_gradients(_section(d, "gradients", path), f"{path}.gradients")
     _check_unknown(d, path)
     return TertiaryConfig(min_coverage=min_coverage, max_bounds_fraction=max_bounds_fraction,
                            max_spike_fraction=max_spike_fraction, veer_reference_boom=veer_reference_boom,
                            sfc_boom=sfc_boom, exempt_flux_height_booms=exempt,
                            h_bl_momt_fraction=h_bl_momt_fraction, h_sl_deviation=h_sl_deviation,
+                           h_bl_rig_critical=h_bl_rig_critical, h_bl_rig_stable_booms=h_bl_rig_stable_booms,
                            fits=fits, gradients=gradients)
 
 

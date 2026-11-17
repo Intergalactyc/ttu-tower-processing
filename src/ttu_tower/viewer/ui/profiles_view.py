@@ -1,6 +1,7 @@
 """Vertical profiles of what each timeline panel shows, over the viewed
 interval (or the whole period): each boom's mean or median, optionally with
-its spread, over all slots or per stability class, with a fitted curve.
+its spread, over all slots or the brushed selection, optionally per stability
+class, with a fitted curve.
 """
 import numpy as np
 import pandas as pd
@@ -170,8 +171,8 @@ class ProfilePlot(QWidget):
 
 
 class ProfilesView(QWidget):
-    STATE_FIELDS = ("method", "error_bars", "lines", "log_z", "grouping", "only_class",
-                    "values")  # saved in a view, restored in this order
+    STATE_FIELDS = ("method", "error_bars", "lines", "log_z", "pool", "by_stability", "only_class", "total",
+                    "plus_selection", "values")  # saved in a view, restored in this order
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -181,21 +182,30 @@ class ProfilesView(QWidget):
         self.error_bars = QCheckBox("spread")
         self.lines = QCheckBox("lines")
         self.log_z = QCheckBox("log height")
-        self.grouping = QComboBox()
-        self.grouping.addItem("all slots", "all")
-        self.grouping.addItem("by stability", "stability")
-        self.grouping.addItem("selection vs rest", "selection")
-        self.grouping.setToolTip("one profile over every slot, one per stability class (Ri_b of the configured "
-                                 "pair), or the brushed slots' profile beside the rest's")
+        self.pool = QComboBox()
+        self.pool.addItem("all slots", "all")
+        self.pool.addItem("selection only", "selected")
+        self.pool.addItem("selection vs rest", "selection")
+        self.pool.setToolTip("the slots profiled: every slot, only the brushed ones, or the brushed slots' profile "
+                             "beside the rest's")
+        self.by_stability = QCheckBox("by stability")
+        self.by_stability.setToolTip("one profile per stability class (Ri_b of the configured pair), of the slots "
+                                     "chosen at left")
         self.only_class = LateCombo()  # its classes come with the stability criterion
         self.only_class.addItem("every class", None)
         self.only_class.setToolTip("by stability: every class's profile, or only one class's (or both unstable or "
                                    "both stable classes' slots together)")
+        self.total = QCheckBox("+ all classes")
+        self.total.setToolTip("by stability: also the profile of every class's slots together")
+        self.plus_selection = QCheckBox("+ selection")
+        self.plus_selection.setToolTip("over all slots: also the whole brushed selection's profile, beside the all-slot "
+                                       "(or per-class) ones")
         self.values = QCheckBox("values")
         self.values.setToolTip("write each point's value beside it")
-        for w in (self.method, self.grouping, self.only_class):
+        for w in (self.method, self.pool, self.only_class):
             w.currentIndexChanged.connect(lambda *_: self.redraw())
-        for w in (self.error_bars, self.lines, self.log_z, self.values):
+        for w in (self.by_stability, self.total, self.plus_selection, self.error_bars, self.lines, self.log_z,
+                  self.values):
             w.toggled.connect(lambda *_: self.redraw())
         self.key = QLabel()
         self.key.setTextFormat(Qt.TextFormat.RichText)
@@ -209,7 +219,8 @@ class ProfilesView(QWidget):
         self.selection = np.empty(0, dtype=np.int64)
 
         controls = QHBoxLayout()
-        for w in (self.method, self.grouping, self.only_class, self.error_bars, self.lines, self.log_z, self.values):
+        for w in (self.method, self.pool, self.by_stability, self.only_class, self.total, self.plus_selection,
+                  self.error_bars, self.lines, self.log_z, self.values):
             controls.addWidget(w)
         controls.addStretch(1)
         row = QHBoxLayout()
@@ -272,16 +283,22 @@ class ProfilesView(QWidget):
         self.only_class.take_pending()
         self.only_class.blockSignals(False)
 
+    def _split_by_stability(self) -> bool:
+        return self.by_stability.isChecked() and self.stability is not None
+
     def chosen_class(self) -> str | None:
         """The one class (or combined group) shown, by stability; None for every class."""
         name = self.only_class.currentData()
-        by_stability = self.grouping.currentData() == "stability" and self.stability is not None
-        return name if by_stability and name in class_choices(self.stability[1]) else None
+        return name if self._split_by_stability() and name in class_choices(self.stability[1]) else None
 
     def set_selection(self, slots: np.ndarray) -> None:
         self.selection = slots
-        if slots.size and self.grouping.currentData() == "all":
-            self.grouping.setCurrentIndex(self.grouping.findData("selection"))  # what brushing is for here
+        if slots.size and self.pool.currentData() == "all" and not self.plus_selection.isChecked():
+            # what brushing is for here; by stability, the whole selection beside every slot's classes
+            if self._split_by_stability():
+                self.plus_selection.setChecked(True)
+            else:
+                self.pool.setCurrentIndex(self.pool.findData("selection"))
         else:
             self.redraw()
 
@@ -299,35 +316,50 @@ class ProfilesView(QWidget):
             self.method.blockSignals(False)
         self.method.setToolTip("directions: the vector mean and Yamartino σ (they have no median)" if circular_only
                                else "each boom's mean (spread: σ) or median (spread: MAD)")
-        model = self.grouping.model()
-        model.item(1).setEnabled(self.stability is not None)
-        model.item(2).setEnabled(self.selection.size > 0)
-        if not model.item(self.grouping.currentIndex()).isEnabled():
-            self.grouping.blockSignals(True)
-            self.grouping.setCurrentIndex(0)
-            self.grouping.blockSignals(False)
+        split = self._split_by_stability()
+        model = self.pool.model()
+        model.item(1).setEnabled(self.selection.size > 0)
+        model.item(2).setEnabled(self.selection.size > 0 and not split)  # by stability: "selection only"
+        if not model.item(self.pool.currentIndex()).isEnabled():
+            fallback = 1 if model.item(1).isEnabled() else 0
+            self.pool.blockSignals(True)
+            self.pool.setCurrentIndex(fallback)
+            self.pool.blockSignals(False)
         spread = "σ" if self.method.currentData() == "mean" else "MAD"
         self.error_bars.setText(f"± {spread}")
         what = "standard deviation" if spread == "σ" else "median absolute deviation"
         self.error_bars.setToolTip(f"horizontal bars: ± the {what}")
-        for w in (self.method, self.grouping, self.error_bars, self.lines, self.log_z, self.values):
+        for w in (self.method, self.pool, self.error_bars, self.lines, self.log_z, self.values):
             w.setEnabled(bool(shown))
-        self.only_class.setEnabled(bool(shown) and self.grouping.currentData() == "stability"
-                                   and self.only_class.count() > 1)
+        self.by_stability.setEnabled(bool(shown) and self.stability is not None)
+        self.only_class.setEnabled(bool(shown) and split and self.only_class.count() > 1)
+        self.total.setEnabled(bool(shown) and split)
+        self.plus_selection.setEnabled(bool(shown) and self.selection.size > 0 and self.pool.currentData() == "all")
 
     def redraw(self) -> None:
         self._enable_controls()
         scope = "whole period" if self.x_range is None else "visible range"
-        grouping = self.grouping.currentData()
-        by_stability = grouping == "stability" and self.stability is not None
-        selection = self.selection if grouping == "selection" and self.selection.size else None
+        pool = self.pool.currentData()
+        by_stability = self._split_by_stability()
+        with_selection = self.plus_selection.isEnabled() and self.plus_selection.isChecked()
+        selection = self.selection if (pool != "all" or with_selection) and self.selection.size else None
+        only_selected = selection is not None and pool == "selected"
+        total = by_stability and self.total.isChecked()
+        if only_selected:
+            scope += f", selected slots ({selection.size})"
         one = self.chosen_class()
+        overlay = [(_GROUP_COLORS[profiles.SELECTED], f"selection ({selection.size} slots)")] if with_selection else []
         if by_stability:
             names = list(self.stability[1])
-            key = [(group_color(n, names).name(), n) for n in ([one] if one else names)]
+            whole = profiles.SELECTED if only_selected else profiles.ALL
+            key = ([(_GROUP_COLORS[whole], "all classes")] if total else []) + overlay + [
+                (group_color(n, names).name(), n) for n in ([one] if one else names)]
+        elif with_selection:
+            key = [(_GROUP_COLORS[profiles.ALL], "all slots")] + overlay
         elif selection is not None:
-            key = [(_GROUP_COLORS[profiles.SELECTED], f"selected ({selection.size} slots)"),
-                   (_GROUP_COLORS[profiles.REST], "the rest")]
+            key = [(_GROUP_COLORS[profiles.SELECTED], f"selected ({selection.size} slots)")]
+            if not only_selected:
+                key.append((_GROUP_COLORS[profiles.REST], "the rest"))
         else:
             key = []
         self.key.setText(" ".join(f"<span style='color:{c}'>■ {n}</span>" for c, n in key))
@@ -343,7 +375,9 @@ class ProfilesView(QWidget):
             data, members = source
             method = "mean" if q.circular else self.method.currentData()
             stats = profiles.profile_stats(data, members, self.x_range, self.stability, method, by_stability,
-                                           selection, classes=[one] if one else None)
+                                           selection, classes=[one] if one else None,
+                                           only_selected=only_selected, total=total,
+                                           with_selection=with_selection)
             if stats.empty or not np.isfinite(stats["centre"]).any():
                 plot.clear(f"<b>{q.title}</b>: no values in range")
                 continue

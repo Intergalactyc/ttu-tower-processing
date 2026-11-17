@@ -76,6 +76,7 @@ class JetsController(QObject):
         self.view.addRequested.connect(self.add_from_selection)
         self.view.editsRequested.connect(self.show_edits)
         self.view.selectRequested.connect(self.select_event_slots)
+        self.view.selectAllRequested.connect(self.select_events_slots)
 
     # --- inputs ---------------------------------------------------------------------------------
 
@@ -348,6 +349,11 @@ class JetsController(QObject):
         """Brush every slot of one event."""
         if self.result is not None and event_id in self.result.events.table.index:
             self.window.set_selection(self.result.event_slots([event_id], passed_only=False), "replace")
+
+    def select_events_slots(self, event_ids: list) -> None:
+        """Brush every slot of these events, kept by the filters or not."""
+        if self.result is not None and event_ids:
+            self.window.set_selection(self.result.event_slots(event_ids, passed_only=False), "replace")
 
     def select_slots(self) -> None:
         if self.result is not None:

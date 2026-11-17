@@ -101,6 +101,8 @@ sfc_boom = 3
 exempt_flux_height_booms = []
 h_bl_momt_fraction = 0.05
 h_sl_deviation = 0.10
+h_bl_rig_critical = 0.25
+h_bl_rig_stable_booms = [1, 2, 3, 4]
 
 [tertiary.fits]
 exclude_tau = ["unresolved", "fallback"]

@@ -122,6 +122,39 @@ def test_profiles_by_stability_split_the_slots():
     assert (per_boom == slots.size).all()
 
 
+def test_profiles_by_stability_within_the_selection_with_its_total():
+    data, slots = _profile_data()
+    names = ["unstable", "neutral", "stable"]
+    stability = (Curve(slots=slots, y=(slots % 3).astype(float)), names)
+    selection = slots[:10]
+    stats = profiles.profile_stats(data, list(HEIGHTS), None, stability, "mean", by_stability=True,
+                                   selection=selection, only_selected=True, total=True)
+    assert list(dict.fromkeys(stats["group"])) == [profiles.SELECTED, *names]
+    n = stats.groupby("group")["n"].first()
+    assert n[profiles.SELECTED] == 10 and n[names].sum() == 10
+    one = profiles.profile_stats(data, list(HEIGHTS), None, stability, "mean", by_stability=True,
+                                 selection=selection, classes=["neutral"], only_selected=True)
+    assert list(dict.fromkeys(one["group"])) == ["neutral"] and (one["n"] == (selection % 3 == 1).sum()).all()
+    alone = profiles.profile_stats(data, list(HEIGHTS), None, None, "mean", selection=selection, only_selected=True)
+    assert list(dict.fromkeys(alone["group"])) == [profiles.SELECTED] and (alone["n"] == 10).all()
+    whole = profiles.profile_stats(data, list(HEIGHTS), None, stability, "mean", by_stability=True, total=True)
+    assert list(dict.fromkeys(whole["group"]))[0] == profiles.ALL
+
+
+def test_profiles_put_the_whole_selection_beside_every_slots_classes():
+    data, slots = _profile_data()
+    names = ["unstable", "neutral", "stable"]
+    stability = (Curve(slots=slots, y=(slots % 3).astype(float)), names)
+    selection = slots[:10]
+    stats = profiles.profile_stats(data, list(HEIGHTS), None, stability, "mean", by_stability=True,
+                                   selection=selection, classes=["neutral"], with_selection=True)
+    assert list(dict.fromkeys(stats["group"])) == [profiles.SELECTED, "neutral"]
+    n = stats.groupby("group")["n"].first()
+    assert n[profiles.SELECTED] == 10 and n["neutral"] == (slots % 3 == 1).sum()  # all slots' class
+    plain = profiles.profile_stats(data, list(HEIGHTS), None, None, "mean", selection=selection, with_selection=True)
+    assert list(dict.fromkeys(plain["group"])) == [profiles.ALL, profiles.SELECTED]
+
+
 def test_pair_quantities_start_on_their_customary_pairs():
     from ttu_tower.viewer.ui.panel import default_pairs
     everything = tuple((a, b) for a in range(1, 11) for b in range(a + 1, 11))

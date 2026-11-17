@@ -86,6 +86,8 @@ def test_minimal_config_matches_documented_defaults():
     assert cfg.tertiary.exempt_flux_height_booms == ()
     assert cfg.tertiary.h_bl_momt_fraction == 0.05
     assert cfg.tertiary.h_sl_deviation == 0.10
+    assert cfg.tertiary.h_bl_rig_critical == 0.25
+    assert cfg.tertiary.h_bl_rig_stable_booms == (1, 2, 3, 4)
     assert cfg.tertiary.fits.exclude_tau == ("unresolved", "fallback")
     assert cfg.tertiary.fits.min_booms == 2
     assert cfg.tertiary.fits.alpha_booms == tuple(range(1, 11))
@@ -308,6 +310,14 @@ def test_cross_key_veer_reference_boom_must_be_in_booms():
     raw["files"] = {"bad_records": [[1, 2]], "booms": [1, 2, 3]}
     raw["tertiary"] = {"veer_reference_boom": 5}
     with pytest.raises(ConfigError, match="veer_reference_boom"):
+        config_from_dict(raw, default_tag="t")
+
+
+@pytest.mark.parametrize("value", [[], [11], [9, 10]])
+def test_h_bl_rig_stable_booms_invalid_raises(value):
+    raw = _minimal_raw()
+    raw["tertiary"] = {"h_bl_rig_stable_booms": value}
+    with pytest.raises(ConfigError, match="h_bl_rig_stable_booms"):
         config_from_dict(raw, default_tag="t")
 
 

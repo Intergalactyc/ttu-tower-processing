@@ -7,7 +7,7 @@ import pytest
 from ttu_tower.constants import HEIGHTS
 from ttu_tower.math.fits import power_fit
 from ttu_tower.physics.most import constrained_neutral_loglaw_fit, neutral_loglaw_fit
-from ttu_tower.tertiary.profiles import flux_heights, profiles
+from ttu_tower.tertiary.profiles import flux_heights, profiles, rig_heights
 
 _SLOT = 7
 _BOOMS = [1, 2, 3, 4]
@@ -170,12 +170,20 @@ def test_loglaw_unconstrained_reports_a_single_shared_n():
 
 
 @dataclass(frozen=True)
+class _GradientsCfg:
+    stencils: tuple = ("log_linear", "log")
+
+
+@dataclass(frozen=True)
 class _TertiaryCfg:
     sfc_boom: int = 1
     exempt_flux_height_booms: tuple = ()
     h_bl_momt_fraction: float = 0.05
     h_sl_deviation: float = 0.10
+    h_bl_rig_critical: float = 0.25
+    h_bl_rig_stable_booms: tuple = (1, 2, 3, 4)
     fits: _FitsCfg = _FitsCfg()
+    gradients: _GradientsCfg = _GradientsCfg()
 
 
 _NO_TAU = pd.DataFrame(columns=["slot", "boom", "variant", "tau_s", "source", "source_status"])
@@ -232,3 +240,41 @@ def test_flux_heights_all_nan_when_sfc_boom_not_in_run():
     boom_final = _flux_rows("mrd", {2: 1.0, 3: 0.01}, {2: 0.01, 3: 0.03})
     result = flux_heights(boom_final, _NO_TAU, [2, 3], _TertiaryCfg(), variants=("mrd",))
     assert result["value"].isna().all() and len(result) == 3
+
+
+def _rig_rows(rig, rig_log):
+    rows = [_stat_row(_SLOT, b, "none", "rig", v) for b, v in rig.items()]
+    rows += [_stat_row(_SLOT, b, "none", "rig_log", v) for b, v in rig_log.items()]
+    return pd.DataFrame(rows)
+
+
+_RIG_BOOMS = [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_rig_heights_search_above_the_stable_booms_one_per_stencil():
+    rig = {1: 0.05, 2: 0.1, 3: 0.1, 4: 0.2, 5: 0.15, 6: 0.4, 7: 1.0}  # boom 5 dips; crossing 5 -> 6
+    rig_log = {1: 0.05, 2: 0.1, 3: 0.1, 4: 0.2, 5: np.nan, 6: 0.3, 7: 1.0}  # boom 5 filtered: 4 -> 6
+    result = rig_heights(_rig_rows(rig, rig_log), _RIG_BOOMS, _TertiaryCfg(h_bl_rig_stable_booms=(1, 2, 3, 4)))
+
+    z4, z5, z6 = HEIGHTS[4], HEIGHTS[5], HEIGHTS[6]
+    assert _get(result, _SLOT, "none", "h_bl_rig") == pytest.approx(z5 + (0.25 - 0.15) / (0.4 - 0.15) * (z6 - z5))
+    assert _get(result, _SLOT, "none", "h_bl_rig_log") == pytest.approx(z4 + (0.25 - 0.2) / (0.3 - 0.2) * (z6 - z4))
+    assert len(result) == 2
+
+
+@pytest.mark.parametrize("rig", [
+    {1: 0.1, 2: -0.05, 3: 0.1, 4: 0.1, 5: 0.3, 6: 0.5, 7: 0.7},  # unstable at a stable boom
+    {1: 0.1, 2: np.nan, 3: 0.1, 4: 0.1, 5: 0.3, 6: 0.5, 7: 0.7},  # a stable boom filtered
+    {1: 0.1, 2: 0.1, 3: 0.1, 4: 0.3, 5: 0.3, 6: 0.5, 7: 0.7},  # already reached at the top stable boom
+    {1: 0.1, 2: 0.1, 3: 0.1, 4: 0.1, 5: 0.2, 6: 0.2, 7: 0.24},  # never reached: above the tower
+])
+def test_rig_heights_nan_unless_stable_below_and_bracketed_above(rig):
+    cfg = _TertiaryCfg(h_bl_rig_stable_booms=(1, 2, 3, 4), gradients=_GradientsCfg(("log_linear",)))
+    result = rig_heights(_rig_rows(rig, {}), _RIG_BOOMS, cfg)
+    assert np.isnan(_get(result, _SLOT, "none", "h_bl_rig"))
+
+
+def test_rig_heights_all_nan_when_a_stable_boom_is_not_in_run():
+    rig = {2: 0.1, 3: 0.1, 4: 0.1, 5: 0.3}
+    cfg = _TertiaryCfg(h_bl_rig_stable_booms=(1, 2, 3, 4), gradients=_GradientsCfg(("log_linear",)))
+    assert np.isnan(_get(rig_heights(_rig_rows(rig, {}), [2, 3, 4, 5], cfg), _SLOT, "none", "h_bl_rig"))

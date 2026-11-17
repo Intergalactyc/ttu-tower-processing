@@ -159,6 +159,8 @@ class TertiaryConfig:
     exempt_flux_height_booms: tuple[int, ...]  # never searched for a flux-profile height
     h_bl_momt_fraction: float  # h_bl_momt: local u*² at most this fraction of the surface u*²
     h_sl_deviation: float  # h_sl_*: flux deviating from the surface value by at least this fraction
+    h_bl_rig_critical: float  # h_bl_rig*: where Ri_g first reaches this value
+    h_bl_rig_stable_booms: tuple[int, ...]  # h_bl_rig*: need Ri_g > 0 at all of these; searched above them
     fits: FitsConfig
     gradients: GradientsConfig
 

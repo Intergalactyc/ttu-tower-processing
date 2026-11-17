@@ -141,6 +141,43 @@ def test_scheme_errors_and_round_trip(tmp_path):
     store = tv.SchemeStore(tmp_path / "tau.json")
     store.put("a", good)
     assert tv.SchemeStore.open(tmp_path / "tau.json").items["a"] == good
+    one = dataclasses.replace(good, family="heat", discard=True)
+    store.put("b", one)
+    assert tv.SchemeStore.open(tmp_path / "tau.json").items["b"] == one
+    assert "family" not in tv.TauScheme().to_dict()  # defaults left out: older schemes keep their digest
+    assert tv.TauScheme(family="both or neither").errors()
+
+
+def test_one_cospectrums_tau_and_discarding_where_it_isnt_found(store):
+    store.set_schemes({"heat": tv.TauScheme(family="heat"), "heat found": tv.TauScheme(family="heat", discard=True),
+                       "own found": tv.TauScheme(discard=True)})
+    keys = ["slot", "boom"]
+    heat = store.index.read("tau", columns=keys + ["status", "tau_s"],
+                            filter=(_F("variant") == "mrd") & (_F("cospectrum") == "heat"))
+    heat["status"] = heat["status"].astype(object)
+    found = heat["status"].isin(["found", "capped"])
+    assert found.any() and not found.all()
+
+    def tau(name):
+        rows = store.index.read("tau_final", columns=keys + ["tau_s", "source"],
+                                filter=_F("variant") == tv.scheme_key(name))
+        return rows.assign(source=rows["source"].astype(object)).merge(heat, on=keys, suffixes=("", "_heat"))
+
+    only = tau("heat")
+    assert (only.loc[only["status"].isin(["found", "capped"]), "source"] == "heat").all()
+    assert not (only["source"] == "momentum").any()
+    kept = tau("heat found")
+    is_found = kept["status"].isin(["found", "capped"])
+    assert np.array_equal(kept.loc[is_found, "tau_s"], kept.loc[is_found, "tau_s_heat"])
+    assert kept.loc[~is_found, "tau_s"].isna().all() and (kept.loc[~is_found, "source"] == "none").all()
+    mrd = store.index.read("tau_final", columns=keys + ["tau_s", "source_status"], filter=_F("variant") == "mrd")
+    own = tau("own found").merge(mrd, on=keys, suffixes=("", "_mrd"))
+    good = own["source_status"].astype(object).isin(["found", "capped"])
+    assert np.array_equal(own.loc[good, "tau_s"], own.loc[good, "tau_s_mrd"])
+    assert own.loc[~good, "tau_s"].isna().all()
+    u = store.index.read("boom_final", filter=(_F("variant") == tv.scheme_key("heat found")) & (_F("variable") == "u")
+                         & (_F("stat") == "var")).merge(kept[keys + ["tau_s"]], on=keys)
+    assert u.loc[u["tau_s"].isna(), "value"].isna().all()
 
 
 def test_saved_schemes_classifying_by_the_retired_pair_ri_read_as_ri_g():
@@ -275,3 +312,9 @@ def test_tau_panel_copies_the_summary_whatif_and_a_stability_scheme(window):
     assert problem == "" and scheme.stability == window._stability_in_use()
     p.set_scheme(tv.TauScheme())
     assert p.scheme_now()[0] == tv.TauScheme()
+    p.family.setCurrentIndex(p.family.findData("heat"))
+    p.discard.setChecked(True)
+    scheme, problem = p.scheme_now()
+    assert problem == "" and (scheme.family, scheme.discard) == ("heat", True) and not p.priority.isEnabled()
+    p.set_scheme(tv.TauScheme())
+    assert p.scheme_now()[0] == tv.TauScheme() and p.priority.isEnabled()

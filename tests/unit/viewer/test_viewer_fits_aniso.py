@@ -349,3 +349,15 @@ def test_a_constrained_double_linear_fit_keeps_its_intercept_and_bins_take_a_fix
     bx, _ = curvefits.prepare(x[:-1], truth[:-1], opts)  # x < 8
     assert bx == pytest.approx([2.0, 6.0])
     assert curvefits.rmse([1.0, np.nan, 3.0], [2.0, 5.0, 3.0]) == (pytest.approx(np.sqrt(0.5)), 2)
+
+
+def test_nrmse_iqr_is_the_rmse_over_the_iqr_of_the_same_y():
+    y = np.arange(1.0, 11.0)  # Q1 3.25, Q3 7.75
+    f = np.r_[y[:-1] + 1.0, np.nan]  # the last point undefined: dropped from both the RMSE and the IQR
+    rmse, n = curvefits.rmse(f, y)
+    q1, q3 = np.percentile(y[:-1], [25, 75])
+    assert n == 9 and curvefits.nrmse_iqr(f, y) == pytest.approx(rmse / (q3 - q1))
+    assert np.isnan(curvefits.nrmse_iqr(y[:3] + 1.0, y[:3]))  # too few points
+    assert np.isnan(curvefits.nrmse_iqr(np.ones(6), np.r_[0.0, np.full(4, 2.0), 9.0]))  # IQR 0
+    res = curvefits.fit("linear", y, 2.0 * y + np.sin(y))
+    assert res.nrmse_iqr == pytest.approx(res.rmse / np.subtract(*np.percentile(2.0 * y + np.sin(y), [75, 25])))

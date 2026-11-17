@@ -26,6 +26,13 @@ viewer = [
     "matplotlib",
     "PyOpenGL",
 ]
+era5 = [
+    "cdsapi",
+    "xarray",
+    "netCDF4",
+    "cfgrib",
+    "eccodes",
+]
 dev = [
     "pytest",
     "pytest-qt",
@@ -43,6 +50,7 @@ ttu-validate = "ttu_tower.cli.validate:main"
 ttu-runs = "ttu_tower.cli.runs:main"
 ttu-convert-parquet = "ttu_tower.cli.convert_parquet:main"
 ttu-view = "ttu_tower.cli.view:main"
+ttu-era5-download = "ttu_tower.cli.era5:download_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

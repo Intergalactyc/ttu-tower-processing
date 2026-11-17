@@ -67,6 +67,8 @@ _META: dict[str, tuple[str, str, str]] = {
     "wdgamma": ("Profile fits", "γ (wd std power law)", ""), "loglaw_ustar": ("Profile fits", "log-law u*", "m/s"),
     "loglaw_z0": ("Profile fits", "log-law z0", "m"), "loglaw_z0_constrained": ("Profile fits", "log-law z0 (u* fixed)", "m"),
     "h_bl_momt": ("Profile fits", "BL height (momentum flux)", "m"),
+    "h_bl_rig": ("Profile fits", "BL height (Ri_g)", "m"),
+    "h_bl_rig_log": ("Profile fits", "BL height (Ri_g, log stencil)", "m"),
     "h_sl_momt": ("Profile fits", "surface-layer height (momentum flux)", "m"),
     "h_sl_buoy": ("Profile fits", "surface-layer height (buoyancy flux)", "m"),
     "sun_elevation": ("Other", "sun elevation", "deg"),

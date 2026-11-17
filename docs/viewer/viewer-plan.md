@@ -1572,6 +1572,18 @@ viewed interval or the whole period like the others.
   - "values" writes each point's value (3 significant figures) a few pixels to its right. Labels
     follow the class offsets on zoom and resize, and go into the matplotlib figure too.
   - Both are saved in views.
+- **Profiles: stability and selection together, 2026-11-13.** The one grouping menu is split:
+  - Slots: "all slots", "selection only", or "selection vs rest" (the last not by stability).
+  - "by stability" splits whichever slots are chosen into classes (or the one class picked).
+  - "+ all classes" (by stability) adds the unsplit profile of those slots: blue for all slots,
+    the selection's color for the selection.
+  - "+ selection" (all slots only) adds the whole selection's profile beside the all-slot one,
+    or beside every slot's classes by stability (`profile_stats(with_selection=)`): e.g. the
+    selection against all data's neutral class.
+  - Brushing while on all slots ticks "+ selection" by stability, picks "selection vs rest"
+    otherwise.
+  - Saved as `pool`, `by_stability`, `total`, `plus_selection`; an older view's `grouping` is
+    ignored.
 - **Scatter: constrained fits hold slopes too, 2026-10-30.** A setting left blank ("fitted") is
   fitted; a number holds it (`curvefits.BLANK_FITTED`).
   - Constrained linear: the intercept (default 0) or the slope, not both. A held slope gives

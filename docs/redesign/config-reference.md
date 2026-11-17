@@ -214,6 +214,8 @@ The old code's `ws`, `wd` and propeller bounds are dropped: the derived speed ca
 | `exempt_flux_height_booms` | list[int] | `[]` | DES | Booms never searched for (or interpolated from) in those heights. Must not contain `sfc_boom`. |
 | `h_bl_momt_fraction` | float | `0.05` | DES, **provisional** | `h_bl_momt`: where u*² falls to this fraction of the surface u*². In (0, 1). |
 | `h_sl_deviation` | float | `0.10` | DES, **provisional** | `h_sl_momt`/`h_sl_buoy`: where the flux deviates from its surface value by this fraction of its magnitude. |
+| `h_bl_rig_critical` | float | `0.25` | DES | `h_bl_rig*` (output-schema.md §5.4): where Ri_g first reaches this value. > 0. |
+| `h_bl_rig_stable_booms` | list[int] | `[1, 2, 3, 4]` | DES | `h_bl_rig*`: NaN unless Ri_g > 0 at every one of these booms (a filtered one fails); only the booms above them are searched. Non-empty, leaving a boom above. |
 
 ### `[tertiary.fits]`: every profile-fit rule
 
@@ -383,6 +385,8 @@ sfc_boom = 3
 exempt_flux_height_booms = []
 h_bl_momt_fraction = 0.05
 h_sl_deviation = 0.10
+h_bl_rig_critical = 0.25
+h_bl_rig_stable_booms = [1, 2, 3, 4]
 
 [tertiary.fits]
 exclude_tau = ["unresolved", "fallback"]

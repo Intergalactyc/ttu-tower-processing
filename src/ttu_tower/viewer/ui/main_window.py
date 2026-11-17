@@ -874,7 +874,7 @@ class MainWindow(QMainWindow):
             self._refresh_distributions()
             return
         if tauvariants.is_virtual(spec.variant) and self.variants is not None and not self.variants.is_ready(spec.variant):
-            self.plots[i].clear(f"computing {tauvariants.label(spec.variant)} for this run (about half a minute for "
+            self.plots[i].clear(f"computing {tauvariants.label(spec.variant)} for this run (a minute or two for "
                                 "a year, once)…")
             self._when_variant_ready(spec.variant, lambda: spec is self.specs[i] and self._on_spec(i, spec))
             return
@@ -1296,7 +1296,7 @@ class MainWindow(QMainWindow):
             self._report_error(exc, tb)
 
         self.runner.submit(self.variants.ensure, key, label=f"computing {tauvariants.label(key)}", on_done=done,
-                           on_error=failed)
+                           on_error=failed, long=True)
 
     def _on_variant_progress(self, key: str, text: str) -> None:
         self.statusBar().showMessage(text, 15_000)

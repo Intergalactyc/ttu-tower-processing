@@ -527,7 +527,7 @@ class TauPanel(QWidget):
         summary = self.variants.summary(key) if self.variants.definition(key) is not None else None
         if summary is None:
             self.state.setText(f"{tv.label(key)}: not computed for this run yet (computed the first time a view "
-                               "shows it, about half a minute a year)")
+                               "shows it, a minute or two a year)")
             self.counts.setRowCount(0)
             return
         thresholds = [f"b{int(b)} {p['threshold']:.4g}" for b, p in summary.get("booms", {}).items()

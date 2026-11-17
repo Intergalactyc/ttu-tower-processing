@@ -31,8 +31,11 @@ def find_run(tag: str, *, test: bool = False) -> Path:
     return run_dir
 
 
-def load_results(tag: str, table: str = "wide", *, test: bool = False, columns=None, filters=None) -> pd.DataFrame:
-    """Any output table, by name, for the run registered as `tag`."""
+def load_results(tag: str, table: str = "wide", *, test: bool = False, columns=None, filters=None,
+                 filtered: bool = True) -> pd.DataFrame:
+    """Any output table, by name, for the run registered as `tag`. With `filtered=False`, the tables
+    tertiary filtering changes (`boom_final`, `pairs`, `profile`, `boom_labels_final`, `wide`) are
+    recomputed without it (tertiary.unfiltered); every other table is read as stored either way."""
     spec = schema.TABLES.get(table)
     if spec is None:
         raise ValueError(f"unknown table '{table}'; known tables: {sorted(schema.TABLES)}")
@@ -40,6 +43,11 @@ def load_results(tag: str, table: str = "wide", *, test: bool = False, columns=N
     stage_dir = run_dir / spec.stage
     if not (stage_dir / "run_summary.json").is_file():
         warnings.warn(f"'{tag}': {spec.stage}/run_summary.json is missing; the run may not have finished")
+
+    if not filtered:
+        from ttu_tower.tertiary import unfiltered  # the tertiary machinery, only when asked for
+        if table in unfiltered.TABLES:
+            return unfiltered.load(run_dir, table, columns=columns, filters=filters)
 
     if spec.layout == "single_file":
         return pd.read_parquet(stage_dir / f"{table}.parquet", columns=columns)

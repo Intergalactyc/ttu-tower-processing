@@ -442,12 +442,14 @@ run tag through it. `io/runs.py` implements this; `results.py` is the public loa
   is wrong: an unknown tag (the message lists the registered tags), or a run directory that is
   missing (the message gives the registered path and says the link's `run_dir` can be edited if
   the results were moved).
-- `load_results(tag, table="wide", *, test=False, columns=None, filters=None) -> DataFrame`:
+- `load_results(tag, table="wide", *, test=False, columns=None, filters=None, filtered=True) -> DataFrame`:
   any table of output-schema.md, by name. Table names are unique across stages and
   `schema.TableSpec` records each table's stage and layout (fragment directory or single file),
   so the path follows from the name. Fragments are read with `store.read_table`; `"wide"`
   concatenates the monthly files in order. It warns if that stage has no `run_summary.json`,
-  which means the run didn't finish.
+  which means the run didn't finish. `filtered=False` returns the tertiary tables filtering
+  changes without it, recomputed from the stored primary and secondary tables
+  (output-schema.md §5, "Unfiltered tables").
 - `list_runs(*, test=False) -> DataFrame`: tag, run directory, whether it exists, the stages
   present (those with a `run_meta.json`), registration time. `ttu-runs` prints it.
 

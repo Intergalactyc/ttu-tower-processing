@@ -98,7 +98,7 @@ def set_stability_names(combo: QComboBox, stability) -> None:
 
 class DistributionView(QWidget):
     STATE_FIELDS = ("stability_box", "show_box", "cumulative", "side", "fit_box", "bin_count", "bin_auto",
-                    "bin_lo", "bin_hi", "log_bins")  # saved in a view, restored in this order
+                    "bin_lo", "bin_hi", "log_bins", "premultiplied")  # saved in a view, restored in this order
 
     def __init__(self, runner=None, parent=None):
         super().__init__(parent)
@@ -107,6 +107,8 @@ class DistributionView(QWidget):
         self.title.setWordWrap(True)
         self.log_bins = QCheckBox("log bins")
         self.log_bins.toggled.connect(lambda *_: self.refresh())
+        self.premultiplied = QCheckBox("x·p(x)")
+        self.premultiplied.toggled.connect(lambda *_: self.refresh())
         self.side = QComboBox()
         for label, key in (("all values", "all"), ("x > 0 only", "positive"), ("x < 0 only, as −x", "negative"),
                            ("|x|", "abs")):
@@ -174,6 +176,7 @@ class DistributionView(QWidget):
         bins.addWidget(QLabel("to"))
         bins.addWidget(self.bin_hi)
         bins.addWidget(self.log_bins)
+        bins.addWidget(self.premultiplied)
         bins.addStretch(1)
         layout.addLayout(bins)
         # the table scrolls, and the handle above it resizes it; by default it takes at most
@@ -383,6 +386,12 @@ class DistributionView(QWidget):
         self.side.setToolTip("directions and categories are shown whole" if not self.side.isEnabled()
                              else self.side.toolTip())
         self.log_bins.setToolTip(why or ("a log axis" if cumulative else "logarithmically spaced bins, on a log axis"))
+        self.premultiplied.setEnabled(why is None and self.log_bins.isChecked() and not cumulative)
+        self.premultiplied.setToolTip(
+            why or ("the cumulative view isn't a density" if cumulative else "needs log bins"
+                    if not self.log_bins.isChecked() else
+                    "the premultiplied density x·p(x), the density per unit ln x: on the log axis, equal areas "
+                    "are equal probabilities"))
         self.bin_auto.setEnabled(not q.categorical)
         self.bin_auto.setToolTip(
             "the view spans the 0.1st to 99.9th percentiles (0–360° for directions); untick to set the range"
@@ -420,7 +429,7 @@ class DistributionView(QWidget):
             panel.update(xlabel="", ylabel="fraction", xticks=list(enumerate(categories)))
             return panel
         cumulative = self.cumulative.isChecked()
-        ylabel = "cumulative fraction" if cumulative else "density"
+        ylabel = "cumulative fraction" if cumulative else self._y_label()
         if self._edges.size < 2:
             return panel | {"xlabel": q.unit or "value", "ylabel": ylabel, "log_x": False}
         cdf_x = self._grid(CDF_POINTS)
@@ -436,7 +445,7 @@ class DistributionView(QWidget):
                 if cumulative:
                     panel.setdefault("cdfs", []).append(entry | {"x": cdf_x, "y": ecdf(v, cdf_x), "selected": selected})
                 else:
-                    density, _ = np.histogram(v, bins=self._edges, density=True)
+                    density = self._density(v)
                     panel["hists"].append(entry | {"edges": self._edges, "density": density, "filled": selected})
         grid = self._grid()
         members = list(self._args[1])
@@ -444,7 +453,7 @@ class DistributionView(QWidget):
             if f is not None:
                 i = members.index(m) if m in members else 0
                 with np.errstate(all="ignore"):
-                    curve = {"cdf": f.cdf(grid)} if cumulative else {"pdf": f.pdf(grid)}
+                    curve = {"cdf": f.cdf(grid)} if cumulative else {"pdf": self._fit_pdf(f, grid)}
                 panel["fits"].append({"label": m, "color": pg.mkColor(style.member_color(m, i)).name(), "x": grid,
                                       "dashdot": part == "selected"} | curve)
         panel.update(xlabel=self.x_label(q.unit).replace(" (log scale)", ""), ylabel=ylabel, log_x=bool(self._log))
@@ -586,18 +595,38 @@ class DistributionView(QWidget):
             formulas.setdefault(part, {})[label] = distfits.filled(f)
             x = self._grid()
             with np.errstate(all="ignore"):
-                y = f.cdf(x) if cumulative else f.pdf(x)
+                y = f.cdf(x) if cumulative else self._fit_pdf(f, x)
             dash = Qt.PenStyle.DashDotLine if part == "selected" else Qt.PenStyle.DashLine
             i = members.index(member) if member in members else 0
             curve = pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
                 style.member_color(member, i), width=1.6, style=dash))
             part_label = {"rest": ", the rest", "selected": ", brushed selection"}.get(part, "")
             curve.export_label = (f"{style.member_label(member) or 'value'}{part_label}: {self.fit_box.currentText()} "
-                                  + ("CDF" if cumulative else "PDF"))
+                                  + ("CDF" if cumulative else "x·PDF" if self._premultiply() else "PDF"))
             self.plot.addItem(curve)
         self._show_tables({part: pd.DataFrame.from_dict(r, orient="index") for part, r in rows.items()}, formulas)
 
     # --- plots --------------------------------------------------------------------------------
+
+    def _premultiply(self) -> bool:
+        """x·p(x) in place of p(x): only for a histogram on log bins."""
+        return self._log and self.premultiplied.isEnabled() and self.premultiplied.isChecked()
+
+    def _y_label(self) -> str:
+        return "x · density (premultiplied)" if self._premultiply() else "density"
+
+    def _density(self, v: np.ndarray) -> np.ndarray:
+        """Each bin's density of the in-range values: per unit x, or premultiplied,
+        per unit ln x (the bin's share over its width in ln x).
+        """
+        if not self._premultiply():
+            return np.histogram(v, bins=self._edges, density=True)[0]
+        counts = np.histogram(v, bins=self._edges)[0]
+        with np.errstate(all="ignore"):
+            return counts / counts.sum() / np.diff(np.log(self._edges))
+
+    def _fit_pdf(self, f, x: np.ndarray) -> np.ndarray:
+        return x * f.pdf(x) if self._premultiply() else f.pdf(x)
 
     def _grid(self, n: int = 300) -> np.ndarray:
         """`n` points across the range, log-spaced with log bins."""
@@ -662,14 +691,14 @@ class DistributionView(QWidget):
             v = v[np.isfinite(v)]
             if v.size == 0:
                 continue
-            counts, _ = np.histogram(v, bins=edges, density=True)
+            counts = self._density(v)
             x = np.log10(edges) if log else edges
             item = pg.PlotDataItem(x, counts, stepMode="center", pen=pg.mkPen(style.member_color(member, i), width=1.5))
             label = style.member_label(member) or "value"
             item.export_label = f"{label}: {part}" if part else label
             self.plot.addItem(item)
         self.plot.setLabel("bottom", html.escape(self.x_label(unit)))
-        self.plot.setLabel("left", "density")
+        self.plot.setLabel("left", self._y_label())
 
     def _selected_histograms(self) -> None:
         """The brushed slots' histogram per boom, filled, as a density of the
@@ -681,7 +710,7 @@ class DistributionView(QWidget):
             y = y[np.isfinite(y)]
             if y.size == 0:
                 continue
-            share, _ = np.histogram(y, bins=self._edges, density=True)
+            share = self._density(y)
             color = pg.mkColor(style.member_color(member, i))
             color.setAlpha(110)
             x = np.log10(self._edges) if self._log else self._edges

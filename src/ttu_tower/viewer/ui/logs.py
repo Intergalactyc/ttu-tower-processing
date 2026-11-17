@@ -6,6 +6,7 @@ warnings were logged.
 import logging
 import sys
 import tempfile
+import threading
 import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -72,6 +73,11 @@ def install() -> Path:
     # the pipeline's expected all-NaN/empty-window warnings while reprocessing, which primary tallies rather than prints
     warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"numpy\..*")
     qInstallMessageHandler(_qt_message)
+    # an exception escaping a Qt slot or a thread is otherwise printed to the console only
+    sys.excepthook = lambda *exc: logging.getLogger(LOGGER).error("uncaught exception", exc_info=exc)
+    threading.excepthook = lambda a: logging.getLogger(LOGGER).error(
+        f"uncaught exception in thread {a.thread.name if a.thread else '?'}",
+        exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
     logging.getLogger(LOGGER).info("ttu-view started")
     return log_path
 

@@ -37,7 +37,8 @@ def _read_boom_fragment(primary_dir: Path, table: str, batch_id: str, boom: int)
     return pd.read_parquet(path) if path.is_file() else None
 
 
-def _read_primary_batch(primary_dir: Path, batch: Batch, booms) -> tuple[dict[str, pd.DataFrame], list[int]]:
+def _read_primary_batch(primary_dir: Path, batch: Batch, booms,
+                        tables_to_read=_PRIMARY_TABLES) -> tuple[dict[str, pd.DataFrame], list[int]]:
     """A failed primary unit leaves no fragment, and the run is allowed to
     continue past it, so a missing (batch, boom) is skipped here rather than
     raised (same tolerance as secondary/runner.py).
@@ -47,7 +48,7 @@ def _read_primary_batch(primary_dir: Path, batch: Batch, booms) -> tuple[dict[st
         _logger.warning(f"primary unit {batch.id}_b{b:02d} has no output; skipping this boom for the batch")
 
     tables = {}
-    for table in _PRIMARY_TABLES:
+    for table in tables_to_read:
         frames = [f for b in usable if (f := _read_boom_fragment(primary_dir, table, batch.id, b)) is not None]
         tables[table] = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=schema.TABLES[table].columns)
     return tables, usable
@@ -90,6 +91,52 @@ def _slot_final_rows(batch_slots: pd.DataFrame, slot_stats: pd.DataFrame, meso_d
     return rows
 
 
+FILTERED_TABLES = ("boom_final", "pairs", "profile", "boom_labels_final")  # the tables filtering changes
+
+
+def plan_run_batches(primary_dir: Path, cfg) -> tuple[list[Batch], pd.DataFrame]:
+    """The batches tertiary processes (primary's and secondary's), and the run's slot table."""
+    file_table = pd.read_parquet(primary_dir / "files.parquet")
+    slots_all = pd.read_parquet(primary_dir / "slots.parquet")
+    batches, _ = plan_batches(file_table, period_slots_from_table(slots_all), cfg.primary.batch_max_files,
+                              Cadence.of(cfg))
+    return batches, slots_all
+
+
+def batch_slot_table(batch: Batch, slots_all: pd.DataFrame, cadence: Cadence) -> pd.DataFrame:
+    """The rows of the run's slot table that fall in `batch`."""
+    slot_a, slot_b = cadence.file_slots(batch.h_a)[0], cadence.file_slots(batch.h_b + 1)[0]
+    return slots_all[(slots_all["slot"] >= slot_a) & (slots_all["slot"] < slot_b)]
+
+
+def with_slot_start(tables: dict[str, pd.DataFrame], batch_slots: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """`tables`, with `slot_start` added to those that carry it (_SLOT_START_TABLES)."""
+    slot_start_by_slot = batch_slots.set_index("slot")["slot_start"]
+    return {name: df.assign(slot_start=df["slot"].map(slot_start_by_slot)) if name in _SLOT_START_TABLES else df
+            for name, df in tables.items()}
+
+
+def filtered_tables(primary: dict[str, pd.DataFrame], secondary: dict[str, pd.DataFrame], fail_keys: set,
+                    cfg) -> dict[str, pd.DataFrame]:
+    """FILTERED_TABLES (without slot_start) of one batch: the values of `fail_keys` (filtering.evaluate) NaN'd,
+    then the gradient, multi-boom and profile products computed from what is left. An empty `fail_keys` gives
+    the unfiltered tables.
+    """
+    candidate = filtering.build_candidate(primary["means"], secondary["slow"], secondary["boom_stats"])
+    boom_final = filtering.apply(candidate, fail_keys)
+    grads = gradients.gradients(boom_final, cfg.files.booms, cfg.tertiary.gradients.stencils)
+    boom_final = pd.concat([boom_final, grads], ignore_index=True)
+    boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
+
+    pairs = multiboom.multiboom(boom_final, cfg.files.booms, cfg.tertiary.veer_reference_boom)
+    profile = pd.concat([
+        profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits),
+        profiles.flux_heights(boom_final, secondary["tau_selected"], cfg.files.booms, cfg.tertiary),
+        profiles.rig_heights(boom_final, cfg.files.booms, cfg.tertiary),
+    ], ignore_index=True)
+    return {"boom_final": boom_final, "pairs": pairs, "profile": profile, "boom_labels_final": boom_labels_final}
+
+
 def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_dir: Path,
                     slots_all: pd.DataFrame, meso_df: pd.DataFrame | None, cfg) -> dict[str, pd.DataFrame] | None:
     batch = batches[i]
@@ -108,32 +155,12 @@ def _process_batch(i: int, batches: list[Batch], primary_dir: Path, secondary_di
     fail_keys, filter_log = filtering.evaluate(
         candidate, primary["coverage"], secondary["tau_selected"], flag_stores, cfg.tertiary, cadence,
     )
-    boom_final = filtering.apply(candidate, fail_keys)
-    grads = gradients.gradients(boom_final, cfg.files.booms, cfg.tertiary.gradients.stencils)
-    boom_final = pd.concat([boom_final, grads], ignore_index=True)
-    boom_labels_final = filtering.apply_to_labels(secondary["boom_labels"], fail_keys)
-
-    pairs = multiboom.multiboom(boom_final, cfg.files.booms, cfg.tertiary.veer_reference_boom)
-    profile = pd.concat([
-        profiles.profiles(boom_final, secondary["tau_selected"], cfg.tertiary.fits),
-        profiles.flux_heights(boom_final, secondary["tau_selected"], cfg.files.booms, cfg.tertiary),
-        profiles.rig_heights(boom_final, cfg.files.booms, cfg.tertiary),
-    ], ignore_index=True)
-    tau_final = secondary["tau_selected"].copy()
-
-    slot_a, slot_b = cadence.file_slots(batch.h_a)[0], cadence.file_slots(batch.h_b + 1)[0]
-    batch_slots = slots_all[(slots_all["slot"] >= slot_a) & (slots_all["slot"] < slot_b)]
-    slot_final = _slot_final_rows(batch_slots, secondary["slot_stats"], meso_df)
-
-    tables = {
-        "boom_final": boom_final, "tau_final": tau_final, "pairs": pairs,
-        "profile": profile, "slot_final": slot_final, "filter_log": filter_log,
-        "boom_labels_final": boom_labels_final,
-    }
-    slot_start_by_slot = batch_slots.set_index("slot")["slot_start"]
-    for name in _SLOT_START_TABLES:
-        tables[name] = tables[name].assign(slot_start=tables[name]["slot"].map(slot_start_by_slot))
-    return tables
+    tables = filtered_tables(primary, secondary, fail_keys, cfg)
+    batch_slots = batch_slot_table(batch, slots_all, cadence)
+    tables |= {"tau_final": secondary["tau_selected"].copy(),
+               "slot_final": _slot_final_rows(batch_slots, secondary["slot_stats"], meso_df),
+               "filter_log": filter_log}
+    return with_slot_start(tables, batch_slots)
 
 
 def run_tertiary(cfg, args) -> dict:
@@ -154,10 +181,7 @@ def run_tertiary(cfg, args) -> dict:
                     timezone=cfg.output.timezone, unusable_tests=cfg.qc.unusable_tests)
     write_config_copies(stage_dir, cfg, args.config)
 
-    file_table = pd.read_parquet(primary_dir / "files.parquet")
-    slots_all = pd.read_parquet(primary_dir / "slots.parquet")
-    period_slots = period_slots_from_table(slots_all)
-    batches, _ = plan_batches(file_table, period_slots, cfg.primary.batch_max_files, Cadence.of(cfg))
+    batches, slots_all = plan_run_batches(primary_dir, cfg)
     if args.test:
         batches = batches[:1]
 

@@ -403,6 +403,17 @@ sunrise or after sunset).
 All carry `slot_start` as well as `slot`, and have rows for every slot of the period with a
 file; values are NaN where inputs are missing or filtered.
 
+**Unfiltered tables.** Only the filtered tables are stored. `load_results(tag, table,
+filtered=False)` recomputes the tables filtering changes (`boom_final`, `pairs`, `profile`,
+`boom_labels_final`, and `wide` from them) with no (slot, boom, variant, group) failing, from
+primary `means` and secondary `slow`, `boom_stats`, `boom_labels` and `tau_selected`
+(`tertiary/unfiltered.py`). It runs tertiary's own code under the run's
+`tertiary/config.resolved.json`, so the rows and columns are the stored ones, plus any product
+the installed package adds that the run predates; the gradient products, multi-boom quantities
+and profile fits are computed from the unfiltered values. Samples primary marked unusable are
+still excluded from every statistic. `tau_final` and `slot_final` don't depend on filtering
+and are read as stored; `filter_log` still records what filtering would remove.
+
 ### 5.1 `boom_final`: filtered per-boom values
 
 Columns: `slot`, `slot_start`, `boom`, `variant` (`none` | `mrd` | `naive` | `mrd_unexcised`),

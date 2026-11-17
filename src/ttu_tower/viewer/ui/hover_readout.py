@@ -31,6 +31,8 @@ def axis_value(axis: pg.AxisItem, v: float) -> str:
             if abs(p - v) <= min(spacing / 2, 0.5):
                 return label
     if isinstance(axis, Log10Axis) and getattr(axis, "log10", True) or axis.logMode:
+        if abs(v) > 300:  # beyond float range: 10 ** v overflows
+            return f"1e{v:.0f}"
         v = 10.0 ** v
     if isinstance(axis, pg.DateAxisItem):
         return datetime.fromtimestamp(v, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

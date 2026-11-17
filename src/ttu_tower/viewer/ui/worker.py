@@ -3,7 +3,8 @@
 an older one: one that hasn't started yet skips its work when its turn comes,
 and one already running has its result dropped - that's how navigating away
 "cancels" work. Jobs someone is waiting on (an inspector opening) can jump the
-queue with a priority.
+queue with a priority. Long jobs (computing a τ variant) run one at a time on
+a thread of their own, so the loads keep going meanwhile.
 
 Nothing Qt may be created or destroyed off the GUI thread. The workers are
 plain Python threads (a QThreadPool deletes its QRunnables on its own threads),
@@ -90,25 +91,29 @@ class JobRunner(QObject):
         super().__init__(parent)
         collect_garbage_on_gui_thread()
         self.pool = _Pool(max_threads)
+        self._long = _Pool(1)  # minutes-long jobs (τ variants), one at a time, so loads never queue behind them
         self._signals = _Signals()
         self._signals.finished.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
         self._ids = itertools.count(1)
         self._callbacks: dict[int, tuple] = {}
+        self._long_ids: set[int] = set()
         self._latest: dict[str, int] = {}
         self._superseded: set[int] = set()  # read by the worker threads
         self._lock = threading.Lock()
 
     def submit(self, fn, *args, on_done=None, on_error=None, key: str | None = None, label: str = "",
-               priority: int = 0, **kwargs) -> int:
+               priority: int = 0, long: bool = False, **kwargs) -> int:
         job_id = next(self._ids)
         self._callbacks[job_id] = (on_done, on_error, key, label)
+        if long:
+            self._long_ids.add(job_id)
         if key is not None:
             older = self._latest.get(key)
             if older is not None:
                 with self._lock:
                     self._superseded.add(older)
             self._latest[key] = job_id
-        self.pool.start(lambda: self._run(job_id, fn, args, kwargs), priority)
+        (self._long if long else self.pool).start(lambda: self._run(job_id, fn, args, kwargs), priority)
         self._report()
         return job_id
 
@@ -127,11 +132,12 @@ class JobRunner(QObject):
         self._signals.finished.emit(job_id, True, result)
 
     def wait(self, msecs: int = 30_000) -> bool:
-        return self.pool.waitForDone(msecs)
+        return self.pool.waitForDone(msecs) and self._long.waitForDone(msecs)
 
     def shutdown(self) -> None:
         """Let the worker threads end once the queued jobs are done."""
         self.pool.shutdown()
+        self._long.shutdown()
 
     @Slot(int, bool, object)
     def _deliver(self, job_id: int, ok: bool, payload):
@@ -154,5 +160,7 @@ class JobRunner(QObject):
                 logging.getLogger("ttu_view").error(tb)
 
     def _report(self):
-        labels = [label for (_, _, _, label) in self._callbacks.values() if label]
-        self.busyChanged.emit(len(self._callbacks), labels[-1] if labels else "")
+        self._long_ids &= self._callbacks.keys()
+        long = [c[3] for j, c in self._callbacks.items() if j in self._long_ids and c[3]]
+        short = [c[3] for j, c in self._callbacks.items() if j not in self._long_ids and c[3]]
+        self.busyChanged.emit(len(self._callbacks), " · ".join(long[:1] + short[-1:]))  # a long job stays in view

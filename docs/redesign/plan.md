@@ -173,7 +173,7 @@ src/ttu_tower/
   secondary/
     detect.py  select.py  derived.py  slow.py  sun.py  runner.py
   tertiary/
-    mesonet.py  filtering.py  multiboom.py  profiles.py  wide.py  runner.py
+    mesonet.py  filtering.py  multiboom.py  profiles.py  wide.py  runner.py  unfiltered.py
   post/
     classify.py  report.py
   validation/
@@ -1375,6 +1375,10 @@ products of output-schema.md §5.1 (dθ/dz, dθv/dz, dU/dz, shear, N², Ri_g; pe
 **`tertiary/runner.py`**: batches in sequence, in one process, like secondary. Mesonet is loaded
 once and sliced per batch. After all batches, write the wide export month by month.
 `cli/runall.py` runs primary → secondary → tertiary as subprocesses (port the old `runall`).
+
+**`tertiary/unfiltered.py`**: the tables filtering changes, recomputed per batch by the runner's
+own `filtered_tables` with no failures, for `load_results(..., filtered=False)`
+(output-schema.md §5, "Unfiltered tables"). Nothing is written.
 
 **Acceptance**
 - The ported mesonet tests pass (adapted from the old

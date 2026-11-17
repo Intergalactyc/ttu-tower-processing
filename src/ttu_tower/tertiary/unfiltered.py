@@ -5,7 +5,8 @@ and profile products are then computed from what is left. Only the filtered tabl
 so the unfiltered ones are rebuilt here, batch by batch, by the same code tertiary runs
 (runner.filtered_tables) with no failures: from primary `means` and secondary `slow`,
 `boom_stats`, `boom_labels` and `tau_selected`, under the run's own tertiary config. The flags
-and coverage that filtering reads are never loaded.
+and coverage that filtering reads are never loaded. The code is the installed package's, so a
+product added since the run was made appears here but not in its stored tables.
 
 Unfiltered means only that tertiary's boom-level filtering is skipped. Samples primary marked
 unusable (`[qc].unusable_tests`) are still left out of every statistic, and statistics primary

@@ -152,11 +152,13 @@ flowchart TB
         t_grad["gradients.py<br/>dθ/dz, N², Ri_g, Ri_f, Km, Kh"]
         t_prof["profiles.py<br/>power-law and log-law fits"]
         t_wide["wide.py<br/>monthly wide export"]
+        t_unf["unfiltered.py<br/>tables without filtering, on demand"]
         c_tertiary --> t_runner --> t_meso -.->|"wtxmeso"| mesodir
         t_runner --> t_filter --> t_multi
         t_filter --> t_grad
         t_filter --> t_prof
         t_runner --> t_wide
+        t_runner --> t_unf
     end
 
     subgraph b_tools["Reports, validation, results"]

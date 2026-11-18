@@ -8,7 +8,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
@@ -20,6 +20,8 @@ from ttu_tower.viewer.decimate import visible_slice
 from ttu_tower.viewer.timeline import class_choices, in_class
 from ttu_tower.viewer.ui import style, tables
 from ttu_tower.viewer.ui.axes import SwitchLogAxis
+from ttu_tower.viewer.ui.timeline_plot import BRUSH_FILL, brush_mode
+from ttu_tower.viewer.ui.view_state import LateCombo
 from ttu_tower.viewer.ui.wrap_tabs import keep_tall
 
 _STATS = ("N", "NaN %", "mean", "σ", "MAD", "skew", "kurt", "min", "p5", "p25", "median", "p75", "p95", "max")
@@ -37,7 +39,37 @@ TABLE_SHARE = 0.3  # the table's default share of the height it shares with its 
 BINS = 60  # the default bin count
 CDF_POINTS = 1000  # where the cumulative view evaluates each boom's distribution
 # with slots brushed: the selection beside the rest, the selection alone, or every slot
-SHOW = (("both", "selection and the rest"), ("selected", "selection only"), ("all", "all slots"))
+SHOW = (("both", "selection and the rest"), ("selected", "selection only"), ("unselected", "all but the selection"),
+        ("all", "all slots"))
+SHOW_PART = {"selected": "brushed selection", "unselected": "all but the selection"}  # a single part's name
+BAR_HALF = 0.4  # a category's bars span its code ± this
+
+
+def in_band(y: np.ndarray, lo: float, hi: float, categorical: bool = False) -> np.ndarray:
+    """Values inside [lo, hi]; a category's when its bars overlap the band."""
+    with np.errstate(invalid="ignore"):
+        if categorical:
+            return (y + BAR_HALF >= lo) & (y - BAR_HALF <= hi)
+        return (y >= lo) & (y <= hi)
+
+
+class BandViewBox(pg.ViewBox):
+    """A brushing drag (Shift, or any drag with `brush_always`) goes to
+    `brusher(x0, x1, mode, finished)`; other drags pan and zoom as usual.
+    """
+
+    def __init__(self, brusher, **kwargs):
+        super().__init__(**kwargs)
+        self.brusher = brusher
+        self.brush_always = False
+
+    def mouseDragEvent(self, ev, axis=None):
+        mode = brush_mode(ev, self.brush_always) if axis is None else None
+        if mode is None:
+            super().mouseDragEvent(ev, axis)
+            return
+        ev.accept()
+        self.brusher(self.mapToView(ev.buttonDownPos()).x(), self.mapToView(ev.pos()).x(), mode, ev.isFinish())
 
 
 def summary(values: np.ndarray, circular: bool = False) -> list[float]:
@@ -98,7 +130,8 @@ def set_stability_names(combo: QComboBox, stability) -> None:
 
 class DistributionView(QWidget):
     STATE_FIELDS = ("stability_box", "show_box", "cumulative", "side", "fit_box", "bin_count", "bin_auto",
-                    "bin_lo", "bin_hi", "log_bins", "premultiplied")  # saved in a view, restored in this order
+                    "bin_lo", "bin_hi", "log_bins", "premultiplied", "brush_target")  # restored in this order
+    brushed = Signal(object, str)  # the slots in a dragged band, and "replace" / "add" / "remove"
 
     def __init__(self, runner=None, parent=None):
         super().__init__(parent)
@@ -126,7 +159,16 @@ class DistributionView(QWidget):
         for key, label in SHOW:
             self.show_box.addItem(label, key)
         self.show_box.setToolTip("with slots brushed: the selection (filled) beside the rest (lines), the "
-                                 "selection alone, or every slot as if nothing were brushed")
+                                 "selection alone, every slot but the selection, or every slot as if nothing "
+                                 "were brushed")
+        self.brush_target = LateCombo()
+        self.brush_target.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.brush_target.setToolTip(
+            "Shift-drag across the plot (or any drag with Brush on) to select the slots whose values fall in "
+            "that band, among the values plotted: at any boom shown, at every boom shown, or at one boom. "
+            "Ctrl adds to the selection, Alt takes away; Esc clears")
+        self._fill_targets([])
+        self._band = None
         self.show_box.setEnabled(False)
         self.show_box.currentIndexChanged.connect(lambda *_: self.refresh())
         self.cumulative = QCheckBox("cumulative")
@@ -148,7 +190,9 @@ class DistributionView(QWidget):
         self.bin_auto.toggled.connect(self._on_bin_auto)
         self.fits: dict = {}
         self._fitted = None  # (args, inputs, fits) of the last fit, reused while only the view changes
-        self.plot = keep_tall(pg.PlotWidget(axisItems={"bottom": SwitchLogAxis(orientation="bottom")}), 160)
+        self.vb = BandViewBox(self._on_band)
+        self.plot = keep_tall(pg.PlotWidget(viewBox=self.vb, axisItems={"bottom": SwitchLogAxis(orientation="bottom")}),
+                              160)
         self.plot.getPlotItem().showGrid(x=True, y=True, alpha=0.15)
         self.table = tables.new_table()
         self.note = QLabel()
@@ -178,6 +222,8 @@ class DistributionView(QWidget):
         bins.addWidget(self.log_bins)
         bins.addWidget(self.premultiplied)
         bins.addStretch(1)
+        bins.addWidget(QLabel("brush"))
+        bins.addWidget(self.brush_target)
         layout.addLayout(bins)
         # the table scrolls, and the handle above it resizes it; by default it takes at most
         # TABLE_SHARE of the height, less when its rows need less
@@ -232,7 +278,24 @@ class DistributionView(QWidget):
         """
         set_stability_names(self.stability_box, stability)
         self._args = (data, list(members), x_range, stability)
+        self._fill_targets(self._args[1] if data is not None else [])
         self.refresh()
+
+    def _fill_targets(self, members: list) -> None:
+        """Brush at any boom, every boom, or one (keyed by str: Qt turns tuples into lists)."""
+        items = [("any boom shown", "any"), ("every boom shown", "every")] + [
+            (style.member_label(m) or "value", str(m)) for m in members]
+        if [(self.brush_target.itemText(i), self.brush_target.itemData(i))
+                for i in range(self.brush_target.count())] == items:
+            return
+        current = self.brush_target.currentData()
+        self.brush_target.blockSignals(True)
+        self.brush_target.clear()
+        for label, key in items:
+            self.brush_target.addItem(label, key)
+        self.brush_target.setCurrentIndex(max(self.brush_target.findData(current), 0))
+        self.brush_target.blockSignals(False)
+        self.brush_target.take_pending()
 
     def slots_and_values(self) -> dict:
         """member -> (slots, values) in range (and in the chosen class)."""
@@ -282,11 +345,60 @@ class DistributionView(QWidget):
 
     def split_values(self, selected: bool) -> dict:
         """member -> values of the brushed slots (or of the rest)."""
+        return {m: y for m, (_, y) in self._split(selected).items()}
+
+    def _split(self, selected: bool) -> dict:
         out = {}
         for m, (slots, y) in self.slots_and_values().items():
             chosen = np.isin(slots, self.selection)
-            out[m] = y[chosen if selected else ~chosen]
+            keep = chosen if selected else ~chosen
+            out[m] = slots[keep], y[keep]
         return out
+
+    def plotted_slots_and_values(self) -> dict:
+        """member -> (slots, values) of what's plotted: the brushed slots alone,
+        all but them, or every slot (the selection and the rest together).
+        """
+        showing = self.showing()
+        if showing in SHOW_PART:
+            return self._split(showing == "selected")
+        return self.slots_and_values()
+
+    def band_slots(self, x0: float, x1: float) -> np.ndarray:
+        """The plotted slots whose values lie between x0 and x1 (plot coordinates:
+        log10 with log bins) at the brush target: any boom shown, every one, or one.
+        """
+        if self._args is None or self._args[0] is None:
+            return np.empty(0, dtype=np.int64)
+        lo, hi = sorted((x0, x1))
+        if self._log:
+            lo, hi = 10.0 ** lo, 10.0 ** hi
+        categorical = self._args[0].quantity.categorical
+        target = self.brush_target.currentData() or "any"
+        picked = [slots[in_band(y, lo, hi, categorical)] for m, (slots, y) in self.plotted_slots_and_values().items()
+                  if (target in ("any", "every") or str(m) == target) and slots.size]
+        if not picked:
+            return np.empty(0, dtype=np.int64)
+        if target == "every":
+            out = picked[0]
+            for p in picked[1:]:
+                out = np.intersect1d(out, p)
+            return out.astype(np.int64)
+        return np.unique(np.concatenate(picked)).astype(np.int64)
+
+    def _on_band(self, x0: float, x1: float, mode: str, finished: bool) -> None:
+        """Show the band while dragging; select its slots when the drag ends."""
+        item = self.plot.getPlotItem()
+        if self._band is None:
+            self._band = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(BRUSH_FILL),
+                                             pen=pg.mkPen(style.SELECTED_COLOR, width=1))
+            self._band.setZValue(20)
+            item.addItem(self._band, ignoreBounds=True)
+        self._band.setRegion(sorted((x0, x1)))
+        if finished:
+            item.removeItem(self._band)
+            self._band = None
+            self.brushed.emit(self.band_slots(x0, x1), mode)
 
     def set_selection(self, slots: np.ndarray) -> None:
         """Brushed slots: by default each boom's histogram splits into the
@@ -296,11 +408,14 @@ class DistributionView(QWidget):
         self.refresh()
 
     def showing(self) -> str:
-        """"both" (the selection and the rest), "selected", or "all"; "all" when nothing is brushed."""
+        """"both" (the selection and the rest), "selected", "unselected" (all but
+        the selection), or "all"; "all" when nothing is brushed.
+        """
         return self.show_box.currentData() if self.selection.size else "all"
 
     def refresh(self) -> None:
         self.plot.clear()
+        self._band = None
         self._log = False
         self.plot.getPlotItem().getAxis("bottom").setTicks(None)
         self.plot.getPlotItem().getAxis("bottom").set_log10(False)
@@ -322,15 +437,17 @@ class DistributionView(QWidget):
         cumulative = self.cumulative.isChecked() and not q.categorical
         both = ("highlighted: brushed selection, plain: the rest (each its own fraction)" if cumulative
                 else "filled: brushed selection, lines: the rest (each its own density)")
-        note = {"both": f" · {both}", "selected": " · the brushed selection only", "all": ""}[showing]
+        note = {"both": f" · {both}", "selected": " · the brushed selection only",
+                "unselected": " · all but the brushed selection", "all": ""}[showing]
         side = {"all": "", "positive": ", values > 0 only", "negative": ", values < 0 only, as −x",
                 "abs": ", absolute values"}[self.side_key()]
         self.title.setText(f"<b>{q.title}</b>{html.escape(side)} — {scope}" + (f", {name} only" if name else "")
-                           + (note if split or showing == "selected" else ""))
+                           + (note if split or showing in SHOW_PART else ""))
         self._fit_choices(q.circular)
         self.show_box.setEnabled(self.selection.size > 0)
-        if showing == "selected":
-            values = self.split_values(True)
+        single = SHOW_PART.get(showing, "")  # what a single part is, for the CSV export
+        if single:
+            values = self.split_values(showing == "selected")
         self._enable_controls(q, values)
         if q.categorical:
             self._bars(values, data.categories or [])
@@ -340,18 +457,18 @@ class DistributionView(QWidget):
                     self._cumulatives(self.split_values(False), "the rest")
                     self._cumulatives(self.split_values(True), "brushed selection", selected=True)
                 else:
-                    self._cumulatives(values, "brushed selection" if showing == "selected" else "")
+                    self._cumulatives(values, single)
                 self.plot.setLabel("bottom", html.escape(self.x_label(q.unit)))
                 self.plot.setLabel("left", "cumulative fraction")
         elif split:
             self._histograms(self.split_values(False), q.unit, q.circular, bins_from=values, part="the rest")
             self._selected_histograms()
         else:
-            self._histograms(values, q.unit, q.circular, part="brushed selection" if showing == "selected" else "")
+            self._histograms(values, q.unit, q.circular, part=single)
         if split:
             parts = {"rest": self.split_values(False), "selected": self.split_values(True)}
         else:
-            parts = {"selected" if showing == "selected" else "all": values}
+            parts = {showing if single else "all": values}
         self._stats = {part: self._summary_frame(v, q.categorical, q.circular) for part, v in parts.items()}
         self._show_tables()
         self._start_fits(parts, q)
@@ -413,7 +530,7 @@ class DistributionView(QWidget):
         if split:
             values = self.split_values(False)
         else:
-            values = self.split_values(True) if showing == "selected" else self.values_by_member()
+            values = self.split_values(showing == "selected") if showing in SHOW_PART else self.values_by_member()
         panel = {"title": self.title.text().replace("<b>", "").replace("</b>", ""), "hists": [], "bars": [],
                  "fits": []}
         if q.categorical:
@@ -440,7 +557,8 @@ class DistributionView(QWidget):
                 if not v.size:
                     continue
                 label = style.member_label(m) or "value"
-                suffix = ", selected" if selected or showing == "selected" else ", the rest" if split else ""
+                suffix = (", selected" if selected or showing == "selected" else ", the rest" if split
+                          else ", all but the selection" if showing == "unselected" else "")
                 entry = {"label": f"{label}{suffix}", "color": pg.mkColor(style.member_color(m, i)).name()}
                 if cumulative:
                     panel.setdefault("cdfs", []).append(entry | {"x": cdf_x, "y": ecdf(v, cdf_x), "selected": selected})
@@ -483,7 +601,7 @@ class DistributionView(QWidget):
             shown = [("rest", self.table, f"the rest ({plain})"),
                      ("selected", self.sel_table, f"brushed selection ({marked})")]
         else:
-            shown = [("selected" if "selected" in self._stats else "all", self.table, "")]
+            shown = [(next(iter(self._stats), "all"), self.table, "")]
         for part, table, _ in shown:
             frame = self._stats.get(part, pd.DataFrame())
             extra = fitted.get(part)
@@ -600,7 +718,8 @@ class DistributionView(QWidget):
             i = members.index(member) if member in members else 0
             curve = pg.PlotDataItem(np.log10(x) if self._log else x, y, pen=pg.mkPen(
                 style.member_color(member, i), width=1.6, style=dash))
-            part_label = {"rest": ", the rest", "selected": ", brushed selection"}.get(part, "")
+            part_label = {"rest": ", the rest", "selected": ", brushed selection",
+                          "unselected": ", all but the selection"}.get(part, "")
             curve.export_label = (f"{style.member_label(member) or 'value'}{part_label}: {self.fit_box.currentText()} "
                                   + ("CDF" if cumulative else "x·PDF" if self._premultiply() else "PDF"))
             self.plot.addItem(curve)

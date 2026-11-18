@@ -253,6 +253,76 @@ def test_distributions_show_the_selection_the_rest_or_every_slot(window, qtbot):
     assert not any("selection" in text or "rest" in text for text in labels())
 
 
+class _Drag:
+    """Just enough of a pyqtgraph drag event for a ViewBox's mouseDragEvent."""
+
+    def __init__(self, start, end, mods=Qt.KeyboardModifier.ShiftModifier):
+        self.start, self.end, self.mods = start, end, mods
+
+    def button(self):
+        return Qt.MouseButton.LeftButton
+
+    def modifiers(self):
+        return self.mods
+
+    def buttonDownPos(self):
+        return self.start
+
+    def pos(self):
+        return self.end
+
+    def isStart(self):
+        return False
+
+    def isFinish(self):
+        return True
+
+    def accept(self):
+        pass
+
+
+def test_a_band_dragged_on_a_distribution_selects_its_slots(window, qtbot):
+    from PySide6.QtCore import QPointF
+    from ttu_tower.viewer.ui import style
+    window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
+    qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)
+    window.right_tabs.setCurrentWidget(window.dist_tab)
+    window.full_period.setChecked(True)
+    dist = window.dists[0]
+    by_member = dist.slots_and_values()
+    lo, hi = np.nanpercentile(np.concatenate([y for _, y in by_member.values()]), [30, 60])
+    one = FULL_BOOMS[0]
+    dist.brush_target.setCurrentIndex(dist.brush_target.findData(str(one)))
+    vb = dist.vb
+    vb.mouseDragEvent(_Drag(vb.mapFromView(QPointF(lo, 0)), vb.mapFromView(QPointF(hi, 0))))
+    slots, y = by_member[one]
+    expected = np.sort(slots[(y >= lo) & (y <= hi)])
+    assert expected.size and window.selection.size == pytest.approx(expected.size, abs=2)  # pixel rounding
+    assert np.isin(window.selection, slots).all()
+
+    dist.brush_target.setCurrentIndex(dist.brush_target.findData("any"))
+    window.set_selection(dist.band_slots(lo, hi), "replace")
+    anyb = window.selection.copy()
+    dist.brush_target.setCurrentIndex(dist.brush_target.findData("every"))
+    every = dist.band_slots(lo, hi)
+    assert np.isin(every, anyb).all() and every.size < anyb.size and np.isin(expected, anyb).all()
+    for m, (s, v) in by_member.items():  # every boom's value in the band
+        assert ((v[np.isin(s, every)] >= lo) & (v[np.isin(s, every)] <= hi)).all()
+
+    dist.show_box.setCurrentIndex(dist.show_box.findData("unselected"))
+    assert set(dist._stats) == {"unselected"} and dist.sel_table.isHidden()
+    for m, (s, v) in by_member.items():
+        rest = v[~np.isin(s, anyb)]
+        label = style.member_label(m)
+        assert dist._stats["unselected"].loc[label, "N"] == np.isfinite(rest).sum()
+    assert "all but the brushed selection" in dist.title.text()
+    assert dist.figure_spec()["hists"][0]["label"].endswith("all but the selection")
+    # a band brushed while all but the selection is shown picks from those slots only
+    vb.mouseDragEvent(_Drag(vb.mapFromView(QPointF(lo, 0)), vb.mapFromView(QPointF(hi, 0)),
+                            Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier))
+    assert np.isin(anyb, window.selection).all()  # Ctrl added to it
+
+
 def test_distribution_bins_can_be_counted_and_ranged(window, qtbot):
     window.panels[0].select("boom_final|ws|mean", "none", tuple(FULL_BOOMS))
     qtbot.waitUntil(lambda: _idle(window) and window.datas[0].quantity.key == "boom_final|ws|mean", timeout=60_000)

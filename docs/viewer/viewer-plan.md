@@ -1750,6 +1750,17 @@ viewed interval or the whole period like the others.
   - **All slots:** every slot, as if nothing were brushed.
   - It works for categories too, where "selection and the rest" shows all the slots. Each
     part's fits follow what's shown.
+  - **2026-11-18: All but the selection:** every slot except the brushed ones, one table.
+- **Distribution band brushing (2026-11-18):** Shift-drag across a Distributions plot (any drag
+  with Brush on) selects the slots whose values fall in that x band; Ctrl adds, Alt removes, as
+  on the timelines.
+  - The "brush" box (bins row) picks where the band applies: **any boom shown** (a slot is
+    selected if one boom's value is in it), **every boom shown** (all of them), or **one boom**.
+  - It picks among the values plotted: with "selection only" or "all but the selection"
+    showing, only those slots, so a plain drag refines that part. It reads the values as shown
+    (a side of 0 as −x, |x|; log bins in log10 on screen), and a category when its bars overlap
+    the band.
+  - The result joins the shared selection, like any brush. The brush box is saved in views.
 - **Distribution bins:** each Distributions panel has a bins row.
   - The bin count defaults to 60.
   - "Auto range" (on by default) spans the 0.1st–99.9th percentiles, or 0–360° for

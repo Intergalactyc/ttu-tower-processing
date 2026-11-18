@@ -282,8 +282,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.hover, 1)
         self.summary_hover.watch(self.right_tabs)
         self.selection_label = QLabel()
-        self.selection_label.setToolTip("brushed slots: Shift-drag on a timeline or scatter (or any drag with Brush "
-                                        "on); Ctrl adds, Alt removes; Esc clears")
+        self.selection_label.setToolTip("brushed slots: Shift-drag on a timeline, the scatter or a distribution (or "
+                                        "any drag with Brush on); Ctrl adds, Alt removes; Esc clears")
         self.selection_inspect = QToolButton()
         self.selection_inspect.setText("Step through")
         self.selection_inspect.setToolTip("open the Slot Inspector on the selected slots, for the go-to boom")
@@ -319,6 +319,8 @@ class MainWindow(QMainWindow):
             p.brushed.connect(lambda x0, x1, mode: self.set_selection(brush.slots_in_span(x0, x1), mode))
             p.legend.toggled.connect(lambda i=i: self._dist_timer.start())
         self.scatter.brushed.connect(self.set_selection)
+        for d in self.dists:
+            d.brushed.connect(self.set_selection)
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._show_all_members)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_selection(brush.EMPTY, "replace"))
 
@@ -404,7 +406,7 @@ class MainWindow(QMainWindow):
         self.brush_action.setCheckable(True)
         self.brush_action.setShortcut(QKeySequence("B"))
         self.brush_action.setToolTip("brush mode (B): dragging on a timeline selects a time span, on the scatter a "
-                                     "lasso; without it, Shift-drag does the same. Ctrl adds, Alt removes, Esc clears")
+                                     "lasso, on a distribution a band of values; without it, Shift-drag does the same. Ctrl adds, Alt removes, Esc clears")
         self.brush_action.toggled.connect(self._set_brush_mode)
         bar.addAction(self.brush_action)
         bar.addSeparator()
@@ -1168,6 +1170,8 @@ class MainWindow(QMainWindow):
         for p in self.plots:
             p.vb.brush_always = on
         self.scatter.vb.brush_always = on
+        for d in self.dists:
+            d.vb.brush_always = on
         self.statusBar().showMessage("brush mode: drag to select; Ctrl adds, Alt removes, Esc clears" if on
                                      else "brush mode off: Shift-drag still selects", 6000)
 
